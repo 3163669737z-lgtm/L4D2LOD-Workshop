@@ -14,13 +14,16 @@
 - 引擎：纯 .NET 实现、无 UI 依赖，可通过 `--selftest` / `--plan` / `--batch` 在无界面环境下运行
 - 版本：程序版本 7.0.0、文件版本 7.0.0.0；版权 © 2026 远景工坊
 
-## 最短路径（使用者）
+## 快速上手
 
-1. 构建出 `dist\L4D2LOD远景工坊.exe`（见下文「构建」），或直接下载 Release 里的分发包。
-2. 打开「设置 → 引擎」页，确认 `blender.exe` 路径（通常会自动找到）。
-3. 把工程文件夹拖进窗口，等待自动扫描；点「扫描预览」确认计划无误后，再点「开始生成」。
-4. 回到工程目录，双击原来的 `批量编译.bat` 即可；如不放心，可用 QC 旁的 `.lodbak` 备份一键还原。
-5. 完整说明与 FAQ 见 `docs/03_使用说明.md`。
+1. 获取程序：从 Release 下载分发包解压即用，或按下文「构建」自行编译。
+2. 首次运行时打开「设置 → 引擎」页，确认 `blender.exe` 路径（通常会自动检测到）。
+3. 通过「导入文件夹 / 导入文件」按钮（或直接拖入）把模型工程加入队列，工具会自动扫描并生成 LOD 计划。
+4. 用「扫描预览」确认计划——哪些模型会生成哪些 LOD、哪些会跳过以及原因——确认无误后点「开始生成」。
+5. 生成完成后，按你自己平时的流程重新编译模型即可；如需还原，每个 QC 旁都留有 `.lodbak` 备份，可一键恢复。
+6. 也支持无界面用法：`--plan` 只读预览计划、`--batch` 批量执行，便于接入脚本化工作流（见下文「运行」）。
+
+完整说明与 FAQ 见 `docs/03_使用说明.md`。
 
 ## 构建
 
@@ -218,15 +221,21 @@ it contains no code from, and has no dependency on, the older v4.x / FIELD v5.x 
 - Engine: pure .NET with no UI dependencies; runs headless via `--selftest` / `--plan` / `--batch`
 - Version: assembly 7.0.0, file version 7.0.0.0; © 2026 Yuanjing Workshop
 
-### Quick start (users)
+### Quick start
 
-1. Build `dist\L4D2LOD远景工坊.exe` (see "Build" below), or download the distribution zip from Releases.
-2. Open *Settings → Engine* and confirm the path to `blender.exe` (usually auto-detected).
-3. Drag a project folder into the window and wait for the scan; click "Scan Preview" to review the plan,
-   then click "Start Generation".
-4. Back in your project directory, run your original `批量编译.bat` (batch-compile script) as before.
-   If anything looks wrong, restore from the `.lodbak` backup sitting next to each QC.
-5. Full manual and FAQ: `docs/03_使用说明.md` (Chinese).
+1. Get the program: download and unzip the distribution package from Releases, or build it yourself
+   (see "Build" below).
+2. On first run, open *Settings → Engine* and confirm the path to `blender.exe` (usually auto-detected).
+3. Add model projects via the "Import Folder / Import Files" buttons (or drag-and-drop); the tool scans
+   them and builds a LOD plan automatically.
+4. Review the plan in "Scan Preview" — which models get which LODs, which are skipped and why — then
+   click "Start Generation".
+5. Afterwards, recompile your models with whatever pipeline you normally use. Every QC keeps a `.lodbak`
+   backup for one-click restore if needed.
+6. Headless use is supported too: `--plan` previews a plan read-only, `--batch` executes it — handy for
+   scripted workflows (see "Run" below).
+
+Full manual and FAQ: `docs/03_使用说明.md` (Chinese).
 
 ### Build
 
