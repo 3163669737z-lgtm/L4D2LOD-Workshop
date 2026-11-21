@@ -1,0 +1,55 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    远景工坊 · L4D2 自动 LOD 工具
+    目标框架 net48：Win10 1903+ / Win11 自带 .NET Framework 4.8，用户无需安装任何运行时。
+    语言版本 latest（用便携 .NET SDK 8 的 Roslyn 编译），产出单个 exe。
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <RootNamespace>LodStudio</RootNamespace>
+    <AssemblyName>L4D2LOD远景工坊</AssemblyName>
+    <StartupObject>LodStudio.Program</StartupObject>
+
+    <Version>7.0.0</Version>
+    <AssemblyVersion>7.0.0.0</AssemblyVersion>
+    <FileVersion>7.0.0.0</FileVersion>
+    <Company>远景工坊</Company>
+    <Product>远景工坊 · L4D2 自动 LOD 工具</Product>
+    <Title>远景工坊</Title>
+    <Description>为 L4D2 模型工程自动生成多级 LOD，并把 $lod 幂等写回 QC。</Description>
+    <Copyright>Copyright © 2026 远景工坊</Copyright>
+
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\app.ico</ApplicationIcon>
+
+    <!-- 单文件交付：不生成 app.config / pdb -->
+    <GenerateSupportedRuntime>false</GenerateSupportedRuntime>
+    <AutoGenerateBindingRedirects>false</AutoGenerateBindingRedirects>
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+    <Deterministic>true</Deterministic>
+
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <WarningLevel>4</WarningLevel>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Blender 端脚本：编进 exe，运行时按内容哈希释放到 %TEMP% -->
+    <EmbeddedResource Include="Assets\blender_backend.py" LogicalName="LodStudio.blender_backend.py" />
+    <!-- 窗口/任务栏图标 -->
+    <Resource Include="Assets\app.ico" />
+  </ItemGroup>
+
+</Project>

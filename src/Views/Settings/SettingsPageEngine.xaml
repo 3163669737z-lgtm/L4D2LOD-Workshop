@@ -1,0 +1,99 @@
+<settings:SettingsPageBase x:Class="LodStudio.Views.Settings.SettingsPageEngine"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:LodStudio.Controls"
+        xmlns:settings="clr-namespace:LodStudio.Views.Settings"
+        Background="Transparent">
+
+    <settings:SettingsPageBase.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="pack://application:,,,/Views/Settings/SettingsKit.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </settings:SettingsPageBase.Resources>
+
+    <StackPanel>
+        <TextBlock Text="引擎" Style="{StaticResource Set.PageTitle}" />
+        <TextBlock Text="指定 Blender 与编译器。程序只读取这两个程序，不会修改它们。"
+                   Style="{StaticResource Set.PageSub}" Margin="0,3,0,0" />
+        <controls:Rule Margin="0,14,0,0" />
+
+        <!-- ═══════════ Blender ═══════════ -->
+        <TextBlock Text="Blender" Style="{StaticResource Set.GroupTitle}" Margin="0,14,0,0" />
+        <TextBlock Text="本工具用 Blender 的后台模式减面；4.0 / 4.1 / 4.2 都可以，推荐 4.1。"
+                   Style="{StaticResource Set.Hint}" Margin="0,3,0,0" />
+
+        <TextBlock Text="程序路径" Style="{StaticResource Set.Label}" Margin="0,10,0,0" />
+        <Grid Margin="0,6,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBox x:Name="TxtBlenderPath" Grid.Column="0" Style="{StaticResource Input.Mono}"
+                     IsReadOnly="True" Height="30" VerticalContentAlignment="Center"
+                     Tag="未指定（启动时会自动查找）" ToolTipService.ShowDuration="30000" />
+            <Button x:Name="BtnBrowseBlender" Grid.Column="1" Style="{StaticResource Set.SmallButton}"
+                    Content="浏览…" Margin="8,0,0,0" ToolTip="选择 blender.exe" />
+            <Button x:Name="BtnFindBlender" Grid.Column="2" Style="{StaticResource Set.SmallGhostButton}"
+                    Content="自动查找" Margin="4,0,0,0" ToolTip="先查注册表与常见安装目录，再查 Steam 库" />
+        </Grid>
+
+        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+            <Ellipse x:Name="DotBlender" Width="5" Height="5" VerticalAlignment="Center"
+                     Fill="{DynamicResource Brush.InkFaint}" />
+            <TextBlock x:Name="TxtBlenderStatus" Style="{StaticResource Text.Small}" Margin="7,0,0,0"
+                       VerticalAlignment="Center" Text="未检测" />
+        </StackPanel>
+
+        <!-- ═══════════ 编译器 ═══════════ -->
+        <controls:Rule Margin="0,16,0,0" />
+        <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
+            <TextBlock Text="编译器" Style="{StaticResource Set.GroupTitle}" />
+            <Border Style="{StaticResource Set.Tag}" Margin="8,1,0,0">
+                <TextBlock Text="可选" FontSize="{StaticResource FS.Micro}"
+                           Foreground="{DynamicResource Brush.InkSoft}" />
+            </Border>
+        </StackPanel>
+        <TextBlock Text="可选：只有开启「生成后试编译」才会用到。nekomdl.exe 通常与 studiomdl 放在一起。"
+                   Style="{StaticResource Set.Hint}" Margin="0,3,0,0" />
+
+        <TextBlock Text="nekomdl.exe 路径" Style="{StaticResource Set.Label}" Margin="0,10,0,0" />
+        <Grid Margin="0,6,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBox x:Name="TxtCompilerPath" Grid.Column="0" Style="{StaticResource Input.Mono}"
+                     IsReadOnly="True" Height="30" VerticalContentAlignment="Center"
+                     Tag="未设置（点「浏览…」或「自动查找」）" ToolTipService.ShowDuration="30000" />
+            <Button x:Name="BtnBrowseCompiler" Grid.Column="1" Style="{StaticResource Set.SmallButton}"
+                    Content="浏览…" Margin="8,0,0,0" ToolTip="选择 nekomdl.exe" />
+            <Button x:Name="BtnFindCompiler" Grid.Column="2" Style="{StaticResource Set.SmallGhostButton}"
+                    Content="自动查找" Margin="4,0,0,0" ToolTip="在 Steam 库与常见工具目录里查找" />
+        </Grid>
+
+        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+            <Ellipse x:Name="DotCompiler" Width="5" Height="5" VerticalAlignment="Center"
+                     Fill="{DynamicResource Brush.InkFaint}" />
+            <TextBlock x:Name="TxtCompilerStatus" Style="{StaticResource Text.Small}" Margin="7,0,0,0"
+                       VerticalAlignment="Center" Text="未设置" />
+        </StackPanel>
+
+        <!-- ═══════════ 说明 ═══════════ -->
+        <Border Style="{StaticResource Set.Card}" Margin="0,16,0,0">
+            <StackPanel>
+                <TextBlock Text="版本与位置" Style="{StaticResource Set.GroupTitle}" />
+                <TextBlock Text="· Blender 4.0 / 4.1 / 4.2 都已验证；更新版本通常也能用。"
+                           Style="{StaticResource Set.Hint}" Margin="0,6,0,0" />
+                <TextBlock Text="· 常见位置：C:\Program Files\Blender Foundation\Blender 4.x\blender.exe；Steam 版在 steamapps\common\Blender。"
+                           Style="{StaticResource Set.Hint}" Margin="0,4,0,0" />
+                <TextBlock Text="· 「自动查找」按注册表 → 常见安装目录 → Steam 库的顺序找；nekomdl.exe 只在开启试编译时才需要。"
+                           Style="{StaticResource Set.Hint}" Margin="0,4,0,0" />
+            </StackPanel>
+        </Border>
+    </StackPanel>
+
+</settings:SettingsPageBase>

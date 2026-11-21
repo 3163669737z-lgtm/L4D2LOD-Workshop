@@ -1,0 +1,95 @@
+<settings:SettingsPageBase x:Class="LodStudio.Views.Settings.SettingsPageAdvanced"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:LodStudio.Controls"
+        xmlns:settings="clr-namespace:LodStudio.Views.Settings"
+        Background="Transparent">
+
+    <settings:SettingsPageBase.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="pack://application:,,,/Views/Settings/SettingsKit.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </settings:SettingsPageBase.Resources>
+
+    <StackPanel>
+        <TextBlock Text="LOD 高级" Style="{StaticResource Set.PageTitle}" />
+        <TextBlock Text="改变生成策略与写入内容。大多数情况保持默认即可；改动会立即影响下一次运行。"
+                   Style="{StaticResource Set.PageSub}" Margin="0,3,0,0" />
+        <controls:Rule Margin="0,14,0,0" />
+
+        <!-- ═══════════ 生成策略 ═══════════ -->
+        <TextBlock Text="生成策略" Style="{StaticResource Set.GroupTitle}" Margin="0,18,0,0" />
+
+        <CheckBox x:Name="ChkQuality" Style="{StaticResource Set.Toggle}" Margin="0,6,0,2">
+            <StackPanel>
+                <TextBlock Text="质量优先" Style="{StaticResource Set.Label}" />
+                <TextBlock Style="{StaticResource Set.Hint}" Margin="0,2,0,0"
+                           Text="按连通块分配面数预算，小部件不会被压扁。关闭后按整体比例减面，更快但细节可能不均。" />
+            </StackPanel>
+        </CheckBox>
+
+        <CheckBox x:Name="ChkForce" Style="{StaticResource Set.Toggle}" Margin="0,8,0,2">
+            <StackPanel>
+                <TextBlock Text="覆盖手写 $lod" Style="{StaticResource Set.Label}" />
+                <TextBlock Style="{StaticResource Set.Hint}" Margin="0,2,0,0"
+                           Text="把旧的 $lod / $shadowlod 逐行注释停用再写入，有备份；关闭时遇到手写 $lod 的 QC 会跳过。" />
+            </StackPanel>
+        </CheckBox>
+
+        <CheckBox x:Name="ChkCompile" Style="{StaticResource Set.Toggle}" Margin="0,8,0,2">
+            <StackPanel>
+                <TextBlock Text="生成后试编译" Style="{StaticResource Set.Label}" />
+                <TextBlock Style="{StaticResource Set.Hint}" Margin="0,2,0,0"
+                           Text="每个改动过的 QC 调一次编译器，会写游戏目录，较慢。需要先在「引擎」页指定 nekomdl.exe。" />
+            </StackPanel>
+        </CheckBox>
+
+        <CheckBox x:Name="ChkNofacial" Style="{StaticResource Set.Toggle}" Margin="0,8,0,2">
+            <StackPanel>
+                <TextBlock Text="写入 nofacial" Style="{StaticResource Set.Label}" />
+                <TextBlock Style="{StaticResource Set.Hint}" Margin="0,2,0,0"
+                           Text="LOD1 起冻结面部表情，官方同款取舍；不做面部动画的模型可以开着。" />
+            </StackPanel>
+        </CheckBox>
+
+        <CheckBox x:Name="ChkSkipMain" Style="{StaticResource Set.Toggle}" Margin="0,8,0,2">
+            <StackPanel>
+                <TextBlock Text="跳过主模型" Style="{StaticResource Set.Label}" />
+                <TextBlock Style="{StaticResource Set.Hint}" Margin="0,2,0,0"
+                           Text="$model 块里的模型不写 $lod；适合主模型必须保持原样的情况。" />
+            </StackPanel>
+        </CheckBox>
+
+        <!-- 跳过清单：只有开启「跳过主模型」才可用 -->
+        <StackPanel x:Name="PanelSkip" Margin="0,10,0,2">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                    <TextBlock Text="跳过的 QC 清单" Style="{StaticResource Set.Label}" />
+                    <TextBlock x:Name="TxtSkipCount" Style="{StaticResource Set.Hint}" Margin="0,2,0,0" />
+                </StackPanel>
+                <Button x:Name="BtnPickSkip" Grid.Column="1" Style="{StaticResource Set.SmallButton}"
+                        Content="选择要跳过的 QC…" VerticalAlignment="Center" />
+            </Grid>
+            <TextBlock x:Name="TxtSkipHint" Style="{StaticResource Set.Hint}" Margin="0,7,0,0" />
+        </StackPanel>
+
+        <!-- ═══════════ 并行 ═══════════ -->
+        <controls:Rule Margin="0,22,0,0" />
+        <TextBlock Text="并行" Style="{StaticResource Set.GroupTitle}" Margin="0,18,0,0" />
+
+        <settings:SettingRow Title="并行 Blender 进程" Hint="0 = 自动：min(核数/2, 空闲内存GB/1.2, 8, 任务数)。机械硬盘或内存不足时建议手动调低。"
+                             Margin="0,8,0,0">
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <TextBox x:Name="TxtWorkers" Style="{StaticResource Input.Num}" Width="84" />
+                <TextBlock Text="个" Style="{StaticResource Text.Small}" Margin="7,0,0,0" VerticalAlignment="Center" />
+            </StackPanel>
+        </settings:SettingRow>
+    </StackPanel>
+
+</settings:SettingsPageBase>

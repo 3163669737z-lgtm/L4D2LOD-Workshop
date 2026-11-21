@@ -1,0 +1,105 @@
+<settings:SettingsPageBase x:Class="LodStudio.Views.Settings.SettingsPageDiagnostics"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:LodStudio.Controls"
+        xmlns:settings="clr-namespace:LodStudio.Views.Settings"
+        Background="Transparent">
+
+    <settings:SettingsPageBase.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="pack://application:,,,/Views/Settings/SettingsKit.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </settings:SettingsPageBase.Resources>
+
+    <StackPanel>
+        <TextBlock Text="诊断" Style="{StaticResource Set.PageTitle}" />
+        <TextBlock Text="检查权限、目录可写性、引擎与设置位置。把报告复制给开发者，可以更快定位问题。"
+                   Style="{StaticResource Set.PageSub}" Margin="0,3,0,0" />
+        <controls:Rule Margin="0,14,0,0" />
+
+        <!-- ═══════════ 操作行 ═══════════ -->
+        <Grid Margin="0,12,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <Button x:Name="BtnRun" Grid.Column="0" Style="{StaticResource Btn.Secondary}" Height="30" Padding="12,0,12,0">
+                <StackPanel Orientation="Horizontal">
+                    <controls:Icon Kind="Gauge" Size="13" IconBrush="{DynamicResource Brush.InkSoft}" />
+                    <TextBlock Text="运行诊断" Margin="7,0,0,0" VerticalAlignment="Center" />
+                </StackPanel>
+            </Button>
+            <TextBlock x:Name="TxtStatus" Grid.Column="1" Style="{StaticResource Text.Small}" Margin="12,0,12,0"
+                       VerticalAlignment="Center" Text="尚未运行" />
+            <Button x:Name="BtnCopy" Grid.Column="2" Style="{StaticResource Btn.Secondary}" Height="30"
+                    Padding="12,0,12,0" IsEnabled="False">
+                <StackPanel Orientation="Horizontal">
+                    <controls:Icon Kind="Copy" Size="13" IconBrush="{DynamicResource Brush.InkSoft}" />
+                    <TextBlock Text="复制" Margin="7,0,0,0" VerticalAlignment="Center" />
+                </StackPanel>
+            </Button>
+        </Grid>
+
+        <TextBox x:Name="TxtReport" Style="{StaticResource Input.Mono}" Margin="0,10,0,0"
+                 IsReadOnly="True" AcceptsReturn="True" Height="216" Padding="10,8,10,8"
+                 VerticalContentAlignment="Top" TextWrapping="Wrap"
+                 VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                 Text="还没有运行诊断。&#10;&#10;点左上角「运行诊断」检查权限、目录可写性、引擎与设置位置。" />
+
+        <!-- ═══════════ 环境 ═══════════ -->
+        <controls:Rule Margin="0,14,0,0" />
+        <TextBlock Text="环境" Style="{StaticResource Set.GroupTitle}" Margin="0,12,0,0" />
+
+        <Grid Margin="0,8,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="92" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="设置文件" Style="{StaticResource Set.Hint}" VerticalAlignment="Center" />
+            <TextBlock x:Name="TxtSettingsFile" Grid.Column="1" Style="{StaticResource Set.Mono}"
+                       VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+        </Grid>
+        <Grid Margin="0,4,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="92" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="临时目录" Style="{StaticResource Set.Hint}" VerticalAlignment="Center" />
+            <TextBlock x:Name="TxtTempDir" Grid.Column="1" Style="{StaticResource Set.Mono}"
+                       VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+        </Grid>
+        <Grid Margin="0,4,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="92" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="运行权限" Style="{StaticResource Set.Hint}" VerticalAlignment="Center" />
+            <TextBlock x:Name="TxtPermission" Grid.Column="1" Style="{StaticResource Set.Mono}"
+                       VerticalAlignment="Center" />
+        </Grid>
+        <Grid Margin="0,4,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="92" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="Blender" Style="{StaticResource Set.Hint}" VerticalAlignment="Center" />
+            <TextBlock x:Name="TxtBlenderVersion" Grid.Column="1" Style="{StaticResource Set.Mono}"
+                       VerticalAlignment="Center" />
+        </Grid>
+
+        <StackPanel Orientation="Horizontal" Margin="0,12,0,2">
+            <Button x:Name="BtnOpenSettingsDir" Style="{StaticResource Btn.Ghost}" Height="30" Padding="10,0,10,0">
+                <StackPanel Orientation="Horizontal">
+                    <controls:Icon Kind="Folder" Size="13" IconBrush="{DynamicResource Brush.InkSoft}" />
+                    <TextBlock Text="打开设置文件夹" Margin="7,0,0,0" VerticalAlignment="Center" />
+                </StackPanel>
+            </Button>
+            <TextBlock Text="诊断只读取环境信息，不会修改任何工程文件。" Style="{StaticResource Set.Hint}"
+                       Margin="10,0,0,0" VerticalAlignment="Center" />
+        </StackPanel>
+    </StackPanel>
+
+</settings:SettingsPageBase>

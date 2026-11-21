@@ -1,0 +1,387 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:controls="clr-namespace:LodStudio.Controls"
+                    xmlns:settings="clr-namespace:LodStudio.Views.Settings">
+
+    <!-- ════════════════════════════════════════════════════════════════════
+         设置窗口专用样式（Set.* / 自绘 SettingRow）
+
+         约定：
+         · 颜色、字号、字体一律 DynamicResource 引用全局令牌（主题切换立即生效）；
+         · 本字典只做"字典内 StaticResource 自引用"，不跨字典 BasedOn（避免装载顺序问题）；
+         · 方角、1px 发丝、无阴影 —— 与"测距仪"设计语言一致。
+         ════════════════════════════════════════════════════════════════════ -->
+
+    <!-- ── 文字 ── -->
+
+    <Style x:Key="Set.PageTitle" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{DynamicResource Font.Cjk}" />
+        <Setter Property="FontSize" Value="{DynamicResource FS.PageTitle}" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Foreground" Value="{DynamicResource Brush.Ink}" />
+        <Setter Property="TextOptions.TextFormattingMode" Value="Ideal" />
+        <Setter Property="SnapsToDevicePixels" Value="True" />
+    </Style>
+
+    <Style x:Key="Set.PageSub" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{DynamicResource Font.Cjk}" />
+        <Setter Property="FontSize" Value="{DynamicResource FS.Small}" />
+        <Setter Property="Foreground" Value="{DynamicResource Brush.InkSoft}" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="LineHeight" Value="18" />
+        <Setter Property="TextOptions.TextFormattingMode" Value="Ideal" />
+    </Style>
+
+    <Style x:Key="Set.GroupTitle" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{DynamicResource Font.Cjk}" />
+        <Setter Property="FontSize" Value="{DynamicResource FS.Section}" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Foreground" Value="{DynamicResource Brush.Ink}" />
+        <Setter Property="TextOptions.TextFormattingMode" Value="Ideal" />
+    </Style>
+
+    <Style x:Key="Set.Label" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{DynamicResource Font.Cjk}" />
+        <Setter Property="FontSize" Value="{DynamicResource FS.Body}" />
+        <Setter Property="Foreground" Value="{DynamicResource Brush.Ink}" />
+        <Setter Property="TextOptions.TextFormattingMode" Value="Ideal" />
+        <Setter Property="SnapsToDevicePixels" Value="True" />
+    </Style>
+
+    <Style x:Key="Set.Hint" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{DynamicResource Font.Cjk}" />
+        <Setter Property="FontSize" Value="{DynamicResource FS.Small}" />
+        <Setter Property="Foreground" Value="{DynamicResource Brush.InkFaint}" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="LineHeight" Value="17" />
+        <Setter Property="TextOptions.TextFormattingMode" Value="Ideal" />
+    </Style>
+
+    <Style x:Key="Set.Mono" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{DynamicResource Font.Mono}" />
+        <Setter Property="FontSize" Value="{DynamicResource FS.Mono}" />
+        <Setter Property="Foreground" Value="{DynamicResource Brush.InkSoft}" />
+        <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+        <Setter Property="TextOptions.TextFormattingMode" Value="Ideal" />
+    </Style>
+
+    <!-- 小标签（"可选" / "内置" 之类）：方角 Sunken 底 -->
+    <Style x:Key="Set.Tag" TargetType="Border">
+        <Setter Property="Background" Value="{DynamicResource Brush.Sunken}" />
+        <Setter Property="Padding" Value="5,1,5,2" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+
+    <!-- ── 容器 ── -->
+
+    <!-- 说明块 / 预览块：Sunken 底 + 1px 发丝 -->
+    <Style x:Key="Set.Card" TargetType="Border">
+        <Setter Property="Background" Value="{DynamicResource Brush.Sunken}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brush.Line}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Padding" Value="14,12,14,12" />
+        <Setter Property="SnapsToDevicePixels" Value="True" />
+    </Style>
+
+    <!-- 色块（主题示意用）：1px 发丝边，无圆角 -->
+    <Style x:Key="Set.Swatch" TargetType="Border">
+        <Setter Property="Height" Value="26" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brush.LineStrong}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="SnapsToDevicePixels" Value="True" />
+    </Style>
+
+    <!-- 键盘焦点框：包住"自身没有焦点视觉"的控件（Segmented Boxed / ComboBox） -->
+    <Style x:Key="Set.FocusFrame" TargetType="Border">
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="Margin" Value="-2" />
+        <Setter Property="SnapsToDevicePixels" Value="True" />
+        <Style.Triggers>
+            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                <Setter Property="BorderBrush" Value="{DynamicResource Brush.FocusRing}" />
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+
+    <!-- ── 设置行（自绘 ContentControl：左标题+说明，右控件） ── -->
+
+    <Style TargetType="{x:Type settings:SettingRow}">
+        <Setter Property="MinHeight" Value="44" />
+        <Setter Property="HorizontalContentAlignment" Value="Right" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="{x:Type settings:SettingRow}">
+                    <Grid MinHeight="{TemplateBinding MinHeight}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,3,20,3">
+                            <TextBlock Text="{TemplateBinding Title}" Style="{StaticResource Set.Label}" />
+                            <TextBlock x:Name="Hint" Text="{TemplateBinding Hint}" Tag="{TemplateBinding HintTone}"
+                                       Margin="0,2,0,0">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock" BasedOn="{StaticResource Set.Hint}">
+                                        <Style.Triggers>
+                                            <Trigger Property="Text" Value="">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                            </Trigger>
+                                            <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource Self}}" Value="Warn">
+                                                <Setter Property="Foreground" Value="{DynamicResource Brush.Warn}" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource Self}}" Value="Err">
+                                                <Setter Property="Foreground" Value="{DynamicResource Brush.Err}" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </StackPanel>
+                        <ContentPresenter Grid.Column="1" VerticalAlignment="Center" HorizontalAlignment="Right"
+                                          Content="{TemplateBinding Content}"
+                                          ContentTemplate="{TemplateBinding ContentTemplate}"
+                                          SnapsToDevicePixels="True" />
+                    </Grid>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- ── 开关（标题在左、开关在右的设置行布局；开关外观与 Toggle.Base 一致） ── -->
+
+    <Style x:Key="Set.Toggle" TargetType="CheckBox">
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="OverridesDefaultStyle" Value="True" />
+        <Setter Property="SnapsToDevicePixels" Value="True" />
+        <Setter Property="FontFamily" Value="{DynamicResource Font.Cjk}" />
+        <Setter Property="FontSize" Value="{DynamicResource FS.Body}" />
+        <Setter Property="Foreground" Value="{DynamicResource Brush.Ink}" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="HorizontalContentAlignment" Value="Left" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="CheckBox">
+                    <Grid Background="Transparent">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <ContentPresenter Grid.Column="0" Margin="0,0,16,0" VerticalAlignment="Center"
+                                          HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                          RecognizesAccessKey="True" />
+                        <Border x:Name="Rail" Grid.Column="1" Width="34" Height="18" VerticalAlignment="Center"
+                                Background="{DynamicResource Brush.Sunken}"
+                                BorderBrush="{DynamicResource Brush.LineStrong}" BorderThickness="1">
+                            <Grid>
+                                <Border x:Name="Knob" Width="12" Height="12" HorizontalAlignment="Left"
+                                        Background="{DynamicResource Brush.InkFaint}" Margin="2,0,0,0" />
+                            </Grid>
+                        </Border>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Rail" Property="Background" Value="{DynamicResource Brush.Signal}" />
+                            <Setter TargetName="Rail" Property="BorderBrush" Value="{DynamicResource Brush.Signal}" />
+                            <Setter TargetName="Knob" Property="HorizontalAlignment" Value="Right" />
+                            <Setter TargetName="Knob" Property="Margin" Value="0,0,2,0" />
+                            <Setter TargetName="Knob" Property="Background" Value="{DynamicResource Brush.SignalInk}" />
+                        </Trigger>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Rail" Property="BorderBrush" Value="{DynamicResource Brush.InkSoft}" />
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter TargetName="Rail" Property="BorderBrush" Value="{DynamicResource Brush.FocusRing}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.42" />
+                            <Setter Property="Cursor" Value="Arrow" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- ── 勾选框（跳过主模型选择器用；方角、选中为信号色） ── -->
+
+    <Style x:Key="Set.Check" TargetType="CheckBox">
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="OverridesDefaultStyle" Value="True" />
+        <Setter Property="SnapsToDevicePixels" Value="True" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="CheckBox">
+                    <Grid Background="Transparent">
+                        <Border x:Name="Bd" Width="15" Height="15" VerticalAlignment="Center"
+                                Background="{DynamicResource Brush.Sunken}"
+                                BorderBrush="{DynamicResource Brush.LineStrong}" BorderThickness="1" />
+                        <Path x:Name="Glyph" Data="M2,7.4 L6,11.4 L14,2.6" Width="10" Height="9"
+                              Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center"
+                              Stroke="{DynamicResource Brush.SignalInk}" StrokeThickness="2"
+                              StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                              Visibility="Collapsed" />
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Brush.Signal}" />
+                            <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource Brush.Signal}" />
+                            <Setter TargetName="Glyph" Property="Visibility" Value="Visible" />
+                        </Trigger>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource Brush.InkSoft}" />
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource Brush.FocusRing}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.42" />
+                            <Setter Property="Cursor" Value="Arrow" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- ── 左导航（5 项，44 高；选中 = 左侧 2px 信号条 + Sunken 底 + Ink 字） ── -->
+
+    <Style x:Key="Set.NavItem" TargetType="ListBoxItem">
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="OverridesDefaultStyle" Value="True" />
+        <Setter Property="SnapsToDevicePixels" Value="True" />
+        <Setter Property="Foreground" Value="{DynamicResource Brush.InkSoft}" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ListBoxItem">
+                    <Border x:Name="Bd" Height="44" Background="Transparent">
+                        <Grid>
+                            <Border x:Name="Bar" Width="2" HorizontalAlignment="Left" Background="Transparent" />
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="16,0,10,0">
+                                <controls:Icon Kind="{Binding Icon}" Size="16"
+                                               IconBrush="{Binding Foreground, RelativeSource={RelativeSource TemplatedParent}}" />
+                                <TextBlock Text="{Binding Title}" FontSize="{DynamicResource FS.Body}"
+                                           Foreground="{TemplateBinding Foreground}" Margin="10,0,0,0"
+                                           VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Brush.RowHover}" />
+                        </Trigger>
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Brush.Sunken}" />
+                            <Setter TargetName="Bar" Property="Background" Value="{DynamicResource Brush.Signal}" />
+                            <Setter Property="Foreground" Value="{DynamicResource Brush.Ink}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style x:Key="Set.NavList" TargetType="ListBox">
+        <Setter Property="OverridesDefaultStyle" Value="True" />
+        <Setter Property="SnapsToDevicePixels" Value="True" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="ItemContainerStyle" Value="{StaticResource Set.NavItem}" />
+        <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
+        <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Disabled" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ListBox">
+                    <ScrollViewer Focusable="False">
+                        <ItemsPresenter />
+                    </ScrollViewer>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- 选择器列表行（跳过主模型）：透明底、不显示选中高亮（勾选由 CheckBox 表达） -->
+    <Style x:Key="Set.PickRow" TargetType="ListBoxItem">
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="OverridesDefaultStyle" Value="True" />
+        <Setter Property="SnapsToDevicePixels" Value="True" />
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ListBoxItem">
+                    <Border x:Name="Bd" Background="Transparent" Height="30">
+                        <ContentPresenter />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Brush.RowHover}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- 窄按钮（设置行里跟输入框并排的操作）：与 Btn.* 同款，只是更矮 -->
+    <Style x:Key="Set.SmallButton" TargetType="Button">
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="OverridesDefaultStyle" Value="True" />
+        <Setter Property="SnapsToDevicePixels" Value="True" />
+        <Setter Property="FontFamily" Value="{DynamicResource Font.Cjk}" />
+        <Setter Property="FontSize" Value="{DynamicResource FS.Small}" />
+        <Setter Property="Height" Value="30" />
+        <Setter Property="Padding" Value="12,0,12,0" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brush.LineStrong}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Foreground" Value="{DynamicResource Brush.Ink}" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Grid>
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}">
+                            <ContentPresenter Margin="{TemplateBinding Padding}"
+                                              HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
+                        </Border>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource Brush.InkSoft}" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Brush.Sunken}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter TargetName="Bd" Property="Opacity" Value="0.38" />
+                            <Setter Property="Cursor" Value="Arrow" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- 无边框文字按钮（"自动查找"） -->
+    <Style x:Key="Set.SmallGhostButton" TargetType="Button" BasedOn="{StaticResource Set.SmallButton}">
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource Brush.InkSoft}" />
+    </Style>
+
+</ResourceDictionary>

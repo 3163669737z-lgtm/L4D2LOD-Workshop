@@ -1,0 +1,121 @@
+<settings:SettingsPageBase x:Class="LodStudio.Views.Settings.SettingsPageGeneral"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:LodStudio.Controls"
+        xmlns:settings="clr-namespace:LodStudio.Views.Settings"
+        Background="Transparent">
+
+    <settings:SettingsPageBase.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="pack://application:,,,/Views/Settings/SettingsKit.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </settings:SettingsPageBase.Resources>
+
+    <StackPanel>
+        <TextBlock Text="常规" Style="{StaticResource Set.PageTitle}" />
+        <TextBlock Text="启动行为、模型过滤、报告/备份位置。所有改动即时生效；主题与动效在「外观」页。"
+                   Style="{StaticResource Set.PageSub}" Margin="0,3,0,0" />
+        <controls:Rule Margin="0,14,0,0" />
+
+        <!-- ═══════════ 启动与完成 ═══════════ -->
+        <TextBlock Text="启动与完成" Style="{StaticResource Set.GroupTitle}" Margin="0,18,0,0" />
+
+        <CheckBox x:Name="ChkRestore" Style="{StaticResource Set.Toggle}" Margin="0,6,0,2">
+            <StackPanel>
+                <TextBlock Text="启动时恢复上次任务列表" Style="{StaticResource Set.Label}" />
+                <TextBlock Style="{StaticResource Set.Hint}" Margin="0,2,0,0"
+                           Text="关闭后每次启动都是空队列；队列本身不会删除任何文件。" />
+            </StackPanel>
+        </CheckBox>
+
+        <CheckBox x:Name="ChkPopup" Style="{StaticResource Set.Toggle}" Margin="0,8,0,2">
+            <StackPanel>
+                <TextBlock Text="全部成功时也弹窗" Style="{StaticResource Set.Label}" />
+                <TextBlock Style="{StaticResource Set.Hint}" Margin="0,2,0,0"
+                           Text="失败或部分完成时总会弹窗；开启后全部成功也会提示一次。" />
+            </StackPanel>
+        </CheckBox>
+
+        <!-- ═══════════ 模型过滤 ═══════════ -->
+        <controls:Rule Margin="0,20,0,0" />
+        <TextBlock Text="模型过滤" Style="{StaticResource Set.GroupTitle}" Margin="0,18,0,0" />
+
+        <settings:SettingRow Title="面数门槛" Hint="低于这个面数的模型不做 LOD（官方小道具常见 100–300 面）。填 0 = 不按面数过滤。">
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <TextBox x:Name="TxtMinTriangles" Style="{StaticResource Input.Num}" Width="104" />
+                <TextBlock Text="面" Style="{StaticResource Text.Small}" Margin="7,0,0,0" VerticalAlignment="Center" />
+            </StackPanel>
+        </settings:SettingRow>
+
+        <!-- ═══════════ 日志与报告位置 ═══════════ -->
+        <controls:Rule Margin="0,20,0,0" />
+        <TextBlock Text="日志与报告位置" Style="{StaticResource Set.GroupTitle}" Margin="0,18,0,0" />
+        <TextBlock Text="运行日志与 Markdown 总报告落盘的位置；目录不可写时自动回退到 QC 目录旁。"
+                   Style="{StaticResource Set.Hint}" Margin="0,3,0,0" />
+
+        <settings:SettingRow Title="存放位置" Margin="0,8,0,0">
+            <Border Style="{StaticResource Set.FocusFrame}">
+                <ComboBox x:Name="CmbReport" Style="{StaticResource Combo.Base}" Width="280">
+                    <ComboBoxItem Content="QC 目录旁" />
+                    <ComboBoxItem Content="exe 旁的「LOD日志报告」" />
+                    <ComboBoxItem Content="自定义…" />
+                </ComboBox>
+            </Border>
+        </settings:SettingRow>
+
+        <StackPanel x:Name="PanelReportCustom" Margin="0,2,0,4">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBox x:Name="TxtReportDir" Grid.Column="0" Style="{StaticResource Input.Mono}" Height="30"
+                         VerticalContentAlignment="Center" ToolTip="自定义报告/日志目录（绝对路径）" />
+                <Button x:Name="BtnBrowseReportDir" Grid.Column="1" Style="{StaticResource Set.SmallButton}"
+                        Content="浏览…" Margin="8,0,0,0" />
+            </Grid>
+            <TextBlock Text="留空或目录不可写时，会回退到 QC 目录旁。" Style="{StaticResource Set.Hint}" Margin="0,6,0,0" />
+        </StackPanel>
+
+        <!-- ═══════════ 备份副本 ═══════════ -->
+        <controls:Rule Margin="0,20,0,0" />
+        <TextBlock Text="备份副本" Style="{StaticResource Set.GroupTitle}" Margin="0,18,0,0" />
+
+        <CheckBox x:Name="ChkBackup" Style="{StaticResource Set.Toggle}" Margin="0,6,0,2">
+            <StackPanel>
+                <TextBlock Text="修改 QC 前生成备份副本" Style="{StaticResource Set.Label}" />
+                <TextBlock Style="{StaticResource Set.Hint}" Margin="0,2,0,0"
+                           Text="备份名 &lt;qc&gt;.lodbak，永不覆盖已有备份；任何一个备份失败时该 QC 不会被修改。" />
+            </StackPanel>
+        </CheckBox>
+
+        <settings:SettingRow Title="备份位置" Margin="0,8,0,0">
+            <Border x:Name="FrameBackupCombo" Style="{StaticResource Set.FocusFrame}">
+                <ComboBox x:Name="CmbBackup" Style="{StaticResource Combo.Base}" Width="280">
+                    <ComboBoxItem Content="QC 旁边" />
+                    <ComboBoxItem Content="exe 旁的「LOD备份」" />
+                    <ComboBoxItem Content="自定义…" />
+                </ComboBox>
+            </Border>
+        </settings:SettingRow>
+
+        <StackPanel x:Name="PanelBackupCustom" Margin="0,2,0,4">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBox x:Name="TxtBackupDir" Grid.Column="0" Style="{StaticResource Input.Mono}" Height="30"
+                         VerticalContentAlignment="Center" ToolTip="自定义备份根目录（绝对路径）" />
+                <Button x:Name="BtnBrowseBackupDir" Grid.Column="1" Style="{StaticResource Set.SmallButton}"
+                        Content="浏览…" Margin="8,0,0,0" />
+            </Grid>
+            <TextBlock Text="会按工程相对路径镜像到该目录，便于整包还原。" Style="{StaticResource Set.Hint}" Margin="0,6,0,0" />
+        </StackPanel>
+
+        <TextBlock x:Name="TxtBackupNote" Style="{StaticResource Set.Hint}" Margin="0,8,0,2" />
+    </StackPanel>
+
+</settings:SettingsPageBase>

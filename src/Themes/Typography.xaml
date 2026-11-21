@@ -1,0 +1,83 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:sys="clr-namespace:System;assembly=mscorlib">
+
+    <!--
+        字号阶梯：一个角色一个号。控件里禁止随手写 FontSize，一律引用这里的资源或 Text.* 样式。
+        WPF FontSize 单位是 DIP（1/96 英寸），12.5 DIP ≈ 9.4pt。
+    -->
+    <FontFamily x:Key="Font.Cjk">Microsoft YaHei UI</FontFamily>
+    <FontFamily x:Key="Font.Latin">Bahnschrift</FontFamily>
+    <FontFamily x:Key="Font.Mono">Consolas</FontFamily>
+
+    <sys:Double x:Key="FS.Brand">15.5</sys:Double>
+    <sys:Double x:Key="FS.BrandLatin">9</sys:Double>
+    <sys:Double x:Key="FS.PageTitle">15</sys:Double>
+    <sys:Double x:Key="FS.Section">13</sys:Double>
+    <sys:Double x:Key="FS.Body">12.5</sys:Double>
+    <sys:Double x:Key="FS.Small">11.5</sys:Double>
+    <sys:Double x:Key="FS.Micro">10.5</sys:Double>
+    <sys:Double x:Key="FS.Numeric">12.5</sys:Double>
+    <sys:Double x:Key="FS.NumericLg">15</sys:Double>
+    <sys:Double x:Key="FS.Readout">26</sys:Double>
+    <sys:Double x:Key="FS.Mono">11.5</sys:Double>
+
+    <!-- 通用文字样式 -->
+    <Style x:Key="Text.Base" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{StaticResource Font.Cjk}" />
+        <Setter Property="FontSize" Value="{StaticResource FS.Body}" />
+        <Setter Property="Foreground" Value="{DynamicResource Brush.Ink}" />
+        <Setter Property="TextOptions.TextFormattingMode" Value="Ideal" />
+        <Setter Property="TextOptions.TextRenderingMode" Value="ClearType" />
+        <Setter Property="SnapsToDevicePixels" Value="True" />
+    </Style>
+
+    <Style x:Key="Text.Body" TargetType="TextBlock" BasedOn="{StaticResource Text.Base}" />
+
+    <Style x:Key="Text.Small" TargetType="TextBlock" BasedOn="{StaticResource Text.Base}">
+        <Setter Property="FontSize" Value="{StaticResource FS.Small}" />
+        <Setter Property="Foreground" Value="{DynamicResource Brush.InkSoft}" />
+    </Style>
+
+    <Style x:Key="Text.Micro" TargetType="TextBlock" BasedOn="{StaticResource Text.Base}">
+        <Setter Property="FontSize" Value="{StaticResource FS.Micro}" />
+        <Setter Property="Foreground" Value="{DynamicResource Brush.InkFaint}" />
+    </Style>
+
+    <Style x:Key="Text.Section" TargetType="TextBlock" BasedOn="{StaticResource Text.Base}">
+        <Setter Property="FontSize" Value="{StaticResource FS.Section}" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+
+    <Style x:Key="Text.PageTitle" TargetType="TextBlock" BasedOn="{StaticResource Text.Base}">
+        <Setter Property="FontSize" Value="{StaticResource FS.PageTitle}" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+
+    <!-- 拉丁小标（面板头的英文对译）：字距 +0.6，全大写由文本内容决定 -->
+    <Style x:Key="Text.LatinLabel" TargetType="TextBlock" BasedOn="{StaticResource Text.Base}">
+        <Setter Property="FontFamily" Value="{StaticResource Font.Latin}" />
+        <Setter Property="FontSize" Value="{StaticResource FS.Micro}" />
+        <Setter Property="Foreground" Value="{DynamicResource Brush.InkFaint}" />
+        <Setter Property="TextBlock.LineHeight" Value="14" />
+    </Style>
+
+    <!-- 数字读值：Bahnschrift（Windows 10/11 自带） -->
+    <Style x:Key="Text.Numeric" TargetType="TextBlock" BasedOn="{StaticResource Text.Base}">
+        <Setter Property="FontFamily" Value="{StaticResource Font.Latin}" />
+        <Setter Property="FontSize" Value="{StaticResource FS.Numeric}" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+
+    <Style x:Key="Text.Readout" TargetType="TextBlock" BasedOn="{StaticResource Text.Base}">
+        <Setter Property="FontFamily" Value="{StaticResource Font.Latin}" />
+        <Setter Property="FontSize" Value="{StaticResource FS.Readout}" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+
+    <Style x:Key="Text.Mono" TargetType="TextBlock" BasedOn="{StaticResource Text.Base}">
+        <Setter Property="FontFamily" Value="{StaticResource Font.Mono}" />
+        <Setter Property="FontSize" Value="{StaticResource FS.Mono}" />
+    </Style>
+
+</ResourceDictionary>
