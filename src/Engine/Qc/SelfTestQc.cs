@@ -249,9 +249,8 @@ namespace LodStudio.Engine
             string root = Path.Combine(dir, "zoey.qc");
             string main = Path.Combine(dir, "main.qc");
 
-            WriteText(root,
-                "$modelname \"survivors/zoey.mdl\"\r\n$include \"main.qc\"\r\n$sequence idle \"idle\"\r\n",
-                Utf8(), false);
+            string rootText = "$modelname \"survivors/zoey.mdl\"\r\n$include \"main.qc\"\r\n$sequence idle \"idle\"\r\n";
+            WriteText(root, rootText, Utf8(), false);
             string mainText =
                 "$bodygroup body\r\n{\r\n\tstudio \"body.glb\"\r\n}\r\n" +
                 "// $lod 99 注释里的不算\r\n" +
@@ -274,7 +273,10 @@ namespace LodStudio.Engine
             var r = QcWriter.Apply(info, QcWriter.WrapMarker(block, "测试", plan, false), true, new QcBackupRequest());
             ctx.Assert(r.Success, "Apply(force) 成功: " + r.Error);
             ctx.AssertEqual(2, r.DisabledForeignLodBlocks, "停用 2 个块（$lod + $shadowlod）");
-            ctx.AssertEqual(2, r.WrittenFiles.Count, "写入 include 文件 + 根 QC");
+            // 模型声明在 main.qc 里 → 工具块写 main.qc；根 QC 只 include，一个字节都不改
+            ctx.AssertEqual(1, r.WrittenFiles.Count, "只写 include（模型声明文件），根 QC 不改");
+            AssertPathEqual(ctx, Path.GetFullPath(main), r.WrittenFiles[0], "WrittenFiles 是 main.qc");
+            AssertPathEqual(ctx, Path.GetFullPath(main), r.HostFile, "HostFile 是 main.qc");
 
             string mainAfter = ReadText(main, null);
             ctx.AssertContains(mainAfter, QcLexer.DisabledPrefix + "$lod 20", "$lod 行被注释");
@@ -285,14 +287,13 @@ namespace LodStudio.Engine
             ctx.AssertNotContains(mainAfter, QcLexer.DisabledPrefix + "$sequence", "块外内容未加前缀");
             ctx.AssertNotContains(mainAfter, QcLexer.DisabledPrefix + "// $lod", "本来就是注释的 $lod 不处理");
             ctx.AssertEqual(8, CountOccurrences(mainAfter, QcLexer.DisabledPrefix), "共注释 8 行（4+4）");
-
-            string rootAfter = ReadText(root, null);
-            ctx.AssertContains(rootAfter, QcLexer.MarkerBegin, "根 QC 写入工具块");
-            ctx.AssertContains(rootAfter, "$lod 10", "根 QC 写入新 $lod");
-            ctx.AssertNotContains(rootAfter, QcLexer.DisabledPrefix, "根 QC 没有被加停用前缀");
-            ctx.AssertContains(rootAfter, "$sequence idle \"idle\"", "根 QC 块外内容保留");
-            ctx.Assert(File.Exists(main + ".lodbak"), "include 文件先备份");
-            ctx.Assert(File.Exists(root + ".lodbak"), "根 QC 也备份");
+            ctx.AssertContains(mainAfter, QcLexer.MarkerBegin, "main.qc 写入工具块");
+            ctx.AssertContains(mainAfter, "$lod 10", "main.qc 写入新 $lod");
+            ctx.AssertEqual(1, CountOccurrences(mainAfter, QcLexer.MarkerBegin), "只有一套工具块");
+            ctx.Assert(File.Exists(main + ".lodbak"), "main.qc 先备份");
+            ctx.AssertEqual(mainText, ReadText(main + ".lodbak", null), "main.qc 备份是原件");
+            ctx.Assert(!File.Exists(root + ".lodbak"), "根 QC 未被修改，不产生备份");
+            ctx.AssertEqual(rootText, ReadText(root, null), "根 QC 内容不变");
 
             // 重复（force）apply：不重复加前缀、字节不变、不新增备份
             var info2 = QcParser.Parse(root);
@@ -300,9 +301,153 @@ namespace LodStudio.Engine
             var r2 = QcWriter.Apply(info2, QcWriter.WrapMarker(block, "测试", plan, false), true, new QcBackupRequest());
             ctx.Assert(r2.Success && r2.NoChange, "重复 Apply 成功且 NoChange");
             string mainAfter2 = ReadText(main, null);
-            ctx.AssertEqual(mainAfter, mainAfter2, "include 文件内容不再变化");
+            ctx.AssertEqual(mainAfter, mainAfter2, "main.qc 内容不再变化");
             ctx.AssertEqual(8, CountOccurrences(mainAfter2, QcLexer.DisabledPrefix), "不会重复加前缀");
             ctx.AssertEqual(1, Directory.GetFiles(dir, "main.qc.lodbak*").Length, "没有产生第二份备份");
+            ctx.AssertEqual(rootText, ReadText(root, null), "根 QC 始终不变");
+        }
+
+        [SelfTest("QC：模型声明在 include 文件 → 工具块写 include，根 QC 不动")]
+        public static void ToolBlockGoesToDeclaringInclude(SelfTestContext ctx)
+        {
+            string dir = ctx.NewDir("qc_host_include");
+            Touch(Path.Combine(dir, "body.glb"));
+            string root = Path.Combine(dir, "zoey.qc");
+            string main = Path.Combine(dir, "main.qc");
+            string rootText = "$modelname \"survivors/zoey.mdl\"\r\n$include \"main.qc\"\r\n";
+            string mainText = "$bodygroup body\r\n{\r\n\tstudio \"body.glb\"\r\n}\r\n";
+            WriteText(root, rootText, Utf8(), false);
+            WriteText(main, mainText, Utf8(), false);
+
+            var info = QcParser.Parse(root);
+            var plan = MakePlan(new[] { 10.0 }, new[] { 0.997 });
+            string block = QcWriter.BuildLodBlock(info, plan, Generated(Path.Combine(dir, "body_lod1.glb")), false, true);
+            ctx.Assert(block != null, "生成 $lod 块");
+            AssertPathEqual(ctx, Path.GetFullPath(main), QcWriter.ResolveHostFile(info, false), "宿主 = 模型声明文件 main.qc");
+
+            var r = QcWriter.Apply(info, QcWriter.WrapMarker(block, "测试", plan, false), false, new QcBackupRequest());
+            ctx.Assert(r.Success, "Apply 成功: " + r.Error);
+            ctx.Assert(!r.NoChange, "首次确实写盘");
+            ctx.AssertEqual(1, r.WrittenFiles.Count, "只写 main.qc 一个文件");
+            AssertPathEqual(ctx, Path.GetFullPath(main), r.WrittenFiles[0], "WrittenFiles 是 main.qc");
+            AssertPathEqual(ctx, Path.GetFullPath(main), r.HostFile, "HostFile 是 main.qc");
+
+            string mainAfter = ReadText(main, null);
+            ctx.AssertContains(mainAfter, QcLexer.MarkerBegin, "main.qc 写入工具块");
+            ctx.AssertContains(mainAfter, "$lod 10", "main.qc 写入 $lod");
+            ctx.AssertEqual(1, CountOccurrences(mainAfter, QcLexer.MarkerBegin), "只有一套工具块");
+            ctx.AssertEqual(rootText, ReadText(root, null), "根 QC 一个字节都没改");
+            ctx.AssertEqual(mainText, ReadText(main + ".lodbak", null), "main.qc 有备份且是原件");
+            ctx.Assert(!File.Exists(root + ".lodbak"), "根 QC 没有备份（未被修改）");
+
+            // 幂等重跑
+            var info2 = QcParser.Parse(root);
+            var r2 = QcWriter.Apply(info2, QcWriter.WrapMarker(block, "测试", plan, false), false, new QcBackupRequest());
+            ctx.Assert(r2.Success && r2.NoChange, "重跑 NoChange");
+            ctx.AssertEqual(mainAfter, ReadText(main, null), "main.qc 内容不变");
+            ctx.AssertEqual(1, Directory.GetFiles(dir, "*.lodbak").Length, "只保留一份备份");
+        }
+
+        [SelfTest("QC：根 QC 与 include 同时有工具块 → 归并到声明文件并清理根块")]
+        public static void DuplicateToolBlocksCollapsedToHost(SelfTestContext ctx)
+        {
+            string dir = ctx.NewDir("qc_host_dedupe");
+            Touch(Path.Combine(dir, "body.glb"));
+            string root = Path.Combine(dir, "zoey.qc");
+            string main = Path.Combine(dir, "main.qc");
+            string oldBlock = QcLexer.MarkerBegin + "\r\n$lod 99\r\n{\r\n\tstudio \"old.glb\"\r\n}\r\n" + QcLexer.MarkerEnd + "\r\n";
+            string rootText = "$modelname \"survivors/zoey.mdl\"\r\n$include \"main.qc\"\r\n\r\n" + oldBlock;
+            string mainText = "$bodygroup body\r\n{\r\n\tstudio \"body.glb\"\r\n}\r\n\r\n" + oldBlock;
+            WriteText(root, rootText, Utf8(), false);
+            WriteText(main, mainText, Utf8(), false);
+
+            var info = QcParser.Parse(root);
+            ctx.AssertEqual(2, info.ToolMarkerFiles.Count, "解析出 2 个文件带工具块");
+            var plan = MakePlan(new[] { 10.0 }, new[] { 0.997 });
+            string block = QcWriter.BuildLodBlock(info, plan, Generated(Path.Combine(dir, "body_lod1.glb")), false, true);
+            var r = QcWriter.Apply(info, QcWriter.WrapMarker(block, "测试", plan, false), false, new QcBackupRequest());
+            ctx.Assert(r.Success, "Apply 成功: " + r.Error);
+            ctx.AssertEqual(2, r.WrittenFiles.Count, "写 2 个文件（清理根块 + 更新 main.qc）");
+            AssertPathEqual(ctx, Path.GetFullPath(main), r.HostFile, "宿主仍是 main.qc");
+
+            string mainAfter = ReadText(main, null);
+            string rootAfter = ReadText(root, null);
+            ctx.AssertContains(mainAfter, QcLexer.MarkerBegin, "main.qc 有新工具块");
+            ctx.AssertContains(mainAfter, "$lod 10", "main.qc 是新内容");
+            ctx.AssertNotContains(mainAfter, "$lod 99", "main.qc 旧块被替换");
+            ctx.AssertEqual(1, CountOccurrences(mainAfter, QcLexer.MarkerBegin), "main.qc 只有一套工具块");
+            ctx.AssertNotContains(rootAfter, QcLexer.MarkerBegin, "根 QC 的重复块被清理");
+            ctx.AssertContains(rootAfter, "$include \"main.qc\"", "根 QC 其余内容保留");
+            ctx.Assert(File.Exists(main + ".lodbak"), "main.qc 有备份");
+            ctx.Assert(File.Exists(root + ".lodbak"), "根 QC 有备份");
+            ctx.AssertEqual(rootText, ReadText(root + ".lodbak", null), "根 QC 备份是清理前原件");
+        }
+
+        [SelfTest("QC：模型声明分散在多个文件 → 工具块写回根 QC（兜底）")]
+        public static void MixedDeclaringFilesFallbackToRoot(SelfTestContext ctx)
+        {
+            string dir = ctx.NewDir("qc_host_mixed");
+            Touch(Path.Combine(dir, "a.glb"));
+            Touch(Path.Combine(dir, "b.glb"));
+            string root = Path.Combine(dir, "mixed.qc");
+            string extra = Path.Combine(dir, "extra.qc");
+            string rootText = "$modelname \"models/mixed.mdl\"\r\n$bodygroup a\r\n{\r\n\tstudio \"a.glb\"\r\n}\r\n$include \"extra.qc\"\r\n";
+            string extraText = "$bodygroup b\r\n{\r\n\tstudio \"b.glb\"\r\n}\r\n";
+            WriteText(root, rootText, Utf8(), false);
+            WriteText(extra, extraText, Utf8(), false);
+
+            var info = QcParser.Parse(root);
+            ctx.AssertEqual(2, info.Studios.Count, "两个文件各声明一个 studio");
+            var declared = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (StudioRef s in info.Studios) if (!string.IsNullOrEmpty(s.DeclaredInQc)) declared.Add(Path.GetFullPath(s.DeclaredInQc));
+            ctx.AssertEqual(2, declared.Count, "声明文件 2 个");
+            AssertPathEqual(ctx, Path.GetFullPath(root), QcWriter.ResolveHostFile(info, false), "兜底写根 QC");
+
+            var plan = MakePlan(new[] { 10.0 }, new[] { 0.997 });
+            string block = QcWriter.BuildLodBlock(info, plan,
+                Generated(Path.Combine(dir, "a_lod1.glb"), Path.Combine(dir, "b_lod1.glb")), false, true);
+            var r = QcWriter.Apply(info, QcWriter.WrapMarker(block, "测试", plan, false), false, new QcBackupRequest());
+            ctx.Assert(r.Success, "Apply 成功: " + r.Error);
+            ctx.AssertEqual(1, r.WrittenFiles.Count, "只写根 QC");
+            AssertPathEqual(ctx, Path.GetFullPath(root), r.HostFile, "HostFile 是根 QC");
+            ctx.AssertContains(ReadText(root, null), QcLexer.MarkerBegin, "根 QC 写入工具块");
+            ctx.AssertEqual(extraText, ReadText(extra, null), "include 文件不变");
+            ctx.Assert(!File.Exists(extra + ".lodbak"), "include 文件没有备份");
+        }
+
+        [SelfTest("QC：多个 QC 共享同一 include 文件 → 第二次写入 NoChange（幂等）")]
+        public static void SharedHostIdempotent(SelfTestContext ctx)
+        {
+            string dir = ctx.NewDir("qc_host_shared");
+            Touch(Path.Combine(dir, "body.glb"));
+            string main = Path.Combine(dir, "main.qc");
+            string mainText = "$bodygroup body\r\n{\r\n\tstudio \"body.glb\"\r\n}\r\n";
+            WriteText(main, mainText, Utf8(), false);
+            string root1 = Path.Combine(dir, "zoey.qc");
+            string root2 = Path.Combine(dir, "francis.qc");
+            string rootText = "$modelname \"survivors/{0}.mdl\"\r\n$include \"main.qc\"\r\n";
+            string root1Text = string.Format(rootText, "zoey");
+            string root2Text = string.Format(rootText, "francis");
+            WriteText(root1, root1Text, Utf8(), false);
+            WriteText(root2, root2Text, Utf8(), false);
+
+            var plan = MakePlan(new[] { 10.0 }, new[] { 0.997 });
+            var info1 = QcParser.Parse(root1);
+            string block = QcWriter.BuildLodBlock(info1, plan, Generated(Path.Combine(dir, "body_lod1.glb")), false, true);
+            var body = QcWriter.WrapMarker(block, "测试", plan, false);
+            var r1 = QcWriter.Apply(info1, body, false, new QcBackupRequest());
+            ctx.Assert(r1.Success, "第一个 QC 写入成功: " + r1.Error);
+            ctx.Assert(!r1.NoChange, "第一个 QC 确实写了 main.qc");
+            string mainAfter = ReadText(main, null);
+
+            var info2 = QcParser.Parse(root2);
+            var r2 = QcWriter.Apply(info2, body, false, new QcBackupRequest());
+            ctx.Assert(r2.Success, "第二个 QC 写入成功: " + r2.Error);
+            ctx.Assert(r2.NoChange, "共享宿主内容一致 → 第二个 QC NoChange");
+            ctx.AssertEqual(mainAfter, ReadText(main, null), "main.qc 字节不变");
+            ctx.AssertEqual(1, Directory.GetFiles(dir, "main.qc.lodbak*").Length, "共享宿主只备份一次");
+            ctx.AssertEqual(root1Text, ReadText(root1, null), "根 QC1 未改动");
+            ctx.AssertEqual(root2Text, ReadText(root2, null), "根 QC2 未改动");
         }
 
         [SelfTest("QC：备份 .lodbak 永不覆盖（第二次得时间戳副本）")]
@@ -419,17 +564,18 @@ namespace LodStudio.Engine
             ctx.AssertEqual(original, ReadText(qc, null), "原文件内容不变");
             ctx.AssertEqual(0, Backups(dir), "没有产生备份");
 
-            // B) 允许读、禁止替换（FileShare.Read）：include 先写成功、根 QC 写失败 → include 回滚
+            // B) 允许读、禁止替换（FileShare.Read）：include/声明文件先写成功、根 QC 写失败 → include 回滚
+            //    根 QC 自己也带手写 $lod，这样 force 后根 QC 也是待写文件，才能覆盖"多文件写失败回滚"
             string dir2 = ctx.NewDir("qc_atomic_rollback");
             Touch(Path.Combine(dir2, "body.glb"));
             string root = Path.Combine(dir2, "zoey.qc");
             string main = Path.Combine(dir2, "main.qc");
-            string rootOriginal = "$modelname \"z.mdl\"\r\n$include \"main.qc\"\r\n";
+            string rootOriginal = "$modelname \"z.mdl\"\r\n$include \"main.qc\"\r\n$lod 30\r\n{\r\n}\r\n";
             string mainOriginal = "$bodygroup body\r\n{\r\n\tstudio \"body.glb\"\r\n}\r\n$shadowlod\r\n{\r\n}\r\n";
             WriteText(root, rootOriginal, Utf8(), false);
             WriteText(main, mainOriginal, Utf8(), false);
             var info2 = QcParser.Parse(root);
-            ctx.Assert(info2.HasForeignLod, "main.qc 有手写 $shadowlod");
+            ctx.Assert(info2.HasForeignLod, "根 QC 与 main.qc 都有手写 $lod");
 
             QcWriteResult r2 = null;
             using (new FileStream(root, FileMode.Open, FileAccess.Read, FileShare.Read))

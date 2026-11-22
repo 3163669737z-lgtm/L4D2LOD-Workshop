@@ -13,7 +13,7 @@ namespace LodStudio
         public const string ProductName = "远景工坊";
         public const string ProductLatin = "FARSIGHT";
         public const string Subtitle = "L4D2 自动 LOD 工具";
-        public const string Version = "7.0.0";
+        public const string Version = "0.2.0";
         public const string Build = "2026.11";
 
         /// <summary>窗口标题用</summary>

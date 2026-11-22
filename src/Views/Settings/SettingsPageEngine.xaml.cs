@@ -34,6 +34,7 @@ namespace LodStudio.Views.Settings
 
         protected override void OnAttached()
         {
+            CmbBackend.SelectionChanged += OnBackendChanged;
             BtnBrowseBlender.Click += OnBrowseBlender;
             BtnFindBlender.Click += OnFindBlender;
             BtnBrowseCompiler.Click += OnBrowseCompiler;
@@ -46,6 +47,10 @@ namespace LodStudio.Views.Settings
             Syncing = true;
             try
             {
+                CmbBackend.SelectedIndex = Math.Max(0, Math.Min(1, Settings.ReduceBackend));
+                TxtBackendHint.Visibility = Settings.ReduceBackend == (int)ReduceBackend.Gltfpack
+                    ? Visibility.Visible : Visibility.Collapsed;
+
                 string blender = Settings.BlenderPath ?? "";
                 TxtBlenderPath.Text = blender;
                 TxtBlenderPath.ToolTip = string.IsNullOrEmpty(blender)
@@ -60,6 +65,16 @@ namespace LodStudio.Views.Settings
                 RefreshCompilerStatus();
             }
             finally { Syncing = false; }
+        }
+
+        private void OnBackendChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (Syncing || Settings == null) return;
+            Settings.ReduceBackend = Math.Max(0, Math.Min(1, CmbBackend.SelectedIndex));
+            TxtBackendHint.Visibility = Settings.ReduceBackend == (int)ReduceBackend.Gltfpack
+                ? Visibility.Visible : Visibility.Collapsed;
+            Apply(false);
+            RefreshBlenderStatus();
         }
 
         public override void OnPageShown()
@@ -182,9 +197,15 @@ namespace LodStudio.Views.Settings
         private void RefreshBlenderStatus()
         {
             if (_probeInFlight) { SetBlenderState("检测中…", "Faint"); return; }
+            bool gpMode = Settings != null && Settings.ReduceBackend == (int)ReduceBackend.Gltfpack;
             string path = Settings == null ? "" : (Settings.BlenderPath ?? "");
-            if (string.IsNullOrWhiteSpace(path)) { SetBlenderState("未找到：点「自动查找」或「浏览…」指定", "Err"); return; }
-            if (!File.Exists(path)) { SetBlenderState("文件不存在：请重新选择或点「自动查找」", "Err"); return; }
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                if (gpMode) { SetBlenderState("无需 Blender（内置 gltfpack 后端）；装了可作回退", "Faint"); return; }
+                SetBlenderState("未找到：点「自动查找」或「浏览…」指定", "Err");
+                return;
+            }
+            if (!File.Exists(path)) { SetBlenderState("文件不存在：请重新选择或点「自动查找」", gpMode ? "Faint" : "Err"); return; }
             if (!string.Equals(path, _probeAttemptedPath, StringComparison.OrdinalIgnoreCase))
             {
                 SetBlenderState("未检测", "Faint");

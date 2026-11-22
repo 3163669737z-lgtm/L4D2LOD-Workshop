@@ -30,6 +30,13 @@ namespace LodStudio.Engine
         Error = 2
     }
 
+    /// <summary>
+    /// 减面后端。Blender = 现有完整链（gltfpack 减面 + Blender 往返 + Python 内缩，保留作回退/诊断）；
+    /// Gltfpack = 无 Blender 模式（内置 gltfpack 减面 + C# GlbInnerShrink 内缩）。
+    /// 只允许用户显式选择，禁止在任何一层静默切换。
+    /// </summary>
+    public enum ReduceBackend { Blender = 0, Gltfpack = 1 }
+
     /// <summary>计划里一个唯一模型（全局去重后）。</summary>
     public sealed class PlannedModel
     {
@@ -90,6 +97,8 @@ namespace LodStudio.Engine
         public LodPlan Plan;
         public string PresetName = "";
 
+        /// <summary>减面后端（默认 Blender；显式选择，绝不静默切换）</summary>
+        public ReduceBackend Backend = ReduceBackend.Blender;
         public string BlenderPath;
         public int Workers;
         public bool QualityFirst = true;
@@ -139,6 +148,8 @@ namespace LodStudio.Engine
         public bool Injected;
         public bool Skipped;
         public string SkipReason;
+        /// <summary>$lod 工具块实际写入（或已存在）的文件：通常等于根 QC，模型声明在 include 文件时为该文件。</summary>
+        public string LodBlockFile;
         public List<string> Errors = new List<string>();
         public bool CompileTried;
         public bool CompileOk;

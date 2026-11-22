@@ -61,6 +61,9 @@ function Invoke-Tool([string]$tag, [string[]]$argv) {
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
+    # 被测 exe 的 stdout/stderr 是 UTF-8；显式指定解码，避免随控制台代码页（GBK 等）乱码导致中文断言失败
+    $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+    $psi.StandardErrorEncoding = [System.Text.Encoding]::UTF8
     $psi.CreateNoWindow = $true
     # 不在测试里读用户真实设置
     $p = [System.Diagnostics.Process]::Start($psi)
@@ -217,13 +220,16 @@ Check 'batch 模式0：生成 LOD + 注入 $lod + 备份 + 幂等' {
         }
     }
 
-    # QC 注入内容
-    $actor = Read-TextAuto (Join-Path $work 'qc\actor.qc')
-    Assert-Contains $actor.Text '//>>> L4D2 自动 LOD 工具 生成块 开始 >>>' 'actor.qc 工具块开始'
-    Assert-Contains $actor.Text '//<<< L4D2 自动 LOD 工具 生成块 结束 <<<' 'actor.qc 工具块结束'
-    Assert-Contains $actor.Text '$lod 20' 'actor.qc 第一级距离'
-    Assert-Contains $actor.Text 'replacemodel "SMD/char_body.glb"' 'actor.qc replacemodel 源名必须逐字保留'
-    Assert-Contains $actor.Text 'nofacial' 'actor.qc 应写 nofacial'
+    # QC 注入内容：actor.qc 只 include，模型声明在 actor_main.qc → 工具块必须写 actor_main.qc，根 QC 不动
+    $actorMain = Read-TextAuto (Join-Path $work 'qc\actor_main.qc')
+    Assert-Contains $actorMain.Text '//>>> L4D2 自动 LOD 工具 生成块 开始 >>>' 'actor_main.qc 工具块开始'
+    Assert-Contains $actorMain.Text '//<<< L4D2 自动 LOD 工具 生成块 结束 <<<' 'actor_main.qc 工具块结束'
+    Assert-Contains $actorMain.Text '$lod 20' 'actor_main.qc 第一级距离'
+    Assert-Contains $actorMain.Text 'replacemodel "SMD/char_body.glb"' 'actor_main.qc replacemodel 源名必须逐字保留'
+    Assert-Contains $actorMain.Text 'nofacial' 'actor_main.qc 应写 nofacial'
+    $actorRoot = Read-TextAuto (Join-Path $work 'qc\actor.qc')
+    Assert-NotContains $actorRoot.Text '//>>> L4D2 自动 LOD 工具 生成块 开始 >>>' 'actor.qc（只 include）不应被写入工具块'
+    Assert ((Get-FileHashText (Join-Path $work 'qc\actor.qc')) -eq $qcBefore['actor.qc']) 'actor.qc 应保持原样（块写在 include 文件里）'
     $weapon = Read-TextAuto (Join-Path $work 'qc\weapon.qc')
     Assert-Contains $weapon.Text 'replacemodel "SMD/crate"' 'weapon.qc replacemodel 必须逐字使用 QC 里写的路径'
     Assert-Contains $weapon.Text '$lod 50' 'weapon.qc 第二级距离'
@@ -235,12 +241,13 @@ Check 'batch 模式0：生成 LOD + 注入 $lod + 备份 + 幂等' {
     Assert-Contains $gbkBaking.Text '中文注释' 'GBK QC 中文注释'
     Assert-Contains $gbkBaking.Text '$lod 20' 'GBK QC 注入'
 
-    # 备份 = 运行前原件
-    foreach ($n in @('actor.qc', 'weapon.qc', 'gbk_model.qc')) {
+    # 备份 = 运行前原件（块写在 actor_main.qc，actor.qc 未被修改所以没有备份）
+    foreach ($n in @('actor_main.qc', 'weapon.qc', 'gbk_model.qc')) {
         $bak = Join-Path $work ("qc\{0}.lodbak" -f $n)
         Assert (Test-Path -LiteralPath $bak) ("缺少备份: " + $bak)
         Assert ((Get-FileHashText $bak) -eq $qcBefore[$n]) ("备份内容不等于运行前原件: " + $n)
     }
+    Assert (-not (Test-Path -LiteralPath (Join-Path $work 'qc\actor.qc.lodbak'))) 'actor.qc 未被修改，不应有备份'
 
     # 幂等：再跑一次，QC 字节完全一致
     $after1 = @{}
@@ -252,7 +259,7 @@ Check 'batch 模式0：生成 LOD + 注入 $lod + 备份 + 幂等' {
         Assert ((Get-FileHashText (Join-Path $work ("qc\" + $n))) -eq $after1[$n]) ("重跑后 QC 发生变化（应幂等）: " + $n)
     }
     # 备份不覆盖：.lodbak 仍是最初原件
-    Assert ((Get-FileHashText (Join-Path $work 'qc\actor.qc.lodbak')) -eq $qcBefore['actor.qc']) '第二次运行覆盖了 .lodbak（应为永不覆盖）'
+    Assert ((Get-FileHashText (Join-Path $work 'qc\actor_main.qc.lodbak')) -eq $qcBefore['actor_main.qc']) '第二次运行覆盖了 .lodbak（应为永不覆盖）'
 }
 
 Check 'batch 模式1：独立 _LOD.qc，再切回模式0会删掉旧文件' {
@@ -271,7 +278,10 @@ Check 'batch 模式1：独立 _LOD.qc，再切回模式0会删掉旧文件' {
     $r2 = Invoke-Tool 'batch_sep2inline' (@('--batch', $work, '--out', $out2, '--mode', '0') + $common)
     Assert ($r2.Code -eq 0) ("切回模式0 退出码 " + $r2.Code)
     Assert (-not (Test-Path -LiteralPath $actorLod)) '切回模式0 后应删除不再被引用的 _LOD.qc'
-    $inlineActor = Read-TextAuto (Join-Path $work 'qc\actor.qc'); Assert-Contains $inlineActor.Text '$lod 20' '模式0 应注入本体'
+    $inlineActorMain = Read-TextAuto (Join-Path $work 'qc\actor_main.qc')
+    Assert-Contains $inlineActorMain.Text '$lod 20' '模式0 应把 $lod 注回模型声明文件 actor_main.qc'
+    $inlineRoot = Read-TextAuto (Join-Path $work 'qc\actor.qc')
+    Assert-NotContains $inlineRoot.Text '//>>> L4D2 自动 LOD 工具 生成块 开始 >>>' '切回模式0 后根 QC 不应残留 include 块'
 }
 
 Check 'batch 模式2：仅合集，不改任何 QC' {

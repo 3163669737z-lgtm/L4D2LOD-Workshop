@@ -17,9 +17,9 @@
     <AssemblyName>L4D2LOD远景工坊</AssemblyName>
     <StartupObject>LodStudio.Program</StartupObject>
 
-    <Version>7.0.0</Version>
-    <AssemblyVersion>7.0.0.0</AssemblyVersion>
-    <FileVersion>7.0.0.0</FileVersion>
+    <Version>0.2.0</Version>
+    <AssemblyVersion>0.2.0.0</AssemblyVersion>
+    <FileVersion>0.2.0.0</FileVersion>
     <Company>远景工坊</Company>
     <Product>远景工坊 · L4D2 自动 LOD 工具</Product>
     <Title>远景工坊</Title>
@@ -48,6 +48,8 @@
   <ItemGroup>
     <!-- Blender 端脚本：编进 exe，运行时按内容哈希释放到 %TEMP% -->
     <EmbeddedResource Include="Assets\blender_backend.py" LogicalName="LodStudio.blender_backend.py" />
+    <!-- gltfpack（meshoptimizer，MIT）：拓扑感知减面，运行时按内容哈希释放 -->
+    <EmbeddedResource Include="Assets\gltfpack.exe" LogicalName="LodStudio.gltfpack.exe" />
     <!-- 窗口/任务栏图标 -->
     <Resource Include="Assets\app.ico" />
   </ItemGroup>

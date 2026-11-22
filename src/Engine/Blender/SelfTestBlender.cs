@@ -294,7 +294,8 @@ namespace LodStudio.Engine
                        "before 应等于源 GLB 三角面数 " + srcTris + "，实际=" + results[0].BeforeTriangles);
             ctx.Assert(results[0].AfterTriangles > results[1].AfterTriangles,
                        "ratio 0.5 的产物应比 0.2 面数多（实际 " + results[0].AfterTriangles + " vs " + results[1].AfterTriangles + "）");
-            ctx.Assert(results[0].AfterTriangles < srcTris / 2 + srcTris / 10, "ratio 0.5 的产物应明显少于源面数");
+            ctx.Assert(results[0].AfterTriangles < srcTris * 3 / 4,
+                       "形状优先下 ratio 0.5 的产物仍应明显少于源面数（实际 " + results[0].AfterTriangles + " / " + srcTris + "）");
             ctx.Assert(results[0].Blocks >= 3, "质量模式应统计到至少 3 个连通块（2 个在合并对象里 + 1 个内层部件），实际=" + results[0].Blocks);
             ctx.Assert(results[0].AppliedBlocks >= 1, "质量模式应至少简化 1 个连通块");
             ctx.Assert(results[1].AppliedBlocks >= 1, "速度模式也应报告简化块数");
@@ -332,6 +333,242 @@ namespace LodStudio.Engine
             ctx.Assert(sawBlenderVer, "调度日志应包含 Blender 版本行（BLENDER=" + wanted + "）");
 
             AssertNoResidualBlender(ctx, baseline, "端到端结束后");
+        }
+
+        [SelfTest("Blender 后端：SMD 经 gltfpack 往返保留 UV")]
+        public static void SmdUvSurvivesGltfpack(SelfTestContext ctx)
+        {
+            string blender = FindAnyBlender(ctx);
+            if (blender == null)
+            {
+                ctx.Log("SKIP 未找到 Blender，跳过 SMD UV 用例（不算失败）");
+                return;
+            }
+
+            string dir = ctx.NewDir("smd_uv_gltfpack");
+            var original = new SmdModel();
+            original.Triangles.Add(new SmdTriangle
+            {
+                Material = "models/test/uv",
+                V0 = UvVertex(0, 0, 0, 0.1, 0.2),
+                V1 = UvVertex(1, 0, 0, 0.8, 0.2),
+                V2 = UvVertex(0, 1, 0, 0.1, 0.9)
+            });
+            original.Triangles.Add(new SmdTriangle
+            {
+                Material = "models/test/uv",
+                V0 = UvVertex(1, 0, 0, 0.2, 0.1),
+                V1 = UvVertex(1, 1, 0, 0.9, 0.8),
+                V2 = UvVertex(0, 1, 0, 0.2, 0.9)
+            });
+
+            string src = Path.Combine(dir, "uv_src.glb");
+            string dst = Path.Combine(dir, "uv_lod.glb");
+            File.WriteAllBytes(src, SmdGlbCodec.SmdToGlb(original));
+            var specs = new List<BlenderJobSpec>
+            {
+                new BlenderJobSpec
+                {
+                    Source = src,
+                    Destination = dst,
+                    Ratio = 1.0,
+                    ShrinkInner = 0,
+                    QualityOverride = false,
+                    Weight = new FileInfo(src).Length
+                }
+            };
+            var options = new BlenderRunOptions
+            {
+                BlenderPath = blender,
+                Workers = 1,
+                QualityFirst = false,
+                TaskTimeoutMinutes = 3,
+                Log = delegate { }
+            };
+            var results = RunAllWithWatchdog(ctx, specs, options, CancellationToken.None, null, 60000);
+            ctx.Assert(results.Count == 1 && results[0].Ok,
+                       "SMD UV 用例减面应成功：" + (results.Count == 1 ? results[0].Error : "结果数量=" + results.Count));
+
+            var back = SmdGlbCodec.GlbToSmd(GlbCodec.Read(dst), original);
+            int total = 0, nonZero = 0;
+            foreach (var tri in back.Triangles)
+            {
+                CheckUv(tri.V0, ref total, ref nonZero);
+                CheckUv(tri.V1, ref total, ref nonZero);
+                CheckUv(tri.V2, ref total, ref nonZero);
+            }
+            ctx.Log("SMD→GLB→gltfpack→Blender→SMD：顶点=" + total + "，非零 UV=" + nonZero);
+            ctx.AssertEqual(6, total, "两个三角形应有 6 个顶点");
+            ctx.AssertEqual(total, nonZero, "gltfpack 必须保留未被材质引用的 UV，否则 SMD 会全部写成 0,0");
+        }
+
+        private static SmdVertex UvVertex(double x, double y, double z, double u, double v)
+        {
+            return new SmdVertex
+            {
+                X = (float)x, Y = (float)y, Z = (float)z,
+                Nx = 0, Ny = 0, Nz = 1, U = (float)u, V = (float)v
+            };
+        }
+
+        private static void CheckUv(SmdVertex vertex, ref int total, ref int nonZero)
+        {
+            total++;
+            if (Math.Abs(vertex.U) > 1e-6 || Math.Abs(vertex.V) > 1e-6) nonZero++;
+        }
+
+        [SelfTest("Blender 后端：Body 内缩与 C# GlbInnerShrink 差分一致（真实 Blender）")]
+        public static void InnerShrinkMatchesBlender(SelfTestContext ctx)
+        {
+            string blender = FindAnyBlender(ctx);
+            if (blender == null)
+            {
+                ctx.Log("SKIP 未找到 Blender，跳过内缩差分用例（不算失败）");
+                return;
+            }
+
+            int baseline = CountBlenderProcesses();
+            string dir = ctx.NewDir("inner_shrink_diff");
+            string src = Path.Combine(dir, "shrink_src.glb");
+            GenerateTestGlb(ctx, blender, src, false);
+
+            const double shrinkRatio = 0.01;
+
+            // 路径 A：真实 Blender 后端（ratio=1.0 → 不减面，只做 Body 内缩）
+            string dstBlender = Path.Combine(dir, "shrink_blender.glb");
+            var specs = new List<BlenderJobSpec>
+            {
+                new BlenderJobSpec
+                {
+                    Source = src,
+                    Destination = dstBlender,
+                    Ratio = 1.0,
+                    ShrinkInner = shrinkRatio,
+                    QualityOverride = false,
+                    Weight = new FileInfo(src).Length
+                }
+            };
+            var options = new BlenderRunOptions
+            {
+                BlenderPath = blender,
+                Workers = 1,
+                QualityFirst = false,
+                TaskTimeoutMinutes = 3,
+                Log = delegate { }
+            };
+            var results = RunAllWithWatchdog(ctx, specs, options, CancellationToken.None, null, 60000);
+            ctx.Assert(results.Count == 1 && results[0].Ok,
+                       "Blender 内缩任务应成功：" + (results.Count == 1 ? results[0].Error : "结果数量=" + results.Count));
+
+            // 路径 B：C# GlbInnerShrink 在原始 JSON+BIN 上定点修改
+            var shr = GlbInnerShrink.Apply(File.ReadAllBytes(src), shrinkRatio, "shrink_src.glb");
+            ctx.Assert(shr.Changed, "含 Body 的 GLB 应被 C# 内缩修改");
+            ctx.Assert(shr.BodyMeshes >= 1, "应至少识别到一个 Body mesh");
+            ctx.Assert(shr.ModifiedVertices > 0, "应有顶点被内缩");
+            string dstCsharp = Path.Combine(dir, "shrink_csharp.glb");
+            File.WriteAllBytes(dstCsharp, shr.Data);
+
+            var srcModel = GlbCodec.Read(src);
+            var blenderBody = PositionsOf(GlbCodec.Read(dstBlender), true);
+            var csharpBody = PositionsOf(GlbCodec.Read(dstCsharp), true);
+            var srcBody = PositionsOf(srcModel, true);
+            var srcMain = PositionsOf(srcModel, false);
+            var csharpMain = PositionsOf(GlbCodec.Read(dstCsharp), false);
+
+            ctx.Assert(srcBody.Count >= 300, "源 Body 顶点数应足够多，实际=" + (srcBody.Count / 3));
+            ctx.AssertEqual(srcBody.Count, csharpBody.Count, "C# 内缩只改 POSITION 数值，Body 顶点数不应变化");
+            ctx.Assert(blenderBody.Count >= srcBody.Count / 2, "Blender 产物 Body 顶点数异常：" + (blenderBody.Count / 3));
+
+            // C# 输出与源同序：逐顶点验证内缩距离 ≈ 世界对角线 × 比例（夹具无缩放）
+            double expected = shr.ShrinkDistance;
+            ctx.Assert(expected > 1e-6, "内缩距离应为正，实际=" + expected);
+            double magTol = expected * 0.02 + 1e-6;
+            for (int i = 0; i + 2 < srcBody.Count; i += 3)
+            {
+                double dx = csharpBody[i] - srcBody[i];
+                double dy = csharpBody[i + 1] - srcBody[i + 1];
+                double dz = csharpBody[i + 2] - srcBody[i + 2];
+                double disp = Math.Sqrt(dx * dx + dy * dy + dz * dz);
+                ctx.Assert(Math.Abs(disp - expected) <= magTol,
+                           "C# 内缩顶点 " + (i / 3) + " 位移 " + disp + " 应≈" + expected);
+            }
+
+            // 非 Body 部分：C# 必须逐字节不动（同序同值）
+            ctx.AssertEqual(srcMain.Count, csharpMain.Count, "C# 内缩不应改变非 Body 顶点数");
+            for (int i = 0; i < srcMain.Count; i++)
+                ctx.Assert(srcMain[i] == csharpMain[i], "C# 内缩不应改动非 Body 顶点分量 " + i);
+
+            // 差分核心：两条路径的 Body 顶点云互为最近邻。
+            // 注意 Blender 沿其运行时顶点法线（v.normal，由拓扑/拆边法线算出）内缩，
+            // 与 GLB 文件里的 NORMAL 属性并不逐顶点一致——实测同一夹具下两边
+            // 自身都向内缩了 ≈expected，但顶点云最大差可达 ~0.57×expected。
+            // 容差取 0.65×expected：放行进法线计算差异，仍能抓住「没缩（差 1×）、
+            // 缩两遍（差 1×）、方向反（差 2×）」这类真实回归。
+            double tol = expected * 0.65 + 1e-5;
+            double worstAB = CloudMaxNearest(csharpBody, blenderBody);
+            double worstBA = CloudMaxNearest(blenderBody, csharpBody);
+            ctx.Log("内缩差分：内缩量=" + expected.ToString("F6", CultureInfo.InvariantCulture) +
+                    "  C#→Blender 最远=" + worstAB.ToString("F6", CultureInfo.InvariantCulture) +
+                    "  Blender→C# 最远=" + worstBA.ToString("F6", CultureInfo.InvariantCulture) +
+                    "  容差=" + tol.ToString("F6", CultureInfo.InvariantCulture));
+            ctx.Assert(worstAB <= tol, "C# 内缩结果与 Blender 不一致（C#→Blender 最远 " + worstAB + " > " + tol + "）");
+            ctx.Assert(worstBA <= tol, "Blender 内缩结果与 C# 不一致（Blender→C# 最远 " + worstBA + " > " + tol + "）");
+
+            // 反向校验 Blender 路径本身：每个 Body 顶点都确实向内缩了约 expected
+            // （离源顶点云的距离应在 [0.5×, 2×] 内缩量之间）
+            double minB = double.MaxValue, maxB = 0;
+            for (int i = 0; i + 2 < blenderBody.Count; i += 3)
+            {
+                double best = double.MaxValue;
+                for (int j = 0; j + 2 < srcBody.Count; j += 3)
+                {
+                    double dx = blenderBody[i] - srcBody[j], dy = blenderBody[i + 1] - srcBody[j + 1], dz = blenderBody[i + 2] - srcBody[j + 2];
+                    double d2 = dx * dx + dy * dy + dz * dz;
+                    if (d2 < best) best = d2;
+                }
+                double d = Math.Sqrt(best);
+                if (d < minB) minB = d;
+                if (d > maxB) maxB = d;
+            }
+            ctx.Log("Blender 路径位移范围：[" + minB.ToString("F6", CultureInfo.InvariantCulture) + ", " + maxB.ToString("F6", CultureInfo.InvariantCulture) + "]");
+            ctx.Assert(minB >= expected * 0.5, "Blender 路径存在几乎未内缩的顶点（最小位移 " + minB + "）");
+            ctx.Assert(maxB <= expected * 2.0, "Blender 路径存在内缩过度的顶点（最大位移 " + maxB + "）");
+
+            AssertNoResidualBlender(ctx, baseline, "内缩差分结束后");
+        }
+
+        /// <summary>按节点名（含 body 与否）收集模型中 mesh 的 POSITION 展平数组。</summary>
+        private static List<float> PositionsOf(GlbModel model, bool body)
+        {
+            var list = new List<float>();
+            foreach (var node in model.Nodes)
+            {
+                bool isBody = (node.Name ?? "").IndexOf("body", StringComparison.OrdinalIgnoreCase) >= 0;
+                if (isBody != body || node.Mesh == null) continue;
+                int mi = node.Mesh.Value;
+                if (mi < 0 || mi >= model.Meshes.Count) continue;
+                foreach (var prim in model.Meshes[mi].Primitives)
+                    if (prim.Positions != null) list.AddRange(prim.Positions);
+            }
+            return list;
+        }
+
+        /// <summary>点云 a 中每个点到点云 b 的最近距离的最大值（O(n²)，仅自测小规模用）。</summary>
+        private static double CloudMaxNearest(List<float> a, List<float> b)
+        {
+            double worst = 0;
+            for (int i = 0; i + 2 < a.Count; i += 3)
+            {
+                double best = double.MaxValue;
+                for (int j = 0; j + 2 < b.Count; j += 3)
+                {
+                    double dx = a[i] - b[j], dy = a[i + 1] - b[j + 1], dz = a[i + 2] - b[j + 2];
+                    double d2 = dx * dx + dy * dy + dz * dz;
+                    if (d2 < best) best = d2;
+                }
+                if (best > worst) worst = best;
+            }
+            return Math.Sqrt(worst);
         }
 
         // ═══════════════════════════════ 5) 取消 ═══════════════════════════════
@@ -988,6 +1225,12 @@ bpy.context.active_object.name = 'Mesh_main'
 # 内层部件（名字含 body）：闭合环面，验证内缩路径且不产生退化面
 bpy.ops.mesh.primitive_torus_add(major_segments=64, minor_segments=12, location=(0.0, 0.0, 1.6))
 bpy.context.active_object.name = 'Body_inner'
+# 平滑着色：glTF 导出才会共享顶点，gltfpack 才能按拓扑折叠边。
+# 默认的平直着色会把每个三角面拆成独立顶点，gltfpack 会视为大量分离面而无法减面。
+for ob in bpy.context.scene.objects:
+    if ob.type == 'MESH':
+        for p in ob.data.polygons:
+            p.use_smooth = True
 bpy.ops.export_scene.gltf(filepath=out, export_format='GLB', use_selection=False, export_apply=False)
 tris = 0
 for ob in bpy.context.scene.objects:
@@ -1016,6 +1259,10 @@ bpy.ops.object.join()
 bpy.context.active_object.name = 'Mesh_main'
 bpy.ops.mesh.primitive_ico_sphere_add(subdivisions=3, radius=0.5, location=(0.0, 0.0, 1.6))
 bpy.context.active_object.name = 'Body_inner'
+for ob in bpy.context.scene.objects:
+    if ob.type == 'MESH':
+        for p in ob.data.polygons:
+            p.use_smooth = True
 bpy.ops.export_scene.gltf(filepath=out, export_format='GLB', use_selection=False, export_apply=False)
 tris = 0
 for ob in bpy.context.scene.objects:

@@ -155,6 +155,41 @@ namespace LodStudio.Engine
             List<BlenderJobResult> results = new List<BlenderJobResult>();
             if (jobs.Count > 0)
             {
+                if (options.Backend == ReduceBackend.Gltfpack)
+                {
+                    // 无 Blender 模式：内置 gltfpack 减面 + C# GlbInnerShrink 内缩；不需要也不寻找 Blender
+                    obs.Stage(BatchStage.Blender, "── 简化（gltfpack · 无 Blender）──");
+                    string gpError;
+                    string gpExe = GltfpackTool.EnsureExtracted(out gpError);
+                    if (gpExe == null)
+                    {
+                        obs.Log(LogLevel.Error, "无法释放内置 gltfpack：" + (gpError ?? "未知错误"));
+                        foreach (var q in plan.QcPlans.Where(x => x.Action == BatchQcAction.Process))
+                            QcErr(q.QcPath, "内置 gltfpack 不可用");
+                        outcome.Errors.Add("无 Blender 模式需要内置 gltfpack，但释放失败：" + (gpError ?? "未知错误"));
+                        WriteReports(plan, options, outcome, obs, obs, sw.Elapsed);
+                        return;
+                    }
+                    int workers = options.Workers > 0 ? options.Workers : 0;
+                    obs.Log(LogLevel.Info, "减面后端：内置 gltfpack（无 Blender；Body 内缩由 C# GlbInnerShrink 完成）");
+                    obs.Log(LogLevel.Info, "并行进程：" + (workers > 0 ? workers + "（手动指定）" : "自动（按核数/空闲内存）"));
+                    var ropt = new GltfpackRunner.RunOptions
+                    {
+                        Workers = workers,
+                        Log = s => obs.Log(LogLevel.Info, s)
+                    };
+                    var gpSw = Stopwatch.StartNew();
+                    results = GltfpackRunner.RunAll(jobs, ropt, cancel, (done, total) => obs.Progress(done, total, gpSw.Elapsed));
+                    gpSw.Stop();
+                    if (cancel.IsCancellationRequested)
+                    {
+                        outcome.Cancelled = true;
+                        obs.Log(LogLevel.Warn, "已停止：gltfpack 进程已全部结束。");
+                    }
+                    obs.Log(LogLevel.Info, "简化完成：用时 " + gpSw.Elapsed.TotalMinutes.ToString("F1", CultureInfo.InvariantCulture) + " 分钟");
+                }
+                else
+                {
                 string blenderPath = options.BlenderPath;
                 if (string.IsNullOrEmpty(blenderPath) || !File.Exists(blenderPath))
                 {
@@ -187,6 +222,7 @@ namespace LodStudio.Engine
                     obs.Log(LogLevel.Warn, "已停止：Blender 进程已全部结束。");
                 }
                 obs.Log(LogLevel.Info, "简化完成：用时 " + blenderSw.Elapsed.TotalMinutes.ToString("F1", CultureInfo.InvariantCulture) + " 分钟");
+                }
             }
 
             // ── 2. 汇总减面结果（GLB 直接用；SMD 转回） ──
@@ -292,6 +328,7 @@ namespace LodStudio.Engine
 
             int injected = 0, skipped = 0;
             var injectedPaths = new List<string>();
+            var sharedHostBlocks = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var qp in plan.QcPlans)
             {
                 if (cancel.IsCancellationRequested) { outcome.Cancelled = true; break; }
@@ -299,14 +336,18 @@ namespace LodStudio.Engine
                 if (qp.Action == BatchQcAction.Error) { qo.Errors.Add(qp.Reason ?? "计划错误"); continue; }
                 if (qp.Action == BatchQcAction.Skip)
                 {
-                    // 合理跳过：如果它带着上次的工具块（本次已无可写内容），把旧块移除
-                    if (qp.Info != null && qp.Info.RootHasToolMarker && !collectionMode)
+                    // 合理跳过：如果它带着上次的工具块（本次已无可写内容），把旧块移除（可能在根 QC，也可能在 include 文件里）
+                    if (qp.Info != null && qp.Info.HasToolMarker && !collectionMode)
                     {
                         try
                         {
                             var res = QcWriter.Apply(qp.Info, null, false, backup);
                             if (res.Success && !res.NoChange)
-                                obs.Log(LogLevel.Info, Path.GetFileName(qp.QcPath) + " → 本次没有可写的 $lod，已移除上次生成的工具块");
+                            {
+                                qo.LodBlockFile = res.HostFile;
+                                obs.Log(LogLevel.Info, Path.GetFileName(qp.QcPath) + " → 本次没有可写的 $lod，已移除上次生成的工具块" +
+                                        DescribeBlockFiles(res.WrittenFiles));
+                            }
                         }
                         catch (Exception ex) { obs.Log(LogLevel.Warn, "移除旧工具块失败：" + ex.Message); }
                     }
@@ -334,10 +375,10 @@ namespace LodStudio.Engine
                 }
                 catch { }
                 string block;
+                bool skipMain = options.SkipMainModel && options.SkipMainQcPaths != null &&
+                                options.SkipMainQcPaths.Any(x => PathsEqual(x, qp.QcPath));
                 try
                 {
-                    bool skipMain = options.SkipMainModel && options.SkipMainQcPaths != null &&
-                                    options.SkipMainQcPaths.Any(x => PathsEqual(x, qp.QcPath));
                     block = QcWriter.BuildLodBlock(qp.Info, plan.Plan, okDst, skipMain, options.NoFacial);
                 }
                 catch (Exception ex)
@@ -385,12 +426,14 @@ namespace LodStudio.Engine
                                 if (sepErr != null) { qo.Errors.Add(sepErr); break; }
                                 string includeLine = "$include \"" + Path.GetFileName(lodQc) + "\"";
                                 var body = QcWriter.WrapMarker(includeLine, plan.PresetName, plan.Plan, true);
-                                var res = QcWriter.Apply(qp.Info, body, options.Force, backup);
+                                // 独立 _LOD.qc 的 include 行属于根 QC，块必须写根 QC（不受"模型声明在 include"规则影响）
+                                var res = QcWriter.Apply(qp.Info, body, options.Force, backup, qp.QcPath);
                                 if (res.Success)
                                 {
                                     injected++;
                                     injectedPaths.Add(qp.QcPath);
                                     qo.Injected = true;
+                                    qo.LodBlockFile = qp.QcPath;
                                     obs.Log(LogLevel.Info, "  ✔ " + Path.GetFileName(qp.QcPath) + " → 生成 " + Path.GetFileName(lodQc) + "，原 QC 加一行 $include");
                                 }
                                 else
@@ -405,13 +448,48 @@ namespace LodStudio.Engine
                             {
                                 string hadSep = OldSeparateQcToDelete(qp.Info);
                                 var body = QcWriter.WrapMarker(block, plan.PresetName, plan.Plan, false);
-                                var res = QcWriter.Apply(qp.Info, body, options.Force, backup);
+                                // 模型声明在 include 文件里（如 main.qc）时，工具块写那个文件，根 QC 保持原样
+                                string host = QcWriter.ResolveHostFile(qp.Info, skipMain);
+                                var res = QcWriter.Apply(qp.Info, body, options.Force, backup, host);
                                 if (res.Success)
                                 {
                                     injected++;
                                     injectedPaths.Add(qp.QcPath);
                                     qo.Injected = true;
-                                    obs.Log(LogLevel.Info, "  ✔ " + Path.GetFileName(qp.QcPath) + " → 追加 " + plan.Plan.Count + " 级 $lod");
+                                    qo.LodBlockFile = res.HostFile;
+                                    string hostName = string.IsNullOrEmpty(res.HostFile) ? "" : Path.GetFileName(res.HostFile);
+                                    bool sharedHost = !PathsEqual(res.HostFile, qp.QcPath);
+                                    if (res.NoChange)
+                                    {
+                                        obs.Log(LogLevel.Info, "  ✔ " + Path.GetFileName(qp.QcPath) + " → $lod 已是最新（未改动）" +
+                                                (sharedHost ? "，块在 " + hostName : ""));
+                                    }
+                                    else if (sharedHost)
+                                    {
+                                        obs.Log(LogLevel.Info, "  ✔ " + Path.GetFileName(qp.QcPath) + " → " + plan.Plan.Count +
+                                                " 级 $lod 写入 " + hostName + "（共享 include，根 QC 未改动）");
+                                    }
+                                    else
+                                    {
+                                        obs.Log(LogLevel.Info, "  ✔ " + Path.GetFileName(qp.QcPath) + " → 追加 " + plan.Plan.Count + " 级 $lod");
+                                    }
+                                    // 多个 QC 共享同一 include 文件时，块内容必须一致；不一致只保留最后写入者，明确提示
+                                    if (sharedHost && !string.IsNullOrEmpty(res.HostFile))
+                                    {
+                                        string hostKey = FileUtil.Normalize(res.HostFile);
+                                        string prevBody;
+                                        if (sharedHostBlocks.TryGetValue(hostKey, out prevBody))
+                                        {
+                                            if (!string.Equals(prevBody, body, StringComparison.Ordinal))
+                                            {
+                                                string msg = "多个 QC 共享 " + hostName + "，但生成的 $lod 内容不同；该文件只保留最后一次写入，" +
+                                                             "请检查这些 QC 的模型列表是否一致（或改用独立 _LOD.qc 模式）";
+                                                outcome.Warnings.Add(msg);
+                                                obs.Log(LogLevel.Warn, msg);
+                                            }
+                                        }
+                                        else sharedHostBlocks[hostKey] = body;
+                                    }
                                     TryDeleteFile(hadSep);
                                 }
                                 else { qo.Errors.Add(res.Error ?? "写入失败"); }
@@ -532,6 +610,18 @@ namespace LodStudio.Engine
                 if (qo != null) qo.Errors.Add(message);
                 else outcome.Errors.Add(Path.GetFileName(qcPath ?? "") + "：" + message);
             }
+        }
+
+        /// <summary>把写入文件列表拼成"（main.qc、root.qc）"形式的简短说明；空列表返回空串。</summary>
+        private static string DescribeBlockFiles(List<string> files)
+        {
+            if (files == null || files.Count == 0) return "";
+            var names = new List<string>(files.Count);
+            foreach (string f in files)
+            {
+                try { names.Add(Path.GetFileName(f)); } catch { }
+            }
+            return names.Count == 0 ? "" : "（" + string.Join("、", names.ToArray()) + "）";
         }
 
         /// <summary>切换到"原 QC"模式时，如果上一次是独立 _LOD.qc 模式，返回要删除的旧文件（否则 null）。</summary>

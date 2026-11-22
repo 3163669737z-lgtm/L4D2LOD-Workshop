@@ -121,6 +121,7 @@ namespace LodStudio.Cli
                 sb.AppendLine("  L4D2LOD远景工坊.exe --version          打印版本");
                 sb.AppendLine();
                 sb.AppendLine("--batch 选项: --preset N | --levels N --dist 10,15,25 --ratio 99.7,65.3,34");
+                sb.AppendLine("              --backend blender|gltfpack（后者=无 Blender 模式）");
                 sb.AppendLine("              --mode 0|1|2 --workers N --force --compile --facial --skip-main --no-backup");
                 sb.AppendLine("              --report-dir 目录 --blender 路径 --nekomdl 路径 --min-triangles N");
                 sb.AppendLine();

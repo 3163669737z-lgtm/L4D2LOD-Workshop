@@ -350,7 +350,7 @@
                             <TextBlock Text="{x:Static local:AppInfo.ProductName}" FontSize="{StaticResource FS.Brand}" FontWeight="SemiBold"
                                        Foreground="{DynamicResource Brush.Ink}" VerticalAlignment="Center" />
                             <Border Background="{DynamicResource Brush.Sunken}" Padding="6,1,6,2" Margin="10,1,0,0" VerticalAlignment="Center">
-                                <TextBlock Text="v7.0" FontFamily="{StaticResource Font.Latin}" FontSize="{StaticResource FS.Micro}"
+                                <TextBlock Text="v0.2.0" FontFamily="{StaticResource Font.Latin}" FontSize="{StaticResource FS.Micro}"
                                            Foreground="{DynamicResource Brush.InkSoft}" />
                             </Border>
                         </StackPanel>

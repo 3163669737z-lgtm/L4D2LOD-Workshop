@@ -216,9 +216,13 @@ namespace LodStudio.Engine
 
         private static void WriteEngines(StringBuilder sb, AppSettings settings, string blenderVersion)
         {
+            bool gpMode = settings != null && settings.ReduceBackend == (int)ReduceBackend.Gltfpack;
+            sb.AppendLine("减面后端: " + (gpMode ? "内置 gltfpack（无需 Blender，实验）" : "Blender"));
+
             string blender = settings == null ? "" : (settings.BlenderPath ?? "");
             if (string.IsNullOrEmpty(blender))
-                sb.AppendLine("Blender: 未指定（请在设置里指到 blender.exe，或点「自动查找」）");
+                sb.AppendLine("Blender: 未指定" + (gpMode ? "（内置 gltfpack 后端无需 Blender；装了可作回退）"
+                                                       : "（请在设置里指到 blender.exe，或点「自动查找」）"));
             else
                 sb.AppendLine("Blender: " + blender + "  " +
                               (string.IsNullOrEmpty(blenderVersion) ? "(无法运行或未检测到版本)" : "(" + blenderVersion + ")"));

@@ -1079,6 +1079,169 @@ main()
 ";
 
         // ══════════════════════════════════════════════════════════════════
+        //  Body 原始 GLB 内缩（不经过 GlbModel 往返）
+        // ══════════════════════════════════════════════════════════════════
+
+        [SelfTest("模型：Body 内缩独占 mesh 原位写回（不新增 mesh/accessor/bufferView、无孤儿）")]
+        public static void GlbInnerShrinkPreservesData(SelfTestContext ctx)
+        {
+            byte[] plain = GlbJson.PackGlb(Encoding.UTF8.GetBytes(BuildInterleavedJson()), BuildInterleavedBin());
+            var untouched = GlbInnerShrink.Apply(plain, GlbInnerShrink.DefaultRatio, "plain.glb");
+            ctx.Assert(!untouched.Changed, "没有 Body 节点时不应修改 GLB");
+            ctx.AssertEqual(plain.Length, untouched.Data.Length, "无 Body 时字节长度不变");
+            for (int i = 0; i < plain.Length; i++) ctx.Assert(plain[i] == untouched.Data[i], "无 Body 时字节内容必须不变");
+
+            byte[] body = GlbJson.PackGlb(Encoding.UTF8.GetBytes(BuildInterleavedJson().Replace("MeshNode", "Body")),
+                                          BuildInterleavedBin());
+            var shrunk = GlbInnerShrink.Apply(body, GlbInnerShrink.DefaultRatio, "body.glb");
+            double expected = Math.Sqrt(2) * GlbInnerShrink.DefaultRatio;
+            ctx.Assert(shrunk.Changed, "Body 应发生内缩");
+            ctx.AssertEqual(1, shrunk.BodyMeshes, "Body mesh 数");
+            ctx.AssertEqual(3, shrunk.ModifiedVertices, "Body 顶点数");
+            ctx.AssertEqual(expected, shrunk.ShrinkDistance, 1e-10, "世界内缩距离");
+
+            var container = GlbJson.SplitGlb(shrunk.Data, "body_shrunk.glb");
+            var root = container.Root;
+            var meshes = GlbJson.Arr(root, "meshes");
+            ctx.AssertEqual(1, meshes.Count, "独占 Body mesh 应原位内缩，不新增 mesh（旧实现克隆后会留下孤儿 mesh）");
+            AssertNoOrphanMeshes(ctx, root);
+
+            var primitive = GlbJson.ObjOf(GlbJson.Arr(GlbJson.ObjOf(meshes[0]), "primitives")[0]);
+            var attributes = GlbJson.Obj(primitive, "attributes");
+            ctx.AssertEqual(0, GlbJson.Int(attributes, "POSITION", -1), "POSITION 仍引用原 accessor（原位写回）");
+            ctx.AssertEqual(1, GlbJson.Int(attributes, "NORMAL", -1), "NORMAL 原 accessor 不变");
+            ctx.AssertEqual(6, GlbJson.Arr(root, "accessors").Count, "原位内缩不应新增 accessor");
+            ctx.AssertEqual(6, GlbJson.Arr(root, "bufferViews").Count, "原位内缩不应新增 bufferView");
+            ctx.AssertEqual(152, (int)GlbJson.Dbl(GlbJson.ObjOf(GlbJson.Arr(root, "buffers")[0]), "byteLength", -1),
+                            "BIN 长度不变");
+
+            float[] positions = GlbJson.ReadFloats(root, container.Bin, 0, "body_shrunk.glb", 3, "POSITION");
+            float[] normals = GlbJson.ReadFloats(root, container.Bin, 1, "body_shrunk.glb", 3, "NORMAL");
+            for (int i = 0; i + 2 < positions.Length; i += 3)
+            {
+                ctx.AssertEqual(-expected, positions[i + 2], 1e-6,
+                                "顶点沿法线负方向内缩（交错 bufferView：byteOffset=4 / byteStride=16）");
+                ctx.AssertEqual(1.0, normals[i + 2], 1e-6, "法线保持不变");
+            }
+            ctx.AssertEqual(0.0, positions[0], 1e-6, "原位写回不影响 x 分量（v0.x）");
+            ctx.AssertEqual(1.0, positions[3], 1e-6, "原位写回不影响 x 分量（v1.x）");
+            ctx.AssertEqual(1.0, positions[7], 1e-6, "原位写回不影响 y 分量（v2.y）");
+
+            var positionAccessor = GlbJson.ObjOf(GlbJson.Arr(root, "accessors")[0]);
+            var min = GlbJson.Arr(positionAccessor, "min");
+            var max = GlbJson.Arr(positionAccessor, "max");
+            ctx.AssertEqual(-expected, (double)min[2], 1e-6, "POSITION min.z 已更新");
+            ctx.AssertEqual(-expected, (double)max[2], 1e-6, "POSITION max.z 已更新");
+        }
+
+        [SelfTest("模型：Body 内缩使用节点世界缩放")]
+        public static void GlbInnerShrinkWorldScale(SelfTestContext ctx)
+        {
+            string json = BuildInterleavedJson().Replace(
+                "\"name\":\"MeshNode\",\"mesh\":0,\"skin\":0",
+                "\"name\":\"Body\",\"mesh\":0,\"skin\":0,\"scale\":[2,3,4]");
+            byte[] body = GlbJson.PackGlb(Encoding.UTF8.GetBytes(json), BuildInterleavedBin());
+            var shrunk = GlbInnerShrink.Apply(body, GlbInnerShrink.DefaultRatio, "body_scale.glb");
+            double expectedDiagonal = Math.Sqrt(13);
+            double expectedLocal = expectedDiagonal * GlbInnerShrink.DefaultRatio / 3.0;
+            ctx.AssertEqual(expectedDiagonal, shrunk.WorldDiagonal, 1e-10, "非均匀缩放后的世界包围盒");
+            ctx.AssertEqual(expectedDiagonal * GlbInnerShrink.DefaultRatio, shrunk.ShrinkDistance, 1e-10, "世界内缩距离");
+
+            var container = GlbJson.SplitGlb(shrunk.Data, "body_scale.glb");
+            var root = container.Root;
+            var meshes = GlbJson.Arr(root, "meshes");
+            ctx.AssertEqual(1, meshes.Count, "非均匀缩放不改变结构，独占 mesh 仍原位内缩");
+            var primitive = GlbJson.ObjOf(GlbJson.Arr(GlbJson.ObjOf(meshes[0]), "primitives")[0]);
+            int position = GlbJson.Int(GlbJson.Obj(primitive, "attributes"), "POSITION", -1);
+            ctx.AssertEqual(0, position, "POSITION 仍是原 accessor（原位写回）");
+            float[] values = GlbJson.ReadFloats(root, container.Bin, position, "body_scale.glb", 3, "POSITION");
+            for (int i = 2; i < values.Length; i += 3)
+                ctx.AssertEqual(-expectedLocal, values[i], 1e-6, "世界距离除回平均节点缩放");
+        }
+
+        [SelfTest("模型：Body 内缩隔离共享 mesh/accessor")]
+        public static void GlbInnerShrinkSharedMesh(SelfTestContext ctx)
+        {
+            string json = BuildInterleavedJson()
+                .Replace("\"scenes\":[{\"nodes\":[1]}]", "\"scenes\":[{\"nodes\":[1,2]}]")
+                .Replace("{\"name\":\"root\"},{\"name\":\"MeshNode\",\"mesh\":0,\"skin\":0}",
+                         "{\"name\":\"root\"},{\"name\":\"Body\",\"mesh\":0,\"skin\":0},{\"name\":\"Plate\",\"mesh\":0}");
+            byte[] source = GlbJson.PackGlb(Encoding.UTF8.GetBytes(json), BuildInterleavedBin());
+            var shrunk = GlbInnerShrink.Apply(source, GlbInnerShrink.DefaultRatio, "shared_body.glb");
+            var container = GlbJson.SplitGlb(shrunk.Data, "shared_body.glb");
+            var root = container.Root;
+            var nodes = GlbJson.Arr(root, "nodes");
+            ctx.AssertEqual(3, nodes.Count, "共享节点数量不应被改写");
+            AssertNoOrphanMeshes(ctx, root);
+            ctx.AssertEqual(1, GlbJson.Int(GlbJson.ObjOf(nodes[1]), "mesh", -1), "Body 节点指向克隆 mesh");
+            ctx.AssertEqual(0, GlbJson.Int(GlbJson.ObjOf(nodes[2]), "mesh", -1), "非 Body 节点仍指向原 mesh");
+
+            var meshes = GlbJson.Arr(root, "meshes");
+            ctx.AssertEqual(2, meshes.Count, "共享 mesh 的 Body 实例应克隆出独立 mesh");
+            var plate = GlbJson.ObjOf(GlbJson.Arr(GlbJson.ObjOf(meshes[0]), "primitives")[0]);
+            var body = GlbJson.ObjOf(GlbJson.Arr(GlbJson.ObjOf(meshes[1]), "primitives")[0]);
+            int platePosition = GlbJson.Int(GlbJson.Obj(plate, "attributes"), "POSITION", -1);
+            int bodyPosition = GlbJson.Int(GlbJson.Obj(body, "attributes"), "POSITION", -1);
+            float[] plateValues = GlbJson.ReadFloats(root, container.Bin, platePosition, "plate", 3, "POSITION");
+            float[] bodyValues = GlbJson.ReadFloats(root, container.Bin, bodyPosition, "body", 3, "POSITION");
+            double expected = Math.Sqrt(2) * GlbInnerShrink.DefaultRatio;
+            for (int i = 2; i < plateValues.Length; i += 3)
+            {
+                ctx.AssertEqual(0.0, plateValues[i], 1e-6, "共享 POSITION 的非 Body 实例不得内缩");
+                ctx.AssertEqual(-expected, bodyValues[i], 1e-6, "Body 实例独立内缩");
+            }
+        }
+
+        [SelfTest("模型：Body 内缩多 Body 实例共享 mesh 只写一遍（原位、无孤儿 mesh）")]
+        public static void GlbInnerShrinkMultiBodyInstance(SelfTestContext ctx)
+        {
+            double expected = Math.Sqrt(2) * GlbInnerShrink.DefaultRatio;
+
+            // ① 两个 Body 节点共享同一 mesh、世界缩放相同：顶点只内缩一次（不是两次），结构不变。
+            string json = BuildInterleavedJson()
+                .Replace("\"scenes\":[{\"nodes\":[1]}]", "\"scenes\":[{\"nodes\":[1,2]}]")
+                .Replace("{\"name\":\"root\"},{\"name\":\"MeshNode\",\"mesh\":0,\"skin\":0}",
+                         "{\"name\":\"root\"},{\"name\":\"Body\",\"mesh\":0,\"skin\":0}," +
+                         "{\"name\":\"Body2\",\"mesh\":0,\"skin\":0}");
+            var shrunk = GlbInnerShrink.Apply(GlbJson.PackGlb(Encoding.UTF8.GetBytes(json), BuildInterleavedBin()),
+                                              GlbInnerShrink.DefaultRatio, "multi_body.glb");
+            ctx.Assert(shrunk.Changed, "多 Body 实例应发生内缩");
+            ctx.AssertEqual(2, shrunk.BodyMeshes, "两个 Body 引用都应计数");
+            ctx.AssertEqual(3, shrunk.ModifiedVertices, "共享 mesh 的顶点只算一遍");
+
+            var container = GlbJson.SplitGlb(shrunk.Data, "multi_body.glb");
+            var root = container.Root;
+            var meshes = GlbJson.Arr(root, "meshes");
+            ctx.AssertEqual(1, meshes.Count, "多 Body 实例共享 mesh 应原位内缩，不克隆");
+            AssertNoOrphanMeshes(ctx, root);
+            var nodes = GlbJson.Arr(root, "nodes");
+            ctx.AssertEqual(0, GlbJson.Int(GlbJson.ObjOf(nodes[1]), "mesh", -1), "Body 节点仍指向原 mesh");
+            ctx.AssertEqual(0, GlbJson.Int(GlbJson.ObjOf(nodes[2]), "mesh", -1), "Body2 节点仍指向原 mesh");
+            float[] positions = GlbJson.ReadFloats(root, container.Bin, 0, "multi_body.glb", 3, "POSITION");
+            for (int i = 2; i < positions.Length; i += 3)
+                ctx.AssertEqual(-expected, positions[i], 1e-6, "只缩一次；缩两遍会是 -2×内缩量");
+
+            // ② 两个 Body 实例缩放不同：本地内缩量不同，取最大值（保证每个实例都向内缩）。
+            string scaled = BuildInterleavedJson()
+                .Replace("\"scenes\":[{\"nodes\":[1]}]", "\"scenes\":[{\"nodes\":[1,2]}]")
+                .Replace("{\"name\":\"root\"},{\"name\":\"MeshNode\",\"mesh\":0,\"skin\":0}",
+                         "{\"name\":\"root\"},{\"name\":\"Body\",\"mesh\":0,\"skin\":0,\"scale\":[2,3,4]}," +
+                         "{\"name\":\"Body2\",\"mesh\":0,\"skin\":0}");
+            var scaledShrunk = GlbInnerShrink.Apply(GlbJson.PackGlb(Encoding.UTF8.GetBytes(scaled), BuildInterleavedBin()),
+                                                    GlbInnerShrink.DefaultRatio, "multi_body_scale.glb");
+            ctx.AssertEqual(2, scaledShrunk.BodyMeshes, "缩放不同的两个 Body 引用都应计数");
+            // 世界对角线取最大（√13，来自 scale=[2,3,4] 的实例）；本地量 = √13×比例 ÷ 平均缩放，
+            // 两实例分别求得 √13×比例/3 与 √13×比例/1，取最大值 √13×比例。
+            double expectedScaled = Math.Sqrt(13) * GlbInnerShrink.DefaultRatio;
+            var scaledContainer = GlbJson.SplitGlb(scaledShrunk.Data, "multi_body_scale.glb");
+            AssertNoOrphanMeshes(ctx, scaledContainer.Root);
+            float[] scaledPositions = GlbJson.ReadFloats(scaledContainer.Root, scaledContainer.Bin, 0,
+                                                         "multi_body_scale.glb", 3, "POSITION");
+            for (int i = 2; i < scaledPositions.Length; i += 3)
+                ctx.AssertEqual(-expectedScaled, scaledPositions[i], 1e-6, "多个 Body 实例取最大本地内缩量，只写一遍");
+        }
+
+        // ══════════════════════════════════════════════════════════════════
         //  测试模型构造
         // ══════════════════════════════════════════════════════════════════
 
@@ -1182,6 +1345,24 @@ main()
         }
 
         // ── 交错 / normalized 的合成 GLB（验证 byteStride / byteOffset / normalized） ──
+
+        /// <summary>回归防护：内缩后不允许出现任何「没有被节点引用」的 mesh（旧实现克隆后会留下孤儿）。</summary>
+        private static void AssertNoOrphanMeshes(SelfTestContext ctx, Dictionary<string, object> root)
+        {
+            var meshes = GlbJson.Arr(root, "meshes");
+            var nodes = GlbJson.Arr(root, "nodes");
+            var referenced = new bool[meshes == null ? 0 : meshes.Count];
+            if (nodes != null)
+            {
+                foreach (object item in nodes)
+                {
+                    int mesh = GlbJson.Int(GlbJson.ObjOf(item), "mesh", -1);
+                    if (mesh >= 0 && mesh < referenced.Length) referenced[mesh] = true;
+                }
+            }
+            for (int i = 0; i < referenced.Length; i++)
+                ctx.Assert(referenced[i], "内缩后不得留下孤儿 mesh（mesh[" + i + "] 无任何节点引用）");
+        }
 
         private static byte[] BuildInterleavedBin()
         {

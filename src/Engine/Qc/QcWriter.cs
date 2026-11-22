@@ -15,21 +15,27 @@ namespace LodStudio.Engine
         public int DisabledForeignLodBlocks;
         /// <summary>内容没有变化（幂等重跑时为 true，不算失败）</summary>
         public bool NoChange;
+        /// <summary>本次 $lod 工具块写入（或已存在）的文件；通常等于根 QC，模型声明在 include 文件时是那个 include 文件。</summary>
+        public string HostFile;
     }
 
     /// <summary>
     /// QC 写入：幂等注入/移除工具块、Force 停用旧 $lod、备份、原子写与失败回滚。
     /// 实现负责人：QC 模块。契约不可变。
     ///
+    /// **工具块位置（宿主文件）**：真实工程常把 $model/$bodygroup 写在被 $include 的子文件（如 main.qc）里，
+    /// 根 QC 只做 include。此时 $lod 工具块必须写在**声明这些模型的文件**里，根 QC 保持原样，
+    /// 否则编译展开后会出现两套 $lod（studiomdl 会把 LOD 级数叠加，例如 4 级变 7 级）。
+    /// 宿主判定见 <see cref="ResolveHostFile"/>：优先模型声明文件唯一 → 已有工具块文件唯一 → 根 QC。
+    ///
     /// 安全硬约束（顺序不可变，任何一步失败都不改文件）：
-    ///   1) force 时注释 include 文件里的手写 $lod/$shadowlod；
-    ///   2) force 时注释根 QC 自己的手写 $lod/$shadowlod；
-    ///   3) 擦掉旧工具块（缺结束标记 → 拒绝修改）；
-    ///   4) 末尾追加新工具块（与前文之间空一行）；
-    ///   5) 内容没变 → 不写盘、不备份（幂等）；
-    ///   6) 先把所有待写文件备份成功，再动第一个文件；
-    ///   7) 逐个原子写；任何一个失败 → 把已写的恢复成读入时内容；
-    ///   8) 汇总停用块数与写入列表。
+    ///   1) force 时注释 include 文件与根 QC 里的手写 $lod/$shadowlod；
+    ///   2) 擦掉各文件里的旧工具块（缺结束标记 → 拒绝修改）；
+    ///   3) 在宿主文件末尾追加新工具块（与前文之间空一行）；
+    ///   4) 内容没变 → 不写盘、不备份（幂等）；
+    ///   5) 先把所有待写文件备份成功，再动第一个文件；
+    ///   6) 逐个原子写；任何一个失败 → 把已写的恢复成读入时内容；
+    ///   7) 汇总停用块数与写入列表。
     /// </summary>
     public static class QcWriter
     {
@@ -48,23 +54,68 @@ namespace LodStudio.Engine
 
         /// <summary>
         /// 修改一个根 QC（force 时也含带手写 $lod 的 include 文件）：
+        ///  - 工具块写入「宿主文件」：模型声明文件唯一时写那个 include 文件（根 QC 不动），否则写根 QC；
+        ///  - 其它文件（含根 QC）里残留的旧工具块会被清理，保证展开后只有一套 $lod；
         ///  - force=true：工具块之外的 $lod/$shadowlod 整块注释停用；
-        ///  - 擦掉旧工具块（缺结束标记 → 不改并返回错误）；
-        ///  - toolBody 非空 → 末尾追加"空行+开始标记+body+结束标记"，为空 → 只移除旧块；
+        ///  - toolBody 非空 → 宿主文件末尾追加"空行+开始标记+body+结束标记"，为空 → 只移除所有旧块；
         ///  - 每个要改的文件先备份（备份失败 → 整个 QC 不改）；
         ///  - 写失败时把已写文件恢复成原内容；内容没变不写盘（NoChange=true）。
+        /// hostFile 为空时按 <see cref="ResolveHostFile"/> 自动判定；独立 _LOD.qc 模式由调用方传根 QC。
         /// 不抛异常：所有失败都写在 QcWriteResult.Error（可直接展示给用户）。
         /// </summary>
         public static QcWriteResult Apply(QcInfo info, string toolBody, bool force, QcBackupRequest backup)
         {
+            return Apply(info, toolBody, force, backup, null);
+        }
+
+        /// <summary>同上；hostFile 非空时强制把工具块写在该文件（独立 _LOD.qc 模式传根 QC）。</summary>
+        public static QcWriteResult Apply(QcInfo info, string toolBody, bool force, QcBackupRequest backup,
+                                          string hostFile)
+        {
             var result = new QcWriteResult();
-            try { ApplyCore(info, toolBody, force, backup, result); }
+            try { ApplyCore(info, toolBody, force, backup, hostFile, result); }
             catch (Exception ex)
             {
                 result.Success = false;
                 result.Error = "修改 QC 失败: " + ex.Message;
             }
             return result;
+        }
+
+        /// <summary>
+        /// 判定 $lod 工具块该写在哪个文件：
+        ///   1) 可参与块生成的模型条目只在一个文件里声明（真实工程常见：根 QC 只 include，main.qc 写 $bodygroup）
+        ///      → 就写那个文件；
+        ///   2) 已有工具块的文件唯一 → 沿用旧位置（接管旧工程，避免搬家）；
+        ///   3) 其它情况（模型分散在多个文件 / 多个旧块）→ 根 QC（兜底，与旧行为一致）。
+        /// skipMainModel=true 时主模型条目不参与判定（与 BuildLodBlock 的过滤保持一致）。
+        /// </summary>
+        public static string ResolveHostFile(QcInfo info, bool skipMainModel)
+        {
+            string root = "";
+            try { root = Path.GetFullPath(info == null ? "" : (info.QcPath ?? "")); } catch { root = info == null ? "" : (info.QcPath ?? ""); }
+            if (info == null) return root;
+
+            var declared = new List<string>();
+            if (info.Studios != null)
+            {
+                foreach (StudioRef s in info.Studios)
+                {
+                    if (s == null || string.IsNullOrEmpty(s.DeclaredInQc)) continue;
+                    if (skipMainModel && s.IsMainModel) continue;
+                    if (QcPathResolver.IneligibleReason(s) != null) continue;   // 不会进 $lod 块
+                    string f;
+                    try { f = Path.GetFullPath(s.DeclaredInQc); } catch { continue; }
+                    if (!ContainsPath(declared, f)) declared.Add(f);
+                }
+            }
+            if (declared.Count == 1) return declared[0];
+
+            if (info.ToolMarkerFiles != null && info.ToolMarkerFiles.Count == 1)
+            {
+                try { return Path.GetFullPath(info.ToolMarkerFiles[0]); } catch { }
+            }
+            return root;
         }
 
         /// <summary>
@@ -278,7 +329,7 @@ namespace LodStudio.Engine
         // ───────────────────────────── 私有实现 ─────────────────────────────
 
         private static void ApplyCore(QcInfo info, string toolBody, bool force, QcBackupRequest backup,
-                                      QcWriteResult result)
+                                      string hostFile, QcWriteResult result)
         {
             if (info == null) { Fail(result, "QC 信息为空，无法修改。"); return; }
             if (info.ReadFailed) { Fail(result, "读取 QC 失败，未做任何修改。"); return; }
@@ -293,93 +344,79 @@ namespace LodStudio.Engine
             catch (Exception ex) { Fail(result, "QC 路径无效: " + ex.Message); return; }
             if (!File.Exists(root)) { Fail(result, "QC 文件不存在: " + root); return; }
 
-            var writes = new List<PendingWrite>();
-
-            // 1) force：先处理 include 文件里的手写 $lod（可能落在被 include 的子文件里）
-            if (force)
+            // 1) 宿主文件：$lod 工具块写这里。模型声明文件唯一时是那个 include 文件（真实工程 main.qc 布局），
+            //    根 QC 只 include、不会被改动；其它情况写根 QC（与旧行为一致）。
+            string host;
+            if (!string.IsNullOrEmpty(hostFile))
             {
-                foreach (string f in info.ForeignLodFiles)
-                {
-                    string other;
-                    try { other = Path.GetFullPath(f ?? ""); } catch { continue; }
-                    if (string.Equals(other, root, StringComparison.OrdinalIgnoreCase)) continue;
-
-                    QcTextFile includeFile;
-                    try { includeFile = QcTextFile.Read(other); }
-                    catch (Exception ex)
-                    {
-                        Fail(result, "读取 include 文件 " + Path.GetFileName(other) + " 失败，未做任何修改: " + ex.Message);
-                        return;
-                    }
-
-                    int count;
-                    string commented = QcLexer.CommentOutForeignLod(includeFile.Text, out count);
-                    if (count < 0)
-                    {
-                        Fail(result, BrokenBlockMessage + "（" + Path.GetFileName(other) + "）");
-                        return;
-                    }
-                    if (count > 0 && !string.Equals(commented, includeFile.Text, StringComparison.Ordinal))
-                        writes.Add(new PendingWrite { File = includeFile, NewText = commented, Disabled = count });
-                }
-            }
-
-            // 2) 根 QC
-            QcTextFile rootFile;
-            try { rootFile = QcTextFile.Read(root); }
-            catch (Exception ex) { Fail(result, "读取 QC 失败，未做任何修改: " + ex.Message); return; }
-
-            string text = rootFile.Text;
-            int rootDisabled = 0;
-            if (force)
-            {
-                text = QcLexer.CommentOutForeignLod(text, out rootDisabled);
-                if (rootDisabled < 0) { Fail(result, BrokenBlockMessage); return; }
-            }
-
-            // 3) 擦掉旧工具块（缺结束标记 → 文件一个字节都不动）
-            string nl = rootFile.NewLine == "\r\n" ? "\r\n" : "\n";
-            string cleaned = text;
-            if (text.IndexOf(QcLexer.MarkerBegin, StringComparison.Ordinal) >= 0)
-            {
-                string withoutBlock;
-                if (!QcLexer.TryRemoveToolBlock(text, out withoutBlock))
-                {
-                    Fail(result, BrokenBlockMessage);
-                    return;
-                }
-                // TryRemoveToolBlock 现在保留原文的原始换行（含混合换行）；这里原样使用，绝不全文归一化
-                cleaned = withoutBlock;
-            }
-
-            // 4) 拼接：原文（去掉尾部空行）+ 空行 + 开始标记 + 头部注释/body + 结束标记
-            string finalText;
-            if (!string.IsNullOrEmpty(toolBody))
-            {
-                var sb = new StringBuilder(cleaned.Length + toolBody.Length + 256);
-                sb.Append(cleaned.TrimEnd('\r', '\n'));
-                sb.Append(nl).Append(nl);
-                sb.Append(QcLexer.MarkerBegin).Append(nl);
-
-                string body = toolBody.Replace("\r\n", "\n").Replace("\n", nl);
-                // 块内容必须以换行结束，否则结束标记会粘在最后一行指令后面
-                if (!body.EndsWith("\n", StringComparison.Ordinal)) body += nl;
-                sb.Append(body);
-                sb.Append(QcLexer.MarkerEnd).Append(nl);
-                finalText = sb.ToString();
+                try { host = Path.GetFullPath(hostFile); } catch { host = root; }
             }
             else
             {
-                // toolBody=null：只移除工具块，恢复成"原文末尾单个换行"
-                finalText = string.Equals(cleaned, text, StringComparison.Ordinal)
-                    ? text
-                    : cleaned.TrimEnd('\r', '\n') + nl;
+                host = ResolveHostFile(info, false);
+            }
+            if (string.IsNullOrEmpty(host)) host = root;
+            result.HostFile = host;
+
+            // 2) 候选文件：宿主 + 各含标记块的文件 + force 时的各手写 $lod 文件 + 根 QC（根固定最后写）
+            var candidates = new List<string>();
+            AddCandidateFile(candidates, host);
+            if (info.ToolMarkerFiles != null)
+                foreach (string f in info.ToolMarkerFiles) AddCandidateFile(candidates, f);
+            if (force && info.ForeignLodFiles != null)
+                foreach (string f in info.ForeignLodFiles) AddCandidateFile(candidates, f);
+            // 根 QC 固定最后写（与旧实现"include 先写、根最后写"的顺序一致）
+            candidates.RemoveAll(delegate (string f) { return PathsEqual(f, root); });
+            candidates.Add(root);
+
+            // 3) 逐文件算出最终文本：force 注释手写 $lod → 擦旧工具块 → 宿主追加新块；有变化才排队写
+            var writes = new List<PendingWrite>();
+            foreach (string file in candidates)
+            {
+                bool isHost = PathsEqual(file, host);
+                QcTextFile textFile;
+                try { textFile = QcTextFile.Read(file); }
+                catch (Exception ex)
+                {
+                    Fail(result, "读取 QC 文件 " + Path.GetFileName(file) + " 失败，未做任何修改: " + ex.Message);
+                    return;
+                }
+
+                string text = textFile.Text;
+                int disabled = 0;
+                if (force)
+                {
+                    // 手写 $lod 可能落在根 QC，也可能落在 include 文件里
+                    text = QcLexer.CommentOutForeignLod(text, out disabled);
+                    if (disabled < 0) { Fail(result, BrokenBlockMessage + "（" + Path.GetFileName(file) + "）"); return; }
+                }
+
+                // 旧工具块可能在根 QC，也可能在 include 文件里（旧版工具的布局）：全部擦掉，保证展开后只有一套
+                bool removedBlock = false;
+                if (text.IndexOf(QcLexer.MarkerBegin, StringComparison.Ordinal) >= 0)
+                {
+                    string withoutBlock;
+                    if (!QcLexer.TryRemoveToolBlock(text, out withoutBlock))
+                    {
+                        Fail(result, BrokenBlockMessage + "（" + Path.GetFileName(file) + "）");
+                        return;
+                    }
+                    // TryRemoveToolBlock 保留原文原始换行（含混合换行）；这里原样使用，绝不全文归一化
+                    text = withoutBlock;
+                    removedBlock = true;
+                }
+
+                string nl = textFile.NewLine == "\r\n" ? "\r\n" : "\n";
+                if (removedBlock)
+                    text = text.TrimEnd('\r', '\n') + nl;   // 与旧实现一致：移除块后恢复"原文末尾单个换行"
+                if (isHost && !string.IsNullOrEmpty(toolBody))
+                    text = AppendToolBlock(text, toolBody, nl);
+
+                if (!string.Equals(text, textFile.Text, StringComparison.Ordinal))
+                    writes.Add(new PendingWrite { File = textFile, NewText = text, Disabled = disabled });
             }
 
-            if (!string.Equals(finalText, rootFile.Text, StringComparison.Ordinal))
-                writes.Add(new PendingWrite { File = rootFile, NewText = finalText, Disabled = rootDisabled });
-
-            // 5) 内容没变 → 不写盘、不备份（幂等重跑）
+            // 4) 内容没变 → 不写盘、不备份（幂等重跑）
             if (writes.Count == 0)
             {
                 result.Success = true;
@@ -387,7 +424,7 @@ namespace LodStudio.Engine
                 return;
             }
 
-            // 6) 预检查：只读文件一律拒绝（在备份之前检查，避免留下无用的 .lodbak）
+            // 5) 预检查：只读文件一律拒绝（在备份之前检查，避免留下无用的 .lodbak）
             foreach (var pending0 in writes)
             {
                 try
@@ -406,7 +443,7 @@ namespace LodStudio.Engine
                 catch { }
             }
 
-            // 6b) 先把所有要改的文件备份成功，再动第一个文件（任何一个失败 → 一个都不改）
+            // 5b) 先把所有要改的文件备份成功，再动第一个文件（任何一个失败 → 一个都不改）
             bool backupEnabled = backup == null || backup.Enabled;
             if (backupEnabled)
             {
@@ -422,7 +459,7 @@ namespace LodStudio.Engine
                 }
             }
 
-            // 7) 写入（include 文件在前、根 QC 最后）；失败时把已写的恢复成读入时内容
+            // 6) 写入（include/声明文件在前、根 QC 最后）；失败时把已写的恢复成读入时内容
             foreach (PendingWrite w in writes)
             {
                 try
@@ -442,7 +479,7 @@ namespace LodStudio.Engine
                 }
             }
 
-            // 8) 成功：汇总
+            // 7) 成功：汇总
             int disabledTotal = 0;
             foreach (PendingWrite w in writes)
             {
@@ -451,6 +488,43 @@ namespace LodStudio.Engine
             }
             result.DisabledForeignLodBlocks = disabledTotal;
             result.Success = true;
+        }
+
+        private static string AppendToolBlock(string cleaned, string toolBody, string nl)
+        {
+            var sb = new StringBuilder(cleaned.Length + toolBody.Length + 256);
+            sb.Append(cleaned.TrimEnd('\r', '\n'));
+            sb.Append(nl).Append(nl);
+            sb.Append(QcLexer.MarkerBegin).Append(nl);
+
+            string body = toolBody.Replace("\r\n", "\n").Replace("\n", nl);
+            // 块内容必须以换行结束，否则结束标记会粘在最后一行指令后面
+            if (!body.EndsWith("\n", StringComparison.Ordinal)) body += nl;
+            sb.Append(body);
+            sb.Append(QcLexer.MarkerEnd).Append(nl);
+            return sb.ToString();
+        }
+
+        private static void AddCandidateFile(List<string> list, string path)
+        {
+            if (string.IsNullOrEmpty(path)) return;
+            string full;
+            try { full = Path.GetFullPath(path); } catch { return; }
+            if (ContainsPath(list, full)) return;
+            list.Add(full);
+        }
+
+        private static bool ContainsPath(List<string> list, string path)
+        {
+            if (list == null || string.IsNullOrEmpty(path)) return false;
+            foreach (string x in list) if (PathsEqual(x, path)) return true;
+            return false;
+        }
+
+        private static bool PathsEqual(string a, string b)
+        {
+            if (string.IsNullOrEmpty(a) || string.IsNullOrEmpty(b)) return false;
+            return string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
         }
 
         private static HashSet<string> NormalizeGenerated(HashSet<string> files)

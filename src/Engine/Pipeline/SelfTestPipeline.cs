@@ -679,7 +679,7 @@ namespace LodStudio.Engine
             ctx.AssertContains(text, "全局错误样例", "报告包含全局错误");
             ctx.AssertContains(text, "提示样例", "报告包含提示");
             ctx.AssertContains(text, "LOD2  面数 300 → 90", "报告包含试编译摘要");
-            ctx.AssertContains(text, "v7.0.0", "报告结尾含工具版本");
+            ctx.AssertContains(text, "v" + AppInfo.Version, "报告结尾含工具版本");
 
             string logPath = ReportWriter.WriteLogFile(rctx, Path.Combine(dir, "报告目录"), "运行日志");
             ctx.Assert(!string.IsNullOrEmpty(logPath), "日志应写入成功");

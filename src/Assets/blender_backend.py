@@ -27,8 +27,13 @@ stdout 协议（逐行、UTF-8、每行 flush，C# 实时解析）：
 结果旁路文件 <task.json>.jsonl：每完成一个任务追加一行同样的 JSON 并 flush+fsync，
 进程崩溃/被杀导致 stdout 丢行时 C# 用它补齐（同一任务只登记一次，不会重复）。
 
-算法要点（与旧版一致，但按新结构重写）：
-  1) 每个任务先 read_factory_settings(use_empty=True)，再导入 glTF（merge_vertices=True，TypeError 退化）；
+算法要点：
+  0) 优先路径（7.0.2+）：若环境变量 L4D2LOD_GLTFPACK 指向内置 gltfpack，先用
+     `gltfpack -si <形状优先比例> -se <按LOD的误差上限> -slb -noq -kn -km` 对源 GLB 做拓扑感知减面，
+     再把结果导入 Blender；只折叠原网格已有的边、不按空间位置焊接顶点，左右袜筒等互不连通部件不会
+     被桥接。7.0.3 起 `-si` 按源面数自适应：高面数部件按目标减，低面数部件自动少减；`-se` 卡住形状，
+     面数达不到目标也可以接受。gltfpack 不可用/失败时才回退旧路径，并打印 WARN 说明原因。
+  1) 旧路径：每个任务先 read_factory_settings(use_empty=True)，再导入 glTF（merge_vertices=True，TypeError 退化）；
   2) 清理：多用户网格 copy → shape_key_clear() → 按包围盒 1e-6 焊接重合点（bmesh remove_doubles）
      → 清自定义法线并按 60° 平滑（4.0 用 use_auto_smooth+angle，4.1+ 用 shade_smooth_by_angle）；
   3) 质量模式按连通块分配面数预算（每块保底 minFaces，保底总额不超过预算的 guardPct%，超出从大块扣），
@@ -45,6 +50,11 @@ import os
 import json
 import math
 import time
+import re
+import struct
+import uuid
+import tempfile
+import subprocess
 import traceback
 
 # ───────────────────────────────── 控制台编码 ─────────────────────────────────
@@ -57,9 +67,33 @@ for _s in (sys.stdout, sys.stderr):
 
 # ───────────────────────────────── 常量 ─────────────────────────────────
 DEFAULT_MIN_FACES = 12      # 每个连通块保底面数
-DEFAULT_GUARD_PCT = 35.0    # 保底面数最多占用总预算的百分比
+DEFAULT_GUARD_PCT = 35.0    # 保底/保形面数最多超出总预算的百分比
 WARN_OVER = 1.5             # 实际面数超过目标 50% 以上时告警
 AUTO_SMOOTH_DEG = 60.0      # 清自定义法线后的平滑角度
+
+SMALL_PART_PCT = 0.05       # 面数 <= 全对象 5% 的连通块视为「小部件」
+SMALL_PART_KEEP = 0.40      # 小部件至少保留 40% 的面（避免 60 面蕾丝 ×16% = 10 面塌成平板）
+LOCK_BOUNDARY = True        # 质量模式下硬锁开放边界顶点（蕾丝/飘带/口袋沿不再塌成刀片）
+LOCK_CONCAVE_DEG = 40.0     # 主部件上硬锁凹折痕（保住手指缝、衣褶，避免糊成一片）
+LOCK_CONCAVE_DOMINANT = 0.5 # 只对 >= 全对象 50% 面的主部件启用凹折痕保护（避免发片/装饰过保）
+LOCK_MAX_PROTECT_FRAC = 0.35  # 被锁顶点超过该比例就放弃硬锁（发片/蕾丝几乎全是边界，全锁会减不动）
+LOCK_OVER_TOL = 1.30        # 硬锁后实际面数超过目标该倍数，就退回无锁版重算，保证 LOD 比例不失控
+
+# ── 7.0.2：内置 gltfpack（meshoptimizer，MIT）拓扑感知减面 ──
+GLTFPACK_ENV = 'L4D2LOD_GLTFPACK'
+GLTFPACK_TIMEOUT = 1800     # 单任务上限 30 分钟；正常模型远小于这个值
+GLTFPACK_SE = '0.01'        # 默认误差上限：结果偏差约 <=1% 包围盒（实测 65% 目标下约 0.5%）
+GLTFPACK_TAGS = ['-slb', '-noq', '-kn', '-km', '-kv']  # 锁边界 / 关量化 / 保留节点名、材质名与 UV 等顶点属性
+
+# ── 7.0.3：形状优先（shape-first）──
+# 不再死磕 LOD 目标比例：面数多的部件按目标减，面数少的部件自动少减；
+# 同时用 gltfpack 的 -se 误差上限卡住形状，面数达不到目标也可以接受。
+SHAPE_FIRST = True
+SHAPE_REF_FACES = 4000.0    # >= 4000 面的部件按原目标比例减；低于此值按 sqrt 曲线减轻
+SHAPE_MIN_WEIGHT = 0.15     # 最小减面权重，避免几十面的小件完全不减
+SHAPE_ERROR_FINE = '0.01'    # LOD1/2：误差 <= 约 1% 包围盒
+SHAPE_ERROR_MID = '0.015'    # LOD3：略放宽
+SHAPE_ERROR_COARSE = '0.02'  # LOD4：远景级，误差 <= 约 2% 包围盒
 
 # 仅供自动化测试：源路径包含该子串时模拟 Blender 原生崩溃（os.abort()），
 # 用于验证 C# 侧「单任务崩溃只失败它自己，剩余任务换新进程续跑」。
@@ -205,11 +239,16 @@ def make_active(obj):
 
 
 def weld_by_position(obj):
-    """按位置焊接重合顶点，返回焊接掉的顶点数。
+    """按「位置 + 蒙皮权重签名」焊接重合顶点，返回焊接掉的顶点数。
 
-    glTF 导入的 merge_vertices 只合并「位置+法线」都相同的点，平直着色/硬边处仍是断开的
-   （实测 flat icosphere 11120 面 = 33360 点 = 11120 个假连通块），这些假块会让按块分配失效，
-    Decimate 还会沿断开处撕出裂缝。UV/法线是 loop 数据，焊接后仍保留，导出时按需自动拆分。
+    旧实现是无差别 remove_doubles：只要坐标重合就焊，会把两个本来独立的部件在接缝处
+    焊成一块（LOD 时一起被折叠，看起来“粘”在一起），并丢掉其中一侧的骨骼权重。
+    现在只有位置相同 **且** 顶点组/权重完全一致的顶点才合并：
+    - 同一张连续曲面在 UV 接缝/硬边处被拆开的点，权重一致 → 正常焊回，不撕裂缝；
+    - 独立部件即便坐标恰好重合，只要骨骼权重不同 → 不焊，保留部件边界与权重。
+    UV/法线是 loop 数据，焊接后仍保留，导出时按需自动拆分。
+
+    平直着色模型（每个三角面法线不同）仍能靠权重一致焊回，假连通块问题不受影响。
     """
     me = obj.data
     n = len(me.vertices)
@@ -227,11 +266,39 @@ def weld_by_position(obj):
                     mx[k] = c[k]
         diag = math.sqrt(sum((mx[k] - mn[k]) ** 2 for k in range(3)))
         dist = max(diag * 1e-6, 1e-8)
+
+        # 顶点签名：顶点组索引 + 权重（排序后比较，避免顺序差异）
+        sig_cache = []
+        for v in me.vertices:
+            sig_cache.append(tuple(sorted(
+                (g.group, round(float(g.weight), 4)) for g in v.groups)))
+
+        decimals = 5
+        clusters = {}
+        for i, v in enumerate(me.vertices):
+            key = (round(v.co.x, decimals), round(v.co.y, decimals),
+                   round(v.co.z, decimals), sig_cache[i])
+            clusters.setdefault(key, []).append(i)
+
+        merged = [(c, c[0]) for c in clusters.values() if len(c) > 1]
+        if not merged:
+            return 0
+
         bm = bmesh.new()
         try:
             bm.from_mesh(me)
+            bm.verts.ensure_lookup_table()
+            targetmap = {}
+            for cluster, keep in merged:
+                for vi in cluster:
+                    if vi != keep:
+                        targetmap[bm.verts[vi]] = bm.verts[keep]
             before = len(bm.verts)
-            bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=dist)
+            try:
+                bmesh.ops.weld_verts(bm, targetmap=targetmap)
+            except Exception:
+                warn("weld_verts 不可用，退化为全局 remove_doubles（%s）" % obj.name)
+                bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=dist)
             after = len(bm.verts)
             if after != before:
                 bm.to_mesh(me)
@@ -384,50 +451,63 @@ def analyze_blocks(obj):
 
 
 def allocate(sizes, ratio, min_faces, guard_pct):
-    """按连通块分配目标面数。
+    """按连通块分配目标面数（保形优先）。
 
-    全局比例会把小连通块压成平板（60 面的蕾丝 × 16% = 10 面 → 塌成平面，多层糊在一起）。
-    改为：每块先按比例，再保底 min_faces；保底总开销不超过预算的 guard_pct%，超出按比例削减；
-    若总目标仍超预算，从「可扣的大块」逐个扣 1，直到不超（不扣到保底线以下）。
+    全局比例会把小连通块压成平板：60 面的蕾丝 ×16% = 10 面、202 面的口袋 = 33 面，
+    减完就成了插进衣服里的薄片（视觉上“粘”在主体上）。旧实现只保底 12 面，救不回来。
+
+    分配规则：
+    1) 每块先按比例得 base；
+    2) 小块（<= 全对象 SMALL_PART_PCT）再按 SMALL_PART_KEEP 保形；
+    3) 保底 + 保形多出来的面最多超出预算 guard_pct%（默认 35%），超出时按比例削“保形”部分；
+    4) 仍超时只从大块扣，且不低于其比例目标的 60%（也不再低于 min_faces），绝不拿大块硬填。
     """
     total = sum(sizes)
     budget = max(1, int(round(total * ratio)))
     n = len(sizes)
+    small_limit = total * SMALL_PART_PCT
 
     base = []
+    hard = []
+    soft = []
     for s in sizes:
-        w = int(round(s * ratio))
-        base.append(max(1, min(w, s)))
+        b = max(1, min(int(round(s * ratio)), s))
+        base.append(b)
+        # 硬保底：至少 min_faces（块本身更小则保持原样）
+        h = (s - b) if s <= min_faces else max(0, min_faces - b)
+        hard.append(h)
+        # 软保形：小部件至少保留 SMALL_PART_KEEP
+        if s <= small_limit:
+            keep = min(s, int(round(s * SMALL_PART_KEEP)))
+            soft.append(max(0, keep - (b + h)))
+        else:
+            soft.append(0)
 
-    deficits = []
-    for i, s in enumerate(sizes):
-        target = base[i]
-        if s >= min_faces and base[i] < min_faces:
-            target = min_faces
-        if target > s:
-            target = s
-        deficits.append(target - base[i])
+    targets = [base[i] + hard[i] + soft[i] for i in range(n)]
 
-    total_deficit = sum(d for d in deficits if d > 0)
-    guard = int(budget * guard_pct / 100.0)
-
-    if total_deficit > guard and total_deficit > 0:
-        scale = guard / float(total_deficit)
-        for i in range(n):
-            if deficits[i] > 0:
-                deficits[i] = int(deficits[i] * scale)
-
-    targets = [base[i] + deficits[i] for i in range(n)]
-
-    over = sum(targets) - budget
+    cap = budget + int(round(budget * guard_pct / 100.0))
+    over = sum(targets) - cap
     if over > 0:
+        total_soft = sum(soft)
+        if total_soft > 0:
+            f = max(0.0, 1.0 - over / float(total_soft))
+            for i in range(n):
+                targets[i] = base[i] + hard[i] + int(soft[i] * f)
+            over = sum(targets) - cap
+
+    if over > 0:
+        floors = []
+        for i, s in enumerate(sizes):
+            if s > small_limit:
+                floors.append(max(min(min_faces, s), int(round(base[i] * 0.6))))
+            else:
+                floors.append(targets[i])
         loop = 0
         while over > 0 and loop < 200000:
             loop += 1
             deducted = False
             for i in range(n):
-                floor_i = min(min_faces, sizes[i])
-                if targets[i] > floor_i and sizes[i] > min_faces:
+                if targets[i] > floors[i]:
                     targets[i] -= 1
                     over -= 1
                     deducted = True
@@ -441,9 +521,67 @@ def allocate(sizes, ratio, min_faces, guard_pct):
     return targets
 
 
+def build_protect_group(obj, boundary, concave_deg):
+    """把「开放边界顶点 + 凹折痕顶点」写进临时顶点组，供 Decimate 硬保护。
+
+    边界 = 只被 1 个面使用的边；凹折痕 = 二面角为负且角度超过 concave_deg 的边。
+    Decimate 的顶点组 + invert=True 语义实测为「组内 weight=1 的顶点不参与折叠」。
+    返回 (组名, 是否新建, 被锁顶点占比)；没有可保护顶点或已存在同名组时返回 (None, False, 0.0)。
+    """
+    if not boundary and concave_deg <= 0:
+        return None, False, 0.0
+    me = obj.data
+    bm = bmesh.new()
+    keep = set()
+    try:
+        bm.from_mesh(me)
+        if boundary:
+            for e in bm.edges:
+                if len(e.link_faces) == 1:
+                    for v in e.verts:
+                        keep.add(v.index)
+        if concave_deg > 0:
+            limit = -math.radians(concave_deg)
+            for e in bm.edges:
+                if len(e.link_faces) != 2:
+                    continue
+                try:
+                    ang = e.calc_face_angle_signed()
+                except Exception:
+                    continue
+                if ang < limit:
+                    for v in e.verts:
+                        keep.add(v.index)
+    finally:
+        bm.free()
+
+    if not keep:
+        return None, False, 0.0
+    name = "__LOD_PROTECT__"
+    existing = obj.vertex_groups.get(name)
+    if existing is not None:
+        # 源模型自带同名组时不覆盖用户数据
+        return None, False, 0.0
+    vg = obj.vertex_groups.new(name=name)
+    vg.add(sorted(keep), 1.0, 'REPLACE')
+    nv = max(1, len(me.vertices))
+    return name, True, len(keep) / float(nv)
+
+
+def drop_protect_group(obj, group, created):
+    if not group or not created:
+        return
+    try:
+        vg = obj.vertex_groups.get(group)
+        if vg is not None:
+            obj.vertex_groups.remove(vg)
+    except Exception:
+        pass
+
+
 # ───────────────────────────────── Decimate ─────────────────────────────────
 
-def decimate_single(obj, tgt_faces):
+def decimate_single(obj, tgt_faces, protect_group=None):
     """对单个对象做一个全局 Decimate(COLLAPSE, triangulate) 到目标面数"""
     cur = len(obj.data.polygons)
     if cur == 0 or tgt_faces >= cur:
@@ -452,6 +590,10 @@ def decimate_single(obj, tgt_faces):
     mod.decimate_type = 'COLLAPSE'
     mod.ratio = tgt_faces / float(cur)
     mod.use_collapse_triangulate = True
+    if protect_group:
+        mod.vertex_group = protect_group
+        mod.invert_vertex_group = True   # 组内 weight=1 的顶点硬锁，不参与折叠
+        mod.vertex_group_factor = 1.0
     bpy.context.view_layer.objects.active = obj
     # 有骨骼修改器时把 Decimate 移到最前，否则 apply 会报「不是第一个修改器」
     if len(obj.modifiers) > 1:
@@ -469,6 +611,43 @@ def decimate_single(obj, tgt_faces):
             pass
         raise
     return True
+
+
+def decimate_guarded(obj, tgt_faces, boundary, concave_deg):
+    """带保护组 + 超限回退的 Decimate。
+
+    1) 按 boundary/concave 建临时保护组；被锁顶点占比 > LOCK_MAX_PROTECT_FRAC 时放弃
+       （发片/蕾丝几乎全是边界顶点，全锁会完全减不动）。
+    2) 锁定后实际面数仍超过目标 LOCK_OVER_TOL 倍时，回滚到备份网格并用无锁版重算，
+       保证 LOD 面数比例不因保形而失控。
+    """
+    pg = pg_new = None
+    backup = None
+    try:
+        pg, pg_new, frac = build_protect_group(obj, boundary, concave_deg)
+        if pg and frac > LOCK_MAX_PROTECT_FRAC:
+            drop_protect_group(obj, pg, pg_new)
+            pg, pg_new = None, False
+        if pg:
+            backup = obj.data.copy()
+        applied = decimate_single(obj, tgt_faces, pg)
+        if pg and len(obj.data.polygons) > tgt_faces * LOCK_OVER_TOL + 4:
+            old = obj.data
+            obj.data = backup
+            backup = None
+            try:
+                bpy.data.meshes.remove(old)
+            except Exception:
+                pass
+            applied = decimate_single(obj, tgt_faces, None)
+        return applied
+    finally:
+        if backup is not None:
+            try:
+                bpy.data.meshes.remove(backup)
+            except Exception:
+                pass
+        drop_protect_group(obj, pg, pg_new)
 
 
 def decimate_object(obj, ratio, min_faces, guard_pct, quality):
@@ -496,7 +675,8 @@ def decimate_object(obj, ratio, min_faces, guard_pct, quality):
     # 没什么可动的块：直接全局处理（避免 separate/join 的开销）
     if nblocks <= 1 or need_work == 0:
         tgt = max(1, min(target_sum, total))
-        decimate_single(obj, tgt)
+        conc = LOCK_CONCAVE_DEG if (nblocks == 1 and LOCK_CONCAVE_DEG > 0) else 0.0
+        decimate_guarded(obj, tgt, LOCK_BOUNDARY, conc)
         return total, len(obj.data.polygons), nblocks, 0, tgt, 0
 
     orig_name = obj.name
@@ -528,7 +708,9 @@ def decimate_object(obj, ratio, min_faces, guard_pct, quality):
         if (cur - want) < 2:
             skipped += 1
             continue
-        if decimate_single(part, want):
+        # 质量模式：锁开放边界；主部件再加锁凹折痕（保手指缝/衣褶，避免糊成一片）
+        conc = LOCK_CONCAVE_DEG if (LOCK_CONCAVE_DEG > 0 and cur >= total * LOCK_CONCAVE_DOMINANT) else 0.0
+        if decimate_guarded(part, want, LOCK_BOUNDARY, conc):
             applied += 1
 
     if len(parts) > 1:
@@ -547,17 +729,150 @@ def decimate_object(obj, ratio, min_faces, guard_pct, quality):
     return total, len(obj.data.polygons), nblocks, applied, target_sum, skipped
 
 
-# ───────────────────────────────── 导入 / 导出 ─────────────────────────────────
+# ───────────────────────────────── 7.0.3：形状优先比例 ─────────────────────────────────
 
-def import_gltf(src):
-    """导入 glTF/GLB。
+def shape_first_ratio(before, requested_ratio):
+    """把用户设定的 LOD 比例改成「按面数自适应」的目标比例。
 
-    merge_vertices=True：不合并时 UV 接缝/硬边会被当成独立连通块，separate 后各块独立
-    Decimate 会产生裂缝；合并后接缝仍以 UV seam 保留在 loop 数据中，导出时自动拆分。
-    老版本没有该参数 → TypeError 退化。
+    面数 >= SHAPE_REF_FACES 的部件：完全按原目标减（高面数减得多）。
+    面数越少，减面权重按 sqrt(before/REF) 下降（低面数减得少）。
+    例如请求 0.65：
+      20000 面 -> 0.650   5000 面 -> 0.650
+      2784 面  -> 0.708   1000 面 -> 0.825
+       500 面  -> 0.876    200 面 -> 0.922
+    面数允许达不到目标；形状优先。
     """
     try:
-        bpy.ops.import_scene.gltf(filepath=src, merge_vertices=True)
+        b = float(before)
+        r = float(requested_ratio)
+    except Exception:
+        return requested_ratio
+    if b <= 0 or r >= 0.995 or r <= 0.0:
+        return r
+    w = math.sqrt(b / SHAPE_REF_FACES)
+    w = min(1.0, max(SHAPE_MIN_WEIGHT, w))
+    eff = 1.0 - (1.0 - r) * w
+    return min(1.0, max(r, eff))
+
+
+def shape_error_for_ratio(requested_ratio):
+    """按 LOD 级别选择误差上限：近景严、远景略宽，但最大不超过 2%。"""
+    try:
+        r = float(requested_ratio)
+    except Exception:
+        return GLTFPACK_SE
+    if r <= 0.35:
+        return SHAPE_ERROR_COARSE
+    if r <= 0.50:
+        return SHAPE_ERROR_MID
+    return SHAPE_ERROR_FINE
+
+
+# ───────────────────────────────── 7.0.2：gltfpack 拓扑感知减面 ─────────────────────────────────
+
+def find_gltfpack():
+    """返回 C# 释放的内置 gltfpack 路径；没有则返回 None（旧路径回退）。"""
+    p = (os.environ.get(GLTFPACK_ENV) or '').strip()
+    if p and os.path.isfile(p):
+        return p
+    return None
+
+
+def count_glb_triangles(path):
+    """不依赖 Blender 直接读 GLB 的三角形数，作为 before 的权威值（与 C# 统计口径一致）。"""
+    try:
+        with open(path, 'rb') as f:
+            data = f.read()
+        if len(data) < 20 or data[:4] != b'glTF':
+            return -1
+        pos = 12
+        doc = None
+        while pos + 8 <= len(data):
+            length, ctype = struct.unpack_from('<II', data, pos)
+            pos += 8
+            if length < 0 or pos + length > len(data):
+                return -1
+            chunk = data[pos:pos + length]
+            pos += length
+            if ctype == 0x4E4F534A:      # JSON
+                doc = json.loads(chunk.decode('utf-8'))
+                break
+        if doc is None:
+            return -1
+        accessors = doc.get('accessors') or []
+        tris = 0
+        for mesh in (doc.get('meshes') or []):
+            for prim in (mesh.get('primitives') or []):
+                if int(prim.get('mode', 4)) != 4:
+                    continue
+                idx = prim.get('indices')
+                if idx is not None:
+                    acc = accessors[int(idx)] if 0 <= int(idx) < len(accessors) else None
+                else:
+                    pos_acc = (prim.get('attributes') or {}).get('POSITION')
+                    acc = accessors[int(pos_acc)] if pos_acc is not None and 0 <= int(pos_acc) < len(accessors) else None
+                if acc is None:
+                    continue
+                tris += int(acc.get('count', 0)) // 3
+        return tris
+    except Exception:
+        return -1
+
+
+def run_gltfpack(src, dst, ratio, se=None):
+    """调用内置 gltfpack 生成一个简化 GLB；返回其 stdout/stderr 文本。
+
+    关键参数：
+      -si ratio : 目标三角形比例（7.0.3 由 shape_first_ratio 按面数自适应）
+      -se E     : 误差上限（7.0.3 默认 1%/1.5%/2%，按 LOD 级别），形状优先时
+                  可能达不到目标面数，这是预期行为
+      -slb      : 锁边界，袜口/开口不会被拉塌
+      -noq      : 关闭量化，输出普通 float GLB，Blender/SMD 可直接读
+      -kn -km   : 保留节点名/材质名，避免下游按名字找部件失败
+    不使用 -sa（aggressive/sloppy）和 -sp（permissive）：它们会跨属性缝/近距离合并。
+    """
+    exe = find_gltfpack()
+    if not exe:
+        raise RuntimeError("未找到内置 gltfpack（环境变量 %s 为空或路径不存在）" % GLTFPACK_ENV)
+    ratio_text = ('%.6f' % float(ratio)).rstrip('0').rstrip('.')
+    se_text = str(se if se is not None else GLTFPACK_SE)
+    cmd = [exe, '-i', src, '-o', dst, '-si', ratio_text, '-se', se_text] + list(GLTFPACK_TAGS) + ['-v']
+    creationflags = 0x08000000 if os.name == 'nt' else 0   # CREATE_NO_WINDOW
+    try:
+        proc = subprocess.run(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            timeout=GLTFPACK_TIMEOUT, creationflags=creationflags,
+            text=True, encoding='utf-8', errors='replace')
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("gltfpack 超时（%d 秒）" % GLTFPACK_TIMEOUT)
+    out = (proc.stdout or '') + (proc.stderr or '')
+    if proc.returncode != 0:
+        tail = out.strip()[-800:]
+        raise RuntimeError("gltfpack 失败（exit=%d）：%s" % (proc.returncode, tail or '(无输出)'))
+    if not os.path.isfile(dst):
+        raise RuntimeError("gltfpack 未生成输出文件：%s" % dst)
+    if os.path.getsize(dst) <= 20:
+        raise RuntimeError("gltfpack 输出文件异常（%d 字节）：%s" % (os.path.getsize(dst), dst))
+    return out
+
+
+def gltfpack_temp_path():
+    d = os.path.join(tempfile.gettempdir(), 'L4D2LOD远景工坊', 'gltfpack')
+    os.makedirs(d, exist_ok=True)
+    return os.path.join(d, 'g_' + uuid.uuid4().hex + '.glb')
+
+
+# ───────────────────────────────── 导入 / 导出 ─────────────────────────────────
+
+def import_gltf(src, merge_vertices=True):
+    """导入 glTF/GLB。
+
+    merge_vertices=True：旧减面路径需要合并接缝顶点后再按连通块处理；
+    gltfpack 路径必须传 False：避免 Blender 导入阶段把左右袜筒在重合处再次焊死。
+    老版本没有该参数 → TypeError 退化（默认不合并，正好符合 gltfpack 路径）。
+    """
+    try:
+        bpy.ops.import_scene.gltf(filepath=src, merge_vertices=merge_vertices)
     except TypeError:
         bpy.ops.import_scene.gltf(filepath=src)
 
@@ -634,9 +949,10 @@ def main(argv):
         rec = {'idx': i, 'src': src, 'dst': dst, 'ok': False}
         t0 = time.time()
         print("BEGIN %d" % i, flush=True)   # C# 据此判断崩溃/超时时是哪个任务在处理
+        tmp_glb = None
 
         try:
-            ratio = float(job['ratio'])
+            requested_ratio = float(job['ratio'])
             shrink_ratio = job_value(job, 'shrinkInner', 0.0, float)
             min_faces = job_value(job, 'minFaces', DEFAULT_MIN_FACES, int)
             guard_pct = job_value(job, 'guardPct', DEFAULT_GUARD_PCT, float)
@@ -644,7 +960,7 @@ def main(argv):
             if job_quality is None:
                 job_quality = quality
             job_quality = bool(job_quality)
-            rec['ratio'] = ratio
+            rec['ratio_requested'] = requested_ratio
 
             if _TEST_CRASH and _TEST_CRASH in (src or ''):
                 print("TEST: 模拟崩溃", flush=True)
@@ -657,13 +973,63 @@ def main(argv):
             if not src or not os.path.isfile(src):
                 raise RuntimeError("源文件不存在：%s" % (src or '(空)'))
 
-            bpy.ops.wm.read_factory_settings(use_empty=True)
-            import_gltf(src)
+            # 7.0.3 形状优先：先按源面数决定实际减面目标。
+            # 高面数部件按用户目标减；低面数部件自动放宽比例，宁可不达标也不硬减。
+            before_hint = count_glb_triangles(src)
+            if SHAPE_FIRST:
+                ratio = shape_first_ratio(before_hint, requested_ratio)
+            else:
+                ratio = requested_ratio
+            se_cap = shape_error_for_ratio(requested_ratio)
+            rec['ratio_eff'] = ratio
+            rec['shape_error'] = float(se_cap)
+            rec['shape_first'] = bool(SHAPE_FIRST)
+
+            # 优先走内置 gltfpack：拓扑感知减面，不做空间焊接。
+            # 只有 gltfpack 缺失/执行失败才回退旧路径，并明确打印 WARN，避免静默回到旧算法。
+            used_gltfpack = False
+            gp_stats = ''
+            gp = find_gltfpack()
+            if gp:
+                try:
+                    tmp_glb = gltfpack_temp_path()
+                    gp_stats = run_gltfpack(src, tmp_glb, ratio, se_cap)
+                    bpy.ops.wm.read_factory_settings(use_empty=True)
+                    import_gltf(tmp_glb, merge_vertices=False)
+                    used_gltfpack = True
+                    last = [ln for ln in gp_stats.splitlines() if ln.strip().startswith('output:')]
+                    print("GLTFPACK req=%.4f eff=%.4f se=%s %s" % (
+                        requested_ratio, ratio, se_cap,
+                        (last[-1].strip() if last else 'ok')), flush=True)
+                    try:
+                        os.remove(tmp_glb)
+                        tmp_glb = None
+                    except Exception:
+                        pass
+                except Exception as e:
+                    warn("gltfpack 失败，回退旧减面（%s）" % e)
+                    used_gltfpack = False
+                    if tmp_glb:
+                        try:
+                            os.remove(tmp_glb)
+                        except Exception:
+                            pass
+                        tmp_glb = None
+                    bpy.ops.wm.read_factory_settings(use_empty=True)
+                    import_gltf(src)
+            else:
+                bpy.ops.wm.read_factory_settings(use_empty=True)
+                import_gltf(src)
 
             mesh_objs = scene_mesh_objects()
             if not mesh_objs:
                 raise RuntimeError("导入后没有网格对象（源文件可能不是有效的 GLB）")
-            before = sum(len(o.data.polygons) for o in mesh_objs)
+            if used_gltfpack:
+                before = count_glb_triangles(src)
+                if before <= 0:
+                    before = sum(len(o.data.polygons) for o in mesh_objs)
+            else:
+                before = sum(len(o.data.polygons) for o in mesh_objs)
             if before == 0:
                 raise RuntimeError("导入后网格面数为 0")
             orig_names = [o.name for o in mesh_objs]
@@ -680,16 +1046,24 @@ def main(argv):
             applied_total = 0
             target_total = 0
             skipped_total = 0
-            for name in orig_names:
-                ob = bpy.context.scene.objects.get(name)
-                if ob is None or ob.type != 'MESH':
-                    continue
-                _b, _a, blocks, applied, tgt, skipped = decimate_object(
-                    ob, ratio, min_faces, guard_pct, job_quality)
-                block_total += blocks
-                applied_total += applied
-                target_total += tgt
-                skipped_total += skipped
+            if used_gltfpack:
+                # gltfpack 已在源 GLB 上完成减面；这里只统计连通块供 UI/日志显示。
+                target_total = int(round(before * ratio))
+                for ob in mesh_objs:
+                    sizes = analyze_blocks(ob)
+                    block_total += len(sizes)
+                    applied_total += sum(1 for s in sizes if s > min_faces)
+            else:
+                for name in orig_names:
+                    ob = bpy.context.scene.objects.get(name)
+                    if ob is None or ob.type != 'MESH':
+                        continue
+                    _b, _a, blocks, applied, tgt, skipped = decimate_object(
+                        ob, ratio, min_faces, guard_pct, job_quality)
+                    block_total += blocks
+                    applied_total += applied
+                    target_total += tgt
+                    skipped_total += skipped
 
             if shrink_dist > 0:
                 for ob in scene_mesh_objects():
@@ -704,22 +1078,35 @@ def main(argv):
             export_glb(dst, src)
 
             rec['ok'] = True
+            rec['method'] = 'gltfpack' if used_gltfpack else 'blender'
             rec['before'] = before
             rec['after'] = after
             rec['target'] = target_total
             rec['blocks'] = block_total
             rec['applied'] = applied_total
+            if used_gltfpack and ratio < 0.99 and after >= before:
+                rec['warn'] = "gltfpack 未减面：模型可能为硬边/分离面（每面独立顶点），已保持原面数且未使用旧焊接算法"
             if target_total > 0 and after > target_total * WARN_OVER:
-                rec['warn'] = "实际面数 %d 超出目标 %d 达 %.0f%%（%d 个小块因差值<2 未简化）" % (
-                    after, target_total, (after / float(target_total) - 1.0) * 100.0, skipped_total)
+                if used_gltfpack:
+                    rec['warn'] = "实际面数 %d 超出目标 %d 达 %.0f%%（gltfpack 受边界/拓扑约束提前停止）" % (
+                        after, target_total, (after / float(target_total) - 1.0) * 100.0)
+                else:
+                    rec['warn'] = "实际面数 %d 超出目标 %d 达 %.0f%%（%d 个小块因差值<2 未简化）" % (
+                        after, target_total, (after / float(target_total) - 1.0) * 100.0, skipped_total)
             n_ok += 1
-            print("OK [%d/%d] %s  %d -> %d (目标%d)  %d块(简%d)%s%s" % (
+            print("OK [%d/%d] %s  %d -> %d (目标%d, 形状比%.3f/se%s)  %d块(简%d)%s%s" % (
                 i + 1, len(jobs), os.path.basename(src or ''), before, after, target_total,
-                block_total, applied_total,
+                ratio, se_cap, block_total, applied_total,
                 ("  内缩%.4f" % shrink_dist) if shrink_dist > 0 else "",
                 ("  警告:" + rec['warn']) if 'warn' in rec else ""), flush=True)
 
         except Exception as e:
+            if tmp_glb:
+                try:
+                    os.remove(tmp_glb)
+                except Exception:
+                    pass
+                tmp_glb = None
             rec['error'] = str(e) or e.__class__.__name__
             n_fail += 1
             print("FAIL [%d/%d] %s: %s" % (i + 1, len(jobs), os.path.basename(src or ''), e), flush=True)

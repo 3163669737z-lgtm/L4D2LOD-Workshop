@@ -83,7 +83,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File build.ps1
 
 需要 .NET SDK 8；脚本会自动查找便携版 SDK。产物在 `dist\L4D2LOD远景工坊.exe`。
 
-完整使用说明在分发包的 `README.md` 里；设计与验收资料在仓库 `docs/`。
+完整使用说明在分发包的 `README.md` 里；源码包内包含完整源码和构建脚本。
 
 ## 版本
 
@@ -173,7 +173,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File build.ps1
 
 Requires .NET SDK 8; the script can locate a portable SDK automatically. The output is `dist\L4D2LOD远景工坊.exe`.
 
-The full manual is the `README.md` inside the release package. Design and acceptance notes live under `docs/`.
+The full manual is the `README.md` inside the release package; the source package includes the full source and build script.
 
 ### Version
 

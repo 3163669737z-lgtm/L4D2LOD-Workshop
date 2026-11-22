@@ -122,10 +122,10 @@ if (-not $NoDist) {
         }
     }
     if (-not $copied) { Fail "无法写入 $finalExe（文件被占用且改名降级也失败）。请关闭正在运行的实例后重试。" }
-    # 顺带部署使用说明（菜单「查看使用说明」会找 exe 旁的 使用说明.md）
-    $manual = Join-Path $Root 'docs\03_使用说明.md'
+    # 顺带部署使用说明（菜单「查看使用说明」会找 exe 旁的 README.md）
+    $manual = Join-Path $Root 'README.md'
     if (Test-Path -LiteralPath $manual) {
-        try { Copy-Item -LiteralPath $manual -Destination (Join-Path $DistDir '使用说明.md') -Force -ErrorAction Stop } catch { }
+        try { Copy-Item -LiteralPath $manual -Destination (Join-Path $DistDir 'README.md') -Force -ErrorAction Stop } catch { }
     }
     # 清理旧的改名备份（被占用的删不掉就留着，下次构建再清）
     Get-ChildItem -LiteralPath $DistDir -Filter ($exeName + '.old_*') -ErrorAction SilentlyContinue | ForEach-Object {

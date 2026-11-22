@@ -15,13 +15,30 @@
 
     <StackPanel>
         <TextBlock Text="引擎" Style="{StaticResource Set.PageTitle}" />
-        <TextBlock Text="指定 Blender 与编译器。程序只读取这两个程序，不会修改它们。"
+        <TextBlock Text="选择减面后端，并指定 Blender 与编译器。程序只读取这些程序，不会修改它们。"
                    Style="{StaticResource Set.PageSub}" Margin="0,3,0,0" />
         <controls:Rule Margin="0,14,0,0" />
 
+        <!-- ═══════════ 减面后端 ═══════════ -->
+        <TextBlock Text="减面后端" Style="{StaticResource Set.GroupTitle}" Margin="0,14,0,0" />
+        <TextBlock Text="Blender：逐连通块精细减面，质量优先，需要安装 Blender。内置 gltfpack：无需安装任何东西、速度快一个量级；Body 内缩同样生效。"
+                   Style="{StaticResource Set.Hint}" Margin="0,3,0,0" />
+
+        <settings:SettingRow Title="后端" Margin="0,8,0,0">
+            <Border Style="{StaticResource Set.FocusFrame}">
+                <ComboBox x:Name="CmbBackend" Style="{StaticResource Combo.Base}" Width="300">
+                    <ComboBoxItem Content="Blender（推荐，精细）" />
+                    <ComboBoxItem Content="内置 gltfpack（无需 Blender，实验）" />
+                </ComboBox>
+            </Border>
+        </settings:SettingRow>
+        <TextBlock x:Name="TxtBackendHint" Style="{StaticResource Set.Hint}" Margin="0,6,0,0"
+                   Text="选择「内置 gltfpack」时 Blender 可选（仅作回退）。" Visibility="Collapsed" />
+
         <!-- ═══════════ Blender ═══════════ -->
+        <controls:Rule Margin="0,16,0,0" />
         <TextBlock Text="Blender" Style="{StaticResource Set.GroupTitle}" Margin="0,14,0,0" />
-        <TextBlock Text="本工具用 Blender 的后台模式减面；4.0 / 4.1 / 4.2 都可以，推荐 4.1。"
+        <TextBlock Text="本工具用 Blender 的后台模式减面；4.0 / 4.1 / 4.2 都可以，推荐 4.1。选择「内置 gltfpack」后端时无需 Blender。"
                    Style="{StaticResource Set.Hint}" Margin="0,3,0,0" />
 
         <TextBlock Text="程序路径" Style="{StaticResource Set.Label}" Margin="0,10,0,0" />

@@ -306,7 +306,7 @@ namespace LodStudio.Cli
             var options = new DialogOptions
             {
                 Title = "关于远景工坊",
-                Message = "远景工坊 · L4D2 自动 LOD 工具 v7.0.0\n为模型工程自动生成多级 LOD，并把 $lod 幂等写回 QC。",
+                Message = "远景工坊 · L4D2 自动 LOD 工具 v" + AppInfo.Version + "\n为模型工程自动生成多级 LOD，并把 $lod 幂等写回 QC。",
                 Detail = "运行环境：Windows 10/11 · .NET Framework 4.8\nBlender：4.1.1（已探测）\n配置文件：%APPDATA%\\L4D2LOD远景工坊\\settings.ini",
                 OkText = "知道了"
             };

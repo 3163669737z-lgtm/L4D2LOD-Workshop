@@ -109,6 +109,18 @@ namespace LodStudio.Cli
                 ReportDir = null,
                 WriteReport = true
             };
+            string backendText = (cli.GetOption("backend") ?? "").Trim();
+            if (backendText.Length == 0)
+                opts.Backend = settings.ReduceBackend == 1 ? ReduceBackend.Gltfpack : ReduceBackend.Blender;
+            else if (string.Equals(backendText, "gltfpack", StringComparison.OrdinalIgnoreCase))
+                opts.Backend = ReduceBackend.Gltfpack;
+            else if (string.Equals(backendText, "blender", StringComparison.OrdinalIgnoreCase))
+                opts.Backend = ReduceBackend.Blender;
+            else
+            {
+                Console.WriteLine("BATCH: --backend 只接受 blender 或 gltfpack。");
+                return null;
+            }
             if (string.IsNullOrEmpty(opts.BlenderPath)) opts.BlenderPath = BlenderLocator.Find(null);
             if (string.IsNullOrEmpty(opts.NekomdlPath)) opts.NekomdlPath = Nekomdl.Find(null);
             if (opts.SkipMainModel)

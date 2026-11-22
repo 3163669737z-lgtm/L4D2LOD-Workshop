@@ -44,6 +44,8 @@ namespace LodStudio.Engine
         // ── 引擎 ──
         public string BlenderPath = "";
         public string NekomdlPath = "";
+        /// <summary>减面后端：0=Blender（默认）1=内置 gltfpack（无 Blender 模式）</summary>
+        public int ReduceBackend = 0;
 
         // ── 外观 ──
         /// <summary>0=浅色 1=暗色 2=跟随系统</summary>
@@ -141,6 +143,7 @@ namespace LodStudio.Engine
             Levels = Math.Max(LodPlan.MinLevels, Math.Min(LodPlan.MaxLevels, Levels));
             Workers = Math.Max(0, Math.Min(16, Workers));
             OutputMode = Math.Max(0, Math.Min(2, OutputMode));
+            ReduceBackend = Math.Max(0, Math.Min(1, ReduceBackend));
             ThemeMode = Math.Max(0, Math.Min(2, ThemeMode));
             MinTriangles = Math.Max(0, Math.Min(2000000, MinTriangles));
             ReportLocation = Math.Max(0, Math.Min(2, ReportLocation));
@@ -232,6 +235,7 @@ namespace LodStudio.Engine
             sb.AppendLine("[General]");
             sb.AppendLine("BlenderPath=" + s.BlenderPath);
             sb.AppendLine("NekomdlPath=" + s.NekomdlPath);
+            sb.AppendLine("ReduceBackend=" + s.ReduceBackend);
             sb.AppendLine("ThemeMode=" + s.ThemeMode);
             sb.AppendLine("RestoreTasks=" + B(s.RestoreTasks));
             sb.AppendLine("Animations=" + B(s.Animations));
@@ -323,6 +327,7 @@ namespace LodStudio.Engine
                     {
                         case "blenderpath": s.BlenderPath = v; break;
                         case "nekomdlpath": s.NekomdlPath = v; break;
+                        case "reducebackend": s.ReduceBackend = I(v, s.ReduceBackend); break;
                         case "thememode": s.ThemeMode = I(v, s.ThemeMode); break;
                         case "restoretasks": s.RestoreTasks = B(v, s.RestoreTasks); break;
                         case "popuponsuccess": s.PopupOnSuccess = B(v, s.PopupOnSuccess); break;

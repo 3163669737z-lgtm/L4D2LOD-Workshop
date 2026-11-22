@@ -330,9 +330,14 @@ namespace LodStudio.Engine
         {
             var parts = new List<string>();
             if (q.Skipped && !string.IsNullOrEmpty(q.SkipReason)) parts.Add(q.SkipReason);
-            if (q.Injected) parts.Add(ModeText(ctx == null ? OutputMode.InPlace : ctx.Mode) == "写入原 QC"
-                ? "已在原 QC 末尾写入 $lod 块"
-                : "已按当前写入方式写入");
+            if (q.Injected)
+            {
+                OutputMode mode = ctx == null ? OutputMode.InPlace : ctx.Mode;
+                bool sharedHost = !SamePath(q.LodBlockFile, q.QcPath);
+                if (mode == OutputMode.CollectionOnly) parts.Add("已按当前写入方式写入");
+                else if (sharedHost) parts.Add("已写入 " + Path.GetFileName(q.LodBlockFile) + " 末尾（共享 include，根 QC 未改动）");
+                else parts.Add(mode == OutputMode.SeparateQc ? "已按当前写入方式写入" : "已在原 QC 末尾写入 $lod 块");
+            }
             if (q.CompileTried)
             {
                 if (q.CompileOk) parts.Add("试编译：" + (string.IsNullOrEmpty(q.CompileSummary) ? "成功" : q.CompileSummary));
@@ -341,6 +346,13 @@ namespace LodStudio.Engine
             if (q.Errors != null && q.Errors.Count > 0) parts.Add("错误：" + OneLine(q.Errors[0]));
             if (parts.Count == 0) parts.Add("—");
             return string.Join("；", parts.ToArray());
+        }
+
+        private static bool SamePath(string a, string b)
+        {
+            if (string.IsNullOrEmpty(a) || string.IsNullOrEmpty(b)) return false;
+            try { return string.Equals(FileUtil.Normalize(a), FileUtil.Normalize(b), StringComparison.OrdinalIgnoreCase); }
+            catch { return false; }
         }
 
         private static List<QcOutcome> CollectSkipped(BatchOutcome outcome)
@@ -409,6 +421,26 @@ namespace LodStudio.Engine
             {
                 tips.Add("直接双击你原来的 批量编译.bat 即可（$lod 已经写进 QC，不需要改批处理）。");
                 tips.Add("如果编译报 $lod 相关错误：用报告「还原方法」里的 .qc.lodbak 还原，再检查该 QC 的手写 $lod。");
+                // 多个 QC 共用 include 文件（工具块写在共享文件里）时说明清楚，避免用户以为根 QC 没被处理
+                var sharedHosts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                if (outcome != null && outcome.QcOutcomes != null)
+                {
+                    foreach (QcOutcome q in outcome.QcOutcomes)
+                    {
+                        if (q == null || !q.Injected || string.IsNullOrEmpty(q.LodBlockFile)) continue;
+                        if (SamePath(q.LodBlockFile, q.QcPath)) continue;
+                        string key = FileUtil.Normalize(q.LodBlockFile);
+                        int count;
+                        sharedHosts.TryGetValue(key, out count);
+                        sharedHosts[key] = count + 1;
+                    }
+                }
+                foreach (var kv in sharedHosts)
+                {
+                    if (kv.Value < 2) continue;
+                    tips.Add("有 " + N(kv.Value) + " 个 QC 的 $lod 写在共享文件 " + Path.GetFileName(kv.Key) +
+                             " 里（这些 QC 只 include、根 QC 未改动）；它们的模型列表必须一致，否则该文件只保留最后一次写入。");
+                }
             }
 
             if (stats.ErrorQcCount > 0 || CountErrorQcs(outcome) > 0 ||

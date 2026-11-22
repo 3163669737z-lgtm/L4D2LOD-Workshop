@@ -147,6 +147,8 @@ namespace LodStudio.ViewModels
             get
             {
                 if (!string.IsNullOrEmpty(_blenderVersion)) return "Blender " + _blenderVersion + "（只读状态；要改成 菜单 → 打开设置 → 引擎）";
+                if (Settings != null && Settings.ReduceBackend == (int)ReduceBackend.Gltfpack)
+                    return "减面后端：内置 gltfpack（无需 Blender）。Blender 未安装，仅作回退时可不装（只读状态）";
                 return "未找到 Blender。菜单 → 打开设置 → 引擎页指定 blender.exe（只读状态）";
             }
         }
@@ -335,21 +337,46 @@ namespace LodStudio.ViewModels
 
         // ─────────────────────────── 环境检测 ───────────────────────────
 
-        /// <summary>把三项检测合并成一个顶栏状态：Blender 必须可用；编译器可选但配了就必须能跑；低完整性算异常。</summary>
+        /// <summary>把三项检测合并成一个顶栏状态：Blender 后端时 Blender 必须可用（内置 gltfpack 后端只要求内嵌组件在）；
+        /// 编译器可选但配了就必须能跑；低完整性算异常。</summary>
         private void RefreshEnvStatus()
         {
+            bool gpMode = Settings != null && Settings.ReduceBackend == (int)ReduceBackend.Gltfpack;
             bool detecting = string.Equals(BlenderText, "检测中", StringComparison.Ordinal);
+            bool engineOk = gpMode ? GltfpackEmbeddedOk()
+                                     : string.Equals(BlenderTone, "Ok", StringComparison.Ordinal);
             bool ok = !detecting &&
-                      string.Equals(BlenderTone, "Ok", StringComparison.Ordinal) &&
+                      engineOk &&
                       !string.Equals(PermissionTone, "Err", StringComparison.Ordinal) &&
                       !string.Equals(CompilerTone, "Err", StringComparison.Ordinal);
 
             EnvTone = detecting ? "Faint" : (ok ? "Ok" : "Err");
             EnvText = detecting ? "环境检测中" : (ok ? "环境正常" : "环境异常");
-            EnvTip = "Blender：" + BlenderText + (BlenderTone == "Ok" ? "" : "（异常，点这里去设置）") + "\n" +
+            string engineLine = gpMode
+                ? "减面后端：内置 gltfpack（无需 Blender）" + (engineOk ? "" : "（内嵌组件缺失，异常）") + "\n" +
+                  "Blender：" + BlenderText + "（可选，仅回退用）"
+                : "Blender：" + BlenderText + (BlenderTone == "Ok" ? "" : "（异常，点这里去设置）");
+            EnvTip = engineLine + "\n" +
                      "编译器：" + CompilerText + "（可选，仅试编译用）" + (CompilerTone == "Err" ? "（已配置但无法运行）" : "") + "\n" +
                      "权限：" + PermissionText + (PermissionTone == "Err" ? "（低完整性，无法写文件）" : "") + "\n\n" +
                      "点击打开「运行环境诊断」";
+        }
+
+        private static bool? _gltfpackEmbeddedOk;
+
+        /// <summary>内嵌 gltfpack 资源是否可用（只查资源，不写盘；结果缓存）。</summary>
+        private static bool GltfpackEmbeddedOk()
+        {
+            if (_gltfpackEmbeddedOk == null)
+            {
+                try
+                {
+                    byte[] b = GltfpackTool.LoadBytes();
+                    _gltfpackEmbeddedOk = b != null && b.Length > 100000;
+                }
+                catch { _gltfpackEmbeddedOk = false; }
+            }
+            return _gltfpackEmbeddedOk.Value;
         }
 
         public async Task RunEnvironmentCheckAsync(bool silent = false)
@@ -357,6 +384,7 @@ namespace LodStudio.ViewModels
             PermissionText = RuntimeContext.IsLowIntegrity() ? "低完整性" : (RuntimeContext.IsAdmin ? "管理员" : "普通权限");
             PermissionTone = RuntimeContext.IsLowIntegrity() ? "Err" : (RuntimeContext.IsAdmin ? "Ok" : "Faint");
 
+            bool gpMode = Settings.ReduceBackend == (int)ReduceBackend.Gltfpack;
             string blender = Settings.BlenderPath;
             if (string.IsNullOrEmpty(blender) || !File.Exists(blender))
                 blender = BlenderLocator.Find(Settings.BlenderPath);
@@ -375,15 +403,15 @@ namespace LodStudio.ViewModels
                 }
                 else
                 {
-                    BlenderText = "无法运行";
-                    BlenderTone = "Err";
+                    BlenderText = gpMode ? "无法运行（可选）" : "无法运行";
+                    BlenderTone = gpMode ? "Faint" : "Err";
                 }
             }
             else
             {
                 _blenderVersion = "";
-                BlenderText = "未找到";
-                BlenderTone = "Err";
+                BlenderText = gpMode ? "未安装（可选）" : "未找到";
+                BlenderTone = gpMode ? "Faint" : "Err";
             }
 
             string compiler = Settings.NekomdlPath;
@@ -404,7 +432,8 @@ namespace LodStudio.ViewModels
             UpdateReadiness();
             if (!silent)
             {
-                Log.Append(LogLevel.Info, "引擎检测：Blender " + (BlenderTone == "Ok" ? _blenderVersion : "未找到") +
+                Log.Append(LogLevel.Info, "引擎检测：减面后端 " + (gpMode ? "内置 gltfpack（无需 Blender）" : "Blender") +
+                                          "；Blender " + (BlenderTone == "Ok" ? _blenderVersion : (gpMode ? "未安装（可选）" : "未找到")) +
                                           "；编译器 " + CompilerText + "；权限 " + PermissionText);
             }
         }
@@ -724,6 +753,7 @@ namespace LodStudio.ViewModels
             {
                 Plan = LodPlan.ClonePlan(),
                 PresetName = LodPlan.PresetDisplay,
+                Backend = (ReduceBackend)Settings.ReduceBackend,
                 BlenderPath = Settings.BlenderPath,
                 Workers = Settings.Workers,
                 QualityFirst = Settings.QualityFirst,
@@ -765,18 +795,22 @@ namespace LodStudio.ViewModels
             string err = LodPlan.ValidateForRun();
             if (err != null) { await _ui.ShowInfoAsync("LOD 参数有误", err, null); return; }
 
-            // Blender
-            string blender = Settings.BlenderPath;
-            if (string.IsNullOrEmpty(blender) || !File.Exists(blender)) blender = BlenderLocator.Find(Settings.BlenderPath);
-            if (string.IsNullOrEmpty(blender) || !File.Exists(blender))
+            // Blender：仅 Blender 后端强制；内置 gltfpack 后端无需 Blender（保留已找到的路径作回退）
+            if (Settings.ReduceBackend == (int)ReduceBackend.Blender)
             {
-                bool go = await _ui.ConfirmAsync("还没有指定 Blender",
-                    "生成 LOD 必须用 Blender 减面。请到「设置 → 引擎」指定 blender.exe（通常会自动找到）。",
-                    "打开设置", "取消", false, null);
-                if (go) _ui.OpenSettings(0);
-                return;
+                string blender = Settings.BlenderPath;
+                if (string.IsNullOrEmpty(blender) || !File.Exists(blender)) blender = BlenderLocator.Find(Settings.BlenderPath);
+                if (string.IsNullOrEmpty(blender) || !File.Exists(blender))
+                {
+                    bool go = await _ui.ConfirmAsync("还没有指定 Blender",
+                        "生成 LOD 必须用 Blender 减面。请到「设置 → 引擎」指定 blender.exe（通常会自动找到）；" +
+                        "没有 Blender 时可在「设置 → 引擎 → 减面后端」改用「内置 gltfpack」。",
+                        "打开设置", "取消", false, null);
+                    if (go) _ui.OpenSettings(0);
+                    return;
+                }
+                Settings.BlenderPath = blender;
             }
-            Settings.BlenderPath = blender;
 
             if (Settings.CompileAfter && (string.IsNullOrEmpty(Settings.NekomdlPath) || !File.Exists(Settings.NekomdlPath)))
             {
@@ -1197,7 +1231,22 @@ namespace LodStudio.ViewModels
                     {
                         var info = QcParser.Parse(q);
                         if (info.HasForeignLod) sb.AppendLine(Settings.ForceOverwriteLod ? "  已有手写 $lod → 会被注释停用并替换" : "  已有手写 $lod → 这个 QC 会被跳过");
-                        if (info.HasToolMarker) sb.AppendLine("  已有本工具写入的 $lod 块 → 整块替换");
+                        if (info.HasToolMarker)
+                        {
+                            // 模型声明在 include 文件里时，工具块写在那个文件，根 QC 不动
+                            string markerHost = "";
+                            try
+                            {
+                                string h = QcWriter.ResolveHostFile(info, false);
+                                if (!string.IsNullOrEmpty(h) && !string.Equals(h, q, StringComparison.OrdinalIgnoreCase))
+                                    markerHost = Path.GetFileName(h);
+                            }
+                            catch { }
+                            if (markerHost.Length > 0)
+                                sb.AppendLine("  已有本工具写入的 $lod 块 → 整块替换（块写入 " + markerHost + "，根 QC 不改动）");
+                            else
+                                sb.AppendLine("  已有本工具写入的 $lod 块 → 整块替换");
+                        }
                         foreach (var st in info.Studios)
                         {
                             string state;
@@ -1599,9 +1648,8 @@ namespace LodStudio.ViewModels
         {
             string[] cands =
             {
-                Path.Combine(AppInfo.ExeDir, "使用说明.md"),
-                Path.Combine(AppInfo.ExeDir, "docs", "03_使用说明.md"),
-                Path.Combine(AppInfo.ExeDir, "..", "docs", "03_使用说明.md")
+                Path.Combine(AppInfo.ExeDir, "README.md"),
+                Path.Combine(AppInfo.ExeDir, "..", "README.md")
             };
             foreach (var c in cands)
             {
@@ -1612,7 +1660,7 @@ namespace LodStudio.ViewModels
                 }
                 catch { }
             }
-            _ui.ShowToast("没有找到使用说明", "部署目录里应带上 使用说明.md", ToastTone.Warn);
+            _ui.ShowToast("没有找到使用说明", "部署目录里应带上 README.md", ToastTone.Warn);
         }
 
         /// <summary>LOD 参数在运行前的额外校验（含 Blender 等）</summary>

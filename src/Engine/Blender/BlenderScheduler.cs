@@ -644,6 +644,20 @@ namespace LodStudio.Engine
                 return o;
             }
 
+            // gltfpack 作为嵌入资源随 exe 交付；每个 Blender 进程通过环境变量拿到释放后的路径。
+            // 释放失败时整批直接失败：不能悄悄回退到旧的全量焊接减面，否则袜子会再次粘连。
+            string gltfpack = null;
+            string gltfpackError = null;
+            try { gltfpack = GltfpackTool.EnsureExtracted(out gltfpackError); }
+            catch (Exception ex) { gltfpackError = ex.Message; }
+            if (gltfpack == null)
+            {
+                o.StartFailed = true;
+                o.StartError = "无法释放内置 gltfpack: " + (gltfpackError ?? "未知错误");
+                CleanupTaskFiles(taskPath, jsonlPath);
+                return o;
+            }
+
             var st = new ProcState();
             var sw = Stopwatch.StartNew();
             var tail = new Queue<string>();
@@ -669,6 +683,8 @@ namespace LodStudio.Engine
                     StandardOutputEncoding = Encoding.UTF8,
                     StandardErrorEncoding = Encoding.UTF8
                 };
+                // 后端脚本优先用这个内置 gltfpack 做拓扑感知减面
+                psi.EnvironmentVariables["L4D2LOD_GLTFPACK"] = gltfpack;
                 p = new Process { StartInfo = psi };
                 p.OutputDataReceived += delegate (object s, DataReceivedEventArgs e)
                 {
