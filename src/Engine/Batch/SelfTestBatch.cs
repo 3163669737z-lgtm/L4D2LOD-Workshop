@@ -69,7 +69,6 @@ namespace LodStudio.Engine
                 MinTriangles = minTriangles,
                 OutputMode = OutputMode.InPlace,
                 BackupEnabled = true,
-                BlenderPath = "C:\\fake\\blender.exe",
                 ProjectRoot = null
             };
         }
@@ -80,6 +79,37 @@ namespace LodStudio.Engine
         }
 
         // ─────────────────────── 用例 ───────────────────────
+
+        [SelfTest("自动 LOD：按面数估算级数和比例，多份 QC 共用网格任务")]
+        public static void AutomaticBudgets(SelfTestContext ctx)
+        {
+            string dir = ctx.NewDir("batch_auto");
+            string shared = WriteSmdModel(dir, "shared", 12000);
+            WriteSmdModel(dir, "extra", 12000);
+            WriteSmdModel(dir, "tiny", 4000);
+            string small = WriteQc(dir, "small", "shared.smd");
+            string large = WriteQc(dir, "large", "shared.smd", "$body \"extra\" \"extra.smd\"");
+            string tiny = WriteQc(dir, "tiny", "tiny.smd");
+
+            var options = Options();
+            options.Automatic = true;
+            var plan = Plan(new List<TaskRef>
+            {
+                new TaskRef(TaskKind.Qc, small), new TaskRef(TaskKind.Qc, large), new TaskRef(TaskKind.Qc, tiny)
+            }, dir, options);
+            var smallPlan = plan.QcPlans.Single(q => q.QcPath == small);
+            var largePlan = plan.QcPlans.Single(q => q.QcPath == large);
+            ctx.AssertEqual(1, smallPlan.Levels.Count, "12,000 面生成一档候选");
+            ctx.AssertEqual(2, largePlan.Levels.Count, "24,000 面生成两档候选");
+            ctx.AssertEqual(BatchQcAction.Skip.ToString(), plan.QcPlans.Single(q => q.QcPath == tiny).Action.ToString(),
+                "低面数方案可跳过");
+            var sharedModel = plan.Models.Single(m => m.Path == shared);
+            ctx.AssertEqual(2, sharedModel.Jobs.Count, "共享网格按更详细的引用计划减面一次");
+            ctx.AssertEqual(4, plan.JobCount, "两份 QC 应复用两个共享模型档位");
+            ctx.AssertEqual(sharedModel.Jobs[0].Ratio, smallPlan.Levels.Levels[0].Ratio, 0.0001, "预览显示实际分配给共享网格的目标");
+            ctx.Assert(AutomaticLod.Plan(12000).Ratios[0] > AutomaticLod.Plan(18000).Ratios[0],
+                "同样只有一档时，高面数模型使用更低的目标保留比例");
+        }
 
         [SelfTest("批量：基本计划（QC→模型→每级任务）")]
         public static void BasicPlan(SelfTestContext ctx)
@@ -98,6 +128,62 @@ namespace LodStudio.Engine
             ctx.Assert(plan.HasWork, "HasWork");
             ctx.AssertEqual(0.6, plan.Models[0].Jobs[0].Ratio, 1e-9, "第一级比例");
             ctx.Assert(plan.Models[0].Jobs[0].Ratio > plan.Models[0].Jobs[1].Ratio, "比例应逐级降低");
+        }
+
+        [SelfTest("批量：精确匹配保留原网格清单")]
+        public static void KeepOriginalModels(SelfTestContext ctx)
+        {
+            string dir = ctx.NewDir("batch_keep_original");
+            string parts = Directory.CreateDirectory(Path.Combine(dir, "SMD")).FullName;
+            string selected = WriteSmdModel(parts, "body", 60);
+            string unselected = WriteSmdModel(dir, "body", 60);
+            var tasks = new List<TaskRef> { new TaskRef(TaskKind.Smd, selected), new TaskRef(TaskKind.Smd, unselected) };
+            var options = Options();
+            options.KeepOriginalModels = "SMD/body.smd";
+
+            var plan = Plan(tasks, dir, options);
+            ctx.AssertEqual(2, plan.JobCount, "仅未选中的同名模型生成两级");
+            ctx.AssertEqual(0, plan.Models.Single(m => m.Path == selected).Jobs.Count, "选中模型沿用原网格");
+            ctx.AssertEqual(2, plan.Models.Single(m => m.Path == unselected).Jobs.Count, "同名文件不受牵连");
+        }
+
+        [SelfTest("批量：QC 表情模型默认原样保留")]
+        public static void KeepFacialMesh(SelfTestContext ctx)
+        {
+            string dir = ctx.NewDir("batch_keep_facial");
+            WriteSmdModel(dir, "face", 60);
+            WriteSmdModel(dir, "body", 100);
+            string qc = Path.Combine(dir, "face.qc");
+            File.WriteAllText(qc,
+                "$modelname \"models/face.mdl\"\n$model \"face\" \"face.smd\"\n{\n" +
+                "  flexfile \"face.vta\" { }\n}\n$body \"body\" \"body.smd\"\n");
+            var tasks = new List<TaskRef> { new TaskRef(TaskKind.Qc, qc) };
+            var options = Options();
+            var plan = Plan(tasks, dir, options);
+            ctx.AssertEqual(0, plan.Models.Single(m => m.BaseName == "face").Jobs.Count, "表情面默认沿用原网格");
+            ctx.AssertEqual(2, plan.Models.Single(m => m.BaseName == "body").Jobs.Count, "其余部件照常减面");
+            options.NoFacial = true;
+            ctx.AssertEqual(4, Plan(tasks, dir, options).JobCount, "显式禁用表情时可一起减面");
+        }
+
+        [SelfTest("批量：100% SMD 沿用源模型，不写重复替换")]
+        public static void KeepSmdBytes(SelfTestContext ctx)
+        {
+            string dir = ctx.NewDir("batch_keep_smd_bytes");
+            string model = WriteSmdModel(dir, "body", 60);
+            string qc = WriteQc(dir, "actor", "body.smd");
+            var tasks = new List<TaskRef> { new TaskRef(TaskKind.Qc, qc) };
+            var options = Options(levels: 1);
+            options.Plan.Levels[0].Ratio = 1;
+            options.WriteReport = false;
+            byte[] source = File.ReadAllBytes(model);
+            var outcome = BatchRunner.Run(Plan(tasks, dir, options), options, null, CancellationToken.None);
+            ctx.Assert(outcome.Ok, "批量应完成");
+            ctx.AssertEqual(1, outcome.Stats.UnreducedLevels, "应记录沿用源网格");
+            ctx.AssertEqual(0, outcome.Stats.PublishedLods, "不能把相同源网格算为新的 LOD");
+            ctx.Assert(File.ReadAllBytes(model).SequenceEqual(source), "源模型应保持原样");
+            ctx.Assert(!File.Exists(Path.Combine(dir, "body_lod1.smd")), "不应写内容相同的文件");
+            ctx.Assert(!File.ReadAllText(qc).Contains("replacemodel"), "不应写重复替换");
         }
 
         [SelfTest("批量：面数低于门槛 → 跳过该 QC")]

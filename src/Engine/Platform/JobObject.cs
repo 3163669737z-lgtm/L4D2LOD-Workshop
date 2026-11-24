@@ -6,7 +6,7 @@ namespace LodStudio.Engine.Platform
 {
     /// <summary>
     /// 进程级单例 Job Object（JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE）：
-    /// 每个 Blender / 编译器子进程都 Assign 进来，句柄只在本进程退出时由系统关闭。
+    /// 每个 减面 / 编译器子进程都 Assign 进来，句柄只在本进程退出时由系统关闭。
     /// 因此主程序无论正常退出、崩溃还是被任务管理器结束，系统都会把子进程一并结束，不留孤儿。
     /// </summary>
     public static class JobObject

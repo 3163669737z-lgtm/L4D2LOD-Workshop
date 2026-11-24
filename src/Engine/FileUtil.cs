@@ -19,8 +19,23 @@ namespace LodStudio.Engine
         /// </summary>
         public static void WriteAtomic(string targetPath, byte[] data)
         {
+            WriteViaTemporary(targetPath, tmp => File.WriteAllBytes(tmp, data ?? Array.Empty<byte>()));
+        }
+
+        /// <summary>流式复制，并以与原子写相同的方式发布目标文件。</summary>
+        public static void CopyAtomic(string sourcePath, string targetPath)
+        {
+            WriteViaTemporary(targetPath, tmp =>
+            {
+                using (var source = File.OpenRead(sourcePath))
+                using (var output = File.Create(tmp))
+                    source.CopyTo(output);
+            });
+        }
+
+        private static void WriteViaTemporary(string targetPath, Action<string> writeTemporary)
+        {
             if (targetPath == null) throw new ArgumentNullException("targetPath");
-            if (data == null) data = new byte[0];
             string target = Path.GetFullPath(targetPath);
             // 只读文件一律拒绝修改（否则"改名后写入"的兜底会悄悄覆盖用户只读文件）
             try
@@ -37,7 +52,7 @@ namespace LodStudio.Engine
             string tag = Guid.NewGuid().ToString("N").Substring(0, 8);
             string tmp = target + ".tmp_" + tag;
 
-            try { File.WriteAllBytes(tmp, data); }
+            try { writeTemporary(tmp); }
             catch
             {
                 TryDelete(tmp);

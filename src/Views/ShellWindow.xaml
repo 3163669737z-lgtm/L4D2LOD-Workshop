@@ -27,7 +27,6 @@
     <Window.Resources>
         <svc:BoolToVisibilityConverter x:Key="BoolToVis" />
         <svc:InverseBoolToVisibilityConverter x:Key="InverseBoolToVis" />
-        <svc:NotNullToVisibilityConverter x:Key="NotNullToVis" />
 
         <!-- 语义色调：用 Tag 传 "Ok"/"Warn"/"Err"/"Signal"/"Faint" -->
         <Style x:Key="ToneDot" TargetType="Ellipse">
@@ -71,16 +70,30 @@
             </Style.Triggers>
         </Style>
 
+        <Style x:Key="WrappedToolTip" TargetType="ToolTip">
+            <Setter Property="MaxWidth" Value="500" />
+            <Setter Property="ContentTemplate">
+                <Setter.Value>
+                    <DataTemplate>
+                        <TextBlock Text="{Binding}" TextWrapping="Wrap" Style="{StaticResource Text.Body}" />
+                    </DataTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <!-- 队列行 -->
         <DataTemplate x:Key="TaskRow" DataType="{x:Type vm:TaskItemVm}">
-            <Grid Height="56" Margin="16,0,16,0">
+            <Grid Height="56" Margin="12,0,12,0" Background="Transparent" ToolTipService.ShowDuration="12000">
+                <Grid.ToolTip>
+                    <ToolTip Style="{StaticResource WrappedToolTip}" Content="{Binding Tooltip}" />
+                </Grid.ToolTip>
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="40" />
-                    <ColumnDefinition Width="64" />
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="96" />
-                    <ColumnDefinition Width="92" />
-                    <ColumnDefinition Width="56" />
+                    <ColumnDefinition Width="30" />
+                    <ColumnDefinition Width="55" />
+                    <ColumnDefinition Width="3*" />
+                    <ColumnDefinition Width="*" MinWidth="62" MaxWidth="170" />
+                    <ColumnDefinition Width="73" />
+                    <ColumnDefinition Width="52" />
                 </Grid.ColumnDefinitions>
 
                 <TextBlock Grid.Column="0" Text="{Binding Index, StringFormat={}{0:00}}" Style="{StaticResource Text.Numeric}"
@@ -92,14 +105,13 @@
                     <TextBlock Text="{Binding KindText}" Style="{StaticResource Text.Micro}" Margin="6,0,0,0" VerticalAlignment="Center" />
                 </StackPanel>
 
-                <StackPanel Grid.Column="2" VerticalAlignment="Center" Margin="0,0,10,0">
+                <StackPanel Grid.Column="2" VerticalAlignment="Center" Margin="0,0,12,0">
                     <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" FontSize="{StaticResource FS.Body}"
                                Foreground="{DynamicResource Brush.Ink}" />
-                    <TextBlock Text="{Binding ParentPath}" TextTrimming="CharacterEllipsis" Style="{StaticResource Text.Mono}"
-                               FontSize="{StaticResource FS.Micro}" Foreground="{DynamicResource Brush.InkFaint}" Margin="0,2,0,0" />
+                    <TextBlock Text="{Binding DisplayPath}" TextTrimming="CharacterEllipsis" Style="{StaticResource Text.Small}" Margin="0,2,0,0" />
                 </StackPanel>
 
-                <TextBlock Grid.Column="3" Text="{Binding ScaleText}" Style="{StaticResource Text.Small}"
+                <TextBlock Grid.Column="3" Text="{Binding RowDetail}" Style="{StaticResource Text.Small}"
                            TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="0,0,8,0" />
 
                 <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center">
@@ -107,7 +119,7 @@
                     <TextBlock Text="{Binding StatusText}" FontSize="{StaticResource FS.Small}" VerticalAlignment="Center">
                         <TextBlock.Style>
                             <Style TargetType="TextBlock">
-                                <Setter Property="Foreground" Value="{DynamicResource Brush.InkFaint}" />
+                                <Setter Property="Foreground" Value="{DynamicResource Brush.InkSoft}" />
                                 <Style.Triggers>
                                     <DataTrigger Binding="{Binding StatusTone}" Value="Ok">
                                         <Setter Property="Foreground" Value="{DynamicResource Brush.Ok}" />
@@ -128,20 +140,21 @@
                 </StackPanel>
 
                 <StackPanel x:Name="Actions" Grid.Column="5" Orientation="Horizontal" VerticalAlignment="Center"
-                            Opacity="0.28" HorizontalAlignment="Right">
+                            Opacity="0.76" HorizontalAlignment="Right">
                     <Button x:Name="BtnReveal" Style="{StaticResource Btn.Icon}" Width="24" Height="24" ToolTip="在资源管理器中显示"
-                            Click="OnRevealTaskClick" Tag="{Binding}">
+                            Click="OnRevealTaskClick" Tag="{Binding}" AutomationProperties.Name="在资源管理器中显示">
                         <controls:Icon Kind="ExternalLink" Size="13" IconBrush="{DynamicResource Brush.InkSoft}" />
                     </Button>
-                    <Button x:Name="BtnRemove" Style="{StaticResource Btn.Icon}" Width="24" Height="24" ToolTip="从列表移除（不删文件）"
-                            Click="OnRemoveTaskClick" Tag="{Binding}">
+                    <Button x:Name="BtnRemove" Style="{StaticResource Btn.Icon}" Width="24" Height="24" ToolTip="从队列移除"
+                            Click="OnRemoveTaskClick" Tag="{Binding}" AutomationProperties.Name="从队列移除"
+                            IsEnabled="{Binding DataContext.CanEdit, RelativeSource={RelativeSource AncestorType=Window}}">
                         <controls:Icon Kind="Close" Size="13" IconBrush="{DynamicResource Brush.InkSoft}" />
                     </Button>
                 </StackPanel>
 
                 <!-- 选中行左侧信号条 -->
                 <Border x:Name="SelBar" Grid.Column="0" Width="2" HorizontalAlignment="Left"
-                        Background="Transparent" />
+                        IsHitTestVisible="False" Background="Transparent" />
             </Grid>
             <DataTemplate.Triggers>
                 <DataTrigger Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
@@ -150,6 +163,9 @@
                 <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
                     <Setter TargetName="SelBar" Property="Background" Value="{DynamicResource Brush.Signal}" />
                 </DataTrigger>
+                <Trigger SourceName="Actions" Property="IsKeyboardFocusWithin" Value="True">
+                    <Setter TargetName="Actions" Property="Opacity" Value="1" />
+                </Trigger>
             </DataTemplate.Triggers>
         </DataTemplate>
 
@@ -179,6 +195,12 @@
                                 </DataTrigger>
                                 <DataTrigger Binding="{Binding IsKeyboardFocusWithin, ElementName=DistBox}" Value="True">
                                     <Setter Property="Background" Value="{DynamicResource Brush.Sunken}" />
+                                    <Setter Property="BorderBrush" Value="{DynamicResource Brush.FocusRing}" />
+                                    <Setter Property="BorderThickness" Value="1" />
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding DistanceInvalid}" Value="True">
+                                    <Setter Property="BorderBrush" Value="{DynamicResource Brush.Err}" />
+                                    <Setter Property="BorderThickness" Value="1" />
                                 </DataTrigger>
                             </Style.Triggers>
                         </Style>
@@ -186,6 +208,7 @@
                     <TextBox x:Name="DistBox" Style="{StaticResource Input.Num}" BorderThickness="0" Background="Transparent"
                              Height="26" Text="{Binding DistanceText, UpdateSourceTrigger=PropertyChanged}"
                              Tag="{Binding}" ToolTip="切换距离（HU，1 HU ≈ 1.9 厘米）；输入即生效"
+                             AutomationProperties.Name="切换距离（HU）" AutomationProperties.HelpText="{Binding Error}"
                              GotKeyboardFocus="OnLevelNumberGotFocus"
                              LostKeyboardFocus="OnLevelNumberLostFocus"
                              PreviewKeyDown="OnLevelNumberKeyDown" />
@@ -206,6 +229,12 @@
                                 </DataTrigger>
                                 <DataTrigger Binding="{Binding IsKeyboardFocusWithin, ElementName=RatioBox}" Value="True">
                                     <Setter Property="Background" Value="{DynamicResource Brush.Sunken}" />
+                                    <Setter Property="BorderBrush" Value="{DynamicResource Brush.FocusRing}" />
+                                    <Setter Property="BorderThickness" Value="1" />
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding RatioInvalid}" Value="True">
+                                    <Setter Property="BorderBrush" Value="{DynamicResource Brush.Err}" />
+                                    <Setter Property="BorderThickness" Value="1" />
                                 </DataTrigger>
                             </Style.Triggers>
                         </Style>
@@ -213,6 +242,7 @@
                     <TextBox x:Name="RatioBox" Style="{StaticResource Input.Num}" BorderThickness="0" Background="Transparent"
                              Height="26" Text="{Binding RatioText, UpdateSourceTrigger=PropertyChanged}"
                              Tag="{Binding}" ToolTip="保留面数百分比（0.1–100）；输入即生效"
+                             AutomationProperties.Name="保留面数百分比" AutomationProperties.HelpText="{Binding Error}"
                              GotKeyboardFocus="OnLevelNumberGotFocus"
                              LostKeyboardFocus="OnLevelNumberLostFocus"
                              PreviewKeyDown="OnLevelNumberKeyDown" />
@@ -220,7 +250,8 @@
 
                 <Button Grid.Column="4" Style="{StaticResource Btn.Icon}" Width="24" Height="24"
                         HorizontalAlignment="Center" VerticalAlignment="Center"
-                        ToolTip="删除这一级" Click="OnRemoveLevelClick" Tag="{Binding}">
+                        ToolTip="删除这一级" AutomationProperties.Name="删除这一级" Click="OnRemoveLevelClick" Tag="{Binding}"
+                        IsEnabled="{Binding CanRemove}">
                     <controls:Icon Kind="Close" Size="12" IconBrush="{DynamicResource Brush.InkFaint}" />
                 </Button>
 
@@ -230,39 +261,32 @@
 
         <!-- 计划行 -->
         <DataTemplate x:Key="PlanRow" DataType="{x:Type vm:PlanQcRowVm}">
-            <Border Height="44" ToolTip="{Binding Tooltip}" Background="Transparent">
-                <Grid>
+            <Border MinHeight="56" BorderBrush="{DynamicResource Brush.Line}" BorderThickness="0,0,0,1"
+                    Background="Transparent" ToolTipService.ShowDuration="12000">
+                <Border.ToolTip>
+                    <ToolTip Style="{StaticResource WrappedToolTip}" Content="{Binding Tooltip}" />
+                </Border.ToolTip>
+                <Grid Margin="12,6,12,6">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="52" />
                         <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="112" />
-                        <ColumnDefinition Width="88" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="52" />
                     </Grid.ColumnDefinitions>
-                    <TextBlock Grid.Column="0" Text="{Binding ActionText}" FontSize="{StaticResource FS.Small}"
-                               VerticalAlignment="Center">
-                        <TextBlock.Style>
-                            <Style TargetType="TextBlock">
-                                <Setter Property="Foreground" Value="{DynamicResource Brush.InkFaint}" />
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding ActionTone}" Value="Ok">
-                                        <Setter Property="Foreground" Value="{DynamicResource Brush.Ok}" />
-                                    </DataTrigger>
-                                    <DataTrigger Binding="{Binding ActionTone}" Value="Err">
-                                        <Setter Property="Foreground" Value="{DynamicResource Brush.Err}" />
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </TextBlock.Style>
-                    </TextBlock>
-                    <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="0,0,10,0">
-                        <TextBlock Text="{Binding QcName}" TextTrimming="CharacterEllipsis" FontSize="{StaticResource FS.Small}" />
-                        <TextBlock Text="{Binding Reason}" TextTrimming="CharacterEllipsis" Style="{StaticResource Text.Micro}"
-                                   Foreground="{DynamicResource Brush.InkFaint}" Margin="0,1,0,0" />
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Ellipse Tag="{Binding ActionTone}" Style="{StaticResource ToneDot}" Margin="0,0,5,0" />
+                        <TextBlock Text="{Binding ActionText}" Tag="{Binding ActionTone}" Style="{StaticResource ToneText}"
+                                   FontSize="{StaticResource FS.Small}" />
                     </StackPanel>
-                    <TextBlock Grid.Column="2" Text="{Binding ModelsText}" Style="{StaticResource Text.Micro}"
-                               TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="0,0,8,0" />
-                    <TextBlock Grid.Column="3" Text="{Binding JobCount, StringFormat={}{0} 任务}" Style="{StaticResource Text.Micro}"
-                               VerticalAlignment="Center" HorizontalAlignment="Right" />
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="0,0,10,0">
+                        <TextBlock Text="{Binding QcName}" TextTrimming="CharacterEllipsis" Style="{StaticResource Text.Body}" />
+                        <TextBlock Text="{Binding Summary}" TextTrimming="CharacterEllipsis" Style="{StaticResource Text.Small}"
+                                   Margin="0,2,0,0" />
+                    </StackPanel>
+                    <TextBlock Grid.Column="2" Text="{Binding Counts}" Style="{StaticResource Text.Small}"
+                               VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <Button Grid.Column="3" Style="{StaticResource Btn.Bare}" Content="详情" Height="28"
+                            ToolTip="查看文件路径与计划详情" Click="OnPlanDetailsClick" />
                 </Grid>
             </Border>
         </DataTemplate>
@@ -296,8 +320,11 @@
                         </Style>
                     </TextBlock.Style>
                 </TextBlock>
-                <TextBlock Grid.Column="2" Text="{Binding Text}"
+                <TextBlock Grid.Column="2" Text="{Binding Text}" ToolTipService.ShowDuration="12000"
                            TextTrimming="CharacterEllipsis" VerticalAlignment="Center">
+                    <TextBlock.ToolTip>
+                        <ToolTip Style="{StaticResource WrappedToolTip}" Content="{Binding Text}" />
+                    </TextBlock.ToolTip>
                     <TextBlock.Style>
                         <Style TargetType="TextBlock" BasedOn="{StaticResource Text.Mono}">
                             <Setter Property="Foreground" Value="{DynamicResource Brush.InkSoft}" />
@@ -350,14 +377,15 @@
                             <TextBlock Text="{x:Static local:AppInfo.ProductName}" FontSize="{StaticResource FS.Brand}" FontWeight="SemiBold"
                                        Foreground="{DynamicResource Brush.Ink}" VerticalAlignment="Center" />
                             <Border Background="{DynamicResource Brush.Sunken}" Padding="6,1,6,2" Margin="10,1,0,0" VerticalAlignment="Center">
-                                <TextBlock Text="v0.2.0" FontFamily="{StaticResource Font.Latin}" FontSize="{StaticResource FS.Micro}"
+                                <TextBlock Text="{x:Static local:AppInfo.DisplayVersion}" FontFamily="{StaticResource Font.Latin}" FontSize="{StaticResource FS.Micro}"
                                            Foreground="{DynamicResource Brush.InkSoft}" />
                             </Border>
                         </StackPanel>
                     </StackPanel>
 
                     <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,8,0">
-                        <Button x:Name="BtnEnv" Click="OnEnvClick" ToolTip="{Binding EnvTip}" Margin="0,0,10,0"
+                        <Button x:Name="BtnEnv" Style="{StaticResource Btn.Bare}" Click="OnEnvClick" ToolTip="{Binding EnvTip}" Margin="0,0,10,0"
+                                AutomationProperties.Name="{Binding EnvText}"
                                 Background="Transparent" BorderThickness="0" Padding="6,0,8,0" Height="24" Cursor="Hand"
                                 shell:WindowChrome.IsHitTestVisibleInChrome="True">
                             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
@@ -369,10 +397,12 @@
                             </StackPanel>
                         </Button>
 
-                        <Button x:Name="BtnTheme" Style="{StaticResource CaptionButton}" Click="OnThemeClick" ToolTip="切换浅色 / 暗色" shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                        <Button x:Name="BtnTheme" Style="{StaticResource CaptionButton}" Click="OnThemeClick" ToolTip="切换浅色 / 暗色"
+                                Focusable="True" AutomationProperties.Name="切换浅色或深色" shell:WindowChrome.IsHitTestVisibleInChrome="True">
                             <controls:Icon Kind="Moon" Size="14" IconBrush="{DynamicResource Brush.InkSoft}" />
                         </Button>
-                        <Button x:Name="BtnMenu" Style="{StaticResource CaptionButton}" Click="OnMenuClick" ToolTip="菜单" shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                        <Button x:Name="BtnMenu" Style="{StaticResource CaptionButton}" Click="OnMenuClick" ToolTip="菜单"
+                                Focusable="True" AutomationProperties.Name="主菜单" shell:WindowChrome.IsHitTestVisibleInChrome="True">
                             <controls:Icon Kind="Menu" Size="14" IconBrush="{DynamicResource Brush.InkSoft}" />
                         </Button>
 
@@ -403,7 +433,7 @@
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="14" />
-                        <ColumnDefinition Width="400" />
+                        <ColumnDefinition x:Name="PlanColumn" Width="400" />
                     </Grid.ColumnDefinitions>
 
                     <Grid Grid.Column="0">
@@ -413,100 +443,124 @@
                             <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
 
-                        <!-- ───── 作业队列 ───── -->
-                        <Border Grid.Row="0" Background="{DynamicResource Brush.Panel}"
+                        <!-- 队列与计划在同一工作区切换 -->
+                        <Border x:Name="QueueCard" Grid.Row="0" Background="{DynamicResource Brush.Panel}"
                                 BorderBrush="{DynamicResource Brush.Line}" BorderThickness="1">
                             <Grid>
-                                <controls:CornerBrackets IsHitTestVisible="False" Margin="0" BracketLength="10" />
-                                <Grid>
+                                <controls:CornerBrackets IsHitTestVisible="False" BracketLength="10" />
+                                <Grid x:Name="QueuePane" Visibility="{Binding IsPlanVisible, Converter={StaticResource InverseBoolToVis}}">
                                     <Grid.RowDefinitions>
-                                        <RowDefinition Height="40" />
-                                        <RowDefinition Height="44" />
-                                        <RowDefinition Height="1" />
+                                        <RowDefinition Height="42" />
+                                        <RowDefinition Height="Auto" />
                                         <RowDefinition Height="*" />
-                                        <RowDefinition Height="28" />
+                                        <RowDefinition Height="Auto" />
                                     </Grid.RowDefinitions>
 
-                                    <!-- 面板头 -->
-                                    <Grid Grid.Row="0" Margin="16,0,16,0">
-                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                            <TextBlock Text="作业队列" Style="{StaticResource Text.PageTitle}" VerticalAlignment="Center" />
-                                        </StackPanel>
-                                        <TextBlock Text="{Binding Queue.SummaryText}" Style="{StaticResource Text.Small}"
-                                                   HorizontalAlignment="Right" VerticalAlignment="Center" />
-                                    </Grid>
-                                    <Border Grid.Row="0" Height="1" VerticalAlignment="Bottom" Background="{DynamicResource Brush.Line}" />
-
-                                    <!-- 工具行：筛选页签 | （导入入口见空状态 / 右键菜单 / ☰ 菜单） | 搜索（靠右） -->
-                                    <Grid Grid.Row="1" Margin="16,0,16,0">
+                                    <Grid Margin="16,0,14,0">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="Auto" />
                                             <ColumnDefinition Width="*" />
                                             <ColumnDefinition Width="Auto" />
                                         </Grid.ColumnDefinitions>
-                                        <controls:Segmented x:Name="SegFilter" Grid.Column="0" VerticalAlignment="Center"
-                                                            Variant="Tabs" FontSize="11" ItemPadding="9" />
-                                        <Border x:Name="SearchBox" Grid.Column="2" Width="204" Height="30" VerticalAlignment="Center"
-                                                Background="{DynamicResource Brush.Sunken}" BorderBrush="{DynamicResource Brush.Line}" BorderThickness="1">
-                                            <Grid>
-                                                <controls:Icon Kind="Search" Size="13" HorizontalAlignment="Left" Margin="9,0,0,0"
-                                                               IconBrush="{DynamicResource Brush.InkFaint}" VerticalAlignment="Center" />
-                                                <TextBox x:Name="TxtSearch" Style="{StaticResource Input.Text}" BorderThickness="0" Height="Auto"
-                                                         Background="Transparent" Margin="26,0,24,0" VerticalContentAlignment="Center"
-                                                         Text="{Binding Queue.SearchText, UpdateSourceTrigger=PropertyChanged}"
-                                                         Tag="搜索任务" />
-                                                <Button x:Name="BtnClearSearch" Width="20" Height="20"
-                                                        HorizontalAlignment="Right" Margin="0,0,4,0" ToolTip="清空搜索"
-                                                        Click="OnClearSearchClick">
-                                                    <Button.Style>
-                                                        <Style TargetType="Button" BasedOn="{StaticResource Btn.Icon}">
-                                                            <Setter Property="Visibility" Value="Visible" />
-                                                            <Style.Triggers>
-                                                                <DataTrigger Binding="{Binding Text, ElementName=TxtSearch}" Value="">
-                                                                    <Setter Property="Visibility" Value="Collapsed" />
-                                                                </DataTrigger>
-                                                            </Style.Triggers>
-                                                        </Style>
-                                                    </Button.Style>
-                                                    <controls:Icon Kind="Close" Size="11" IconBrush="{DynamicResource Brush.InkFaint}" />
-                                                </Button>
-                                            </Grid>
-                                        </Border>
+                                        <TextBlock Text="作业队列" Style="{StaticResource Text.PageTitle}" VerticalAlignment="Center" />
+                                        <TextBlock Grid.Column="1" Text="{Binding Queue.SummaryText}" Style="{StaticResource Text.Small}"
+                                                   TextTrimming="CharacterEllipsis" TextAlignment="Right" Margin="12,0"
+                                                   Visibility="{Binding Queue.HasItems, Converter={StaticResource BoolToVis}}"
+                                                   ToolTip="{Binding Queue.SummaryText}" VerticalAlignment="Center" />
+                                        <Button x:Name="BtnImport" Grid.Column="2" Style="{StaticResource Btn.Secondary}" Height="28" Padding="9,0"
+                                                Visibility="{Binding Queue.HasItems, Converter={StaticResource BoolToVis}}"
+                                                IsEnabled="{Binding CanEdit}" Click="OnImportMenuClick" AutomationProperties.Name="导入任务">
+                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                <controls:Icon Kind="Plus" Size="12" IconBrush="{DynamicResource Brush.InkSoft}" />
+                                                <TextBlock Text="导入" Margin="6,0" VerticalAlignment="Center" />
+                                                <controls:Icon Kind="ChevronDown" Size="10" IconBrush="{DynamicResource Brush.InkSoft}" />
+                                            </StackPanel>
+                                        </Button>
                                     </Grid>
+                                    <Border Height="1" VerticalAlignment="Bottom" Background="{DynamicResource Brush.Line}" />
 
-                                    <!-- 表头：已按反馈删除列标题文字，只保留一条分隔线 -->
-                                    <Border Grid.Row="2" Height="1" Background="{DynamicResource Brush.Line}" RenderOptions.EdgeMode="Aliased" />
+                                    <Border Grid.Row="1" BorderBrush="{DynamicResource Brush.Line}" BorderThickness="0,0,0,1"
+                                            Visibility="{Binding Queue.HasItems, Converter={StaticResource BoolToVis}}">
+                                        <Grid Margin="16,0">
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="42" />
+                                                <RowDefinition Height="Auto" />
+                                            </Grid.RowDefinitions>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <controls:Segmented x:Name="SegFilter" VerticalAlignment="Center"
+                                                                Variant="Tabs" FontSize="11" ItemPadding="8"
+                                                                AutomationProperties.Name="筛选任务状态" />
+                                            <Border x:Name="SearchBox" Grid.Column="1" MaxWidth="204" Height="30"
+                                                    HorizontalAlignment="Stretch" VerticalAlignment="Center">
+                                                <Border.Style>
+                                                    <Style TargetType="Border">
+                                                        <Setter Property="Background" Value="{DynamicResource Brush.Sunken}" />
+                                                        <Setter Property="BorderBrush" Value="{DynamicResource Brush.Line}" />
+                                                        <Setter Property="BorderThickness" Value="1" />
+                                                        <Style.Triggers>
+                                                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                                                <Setter Property="BorderBrush" Value="{DynamicResource Brush.FocusRing}" />
+                                                            </Trigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Border.Style>
+                                                <Grid>
+                                                    <controls:Icon Kind="Search" Size="13" HorizontalAlignment="Left" Margin="9,0,0,0"
+                                                                   IconBrush="{DynamicResource Brush.InkSoft}" VerticalAlignment="Center" />
+                                                    <TextBox x:Name="TxtSearch" Style="{StaticResource Input.Text}" BorderThickness="0" Height="Auto"
+                                                             Background="Transparent" Margin="26,0,24,0" VerticalContentAlignment="Center"
+                                                             Text="{Binding Queue.SearchText, UpdateSourceTrigger=PropertyChanged, Delay=150}"
+                                                             AutomationProperties.Name="搜索任务名称或路径" Tag="搜索任务" />
+                                                    <Button x:Name="BtnClearSearch" Width="20" Height="20" VerticalAlignment="Center"
+                                                            HorizontalAlignment="Right" Margin="0,0,4,0" ToolTip="清空搜索"
+                                                            AutomationProperties.Name="清空搜索" Click="OnClearSearchClick">
+                                                        <Button.Style>
+                                                            <Style TargetType="Button" BasedOn="{StaticResource Btn.Icon}">
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding Text, ElementName=TxtSearch}" Value="">
+                                                                        <Setter Property="Visibility" Value="Collapsed" />
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </Button.Style>
+                                                        <controls:Icon Kind="Close" Size="11" IconBrush="{DynamicResource Brush.InkSoft}" />
+                                                    </Button>
+                                                </Grid>
+                                            </Border>
+                                        </Grid>
+                                    </Border>
 
-
-                                    <!-- 列表 -->
-                                    <ListBox x:Name="QueueList" Grid.Row="3" Style="{StaticResource List.Base}"
+                                    <ListBox x:Name="QueueList" Grid.Row="2" Style="{StaticResource List.Base}"
                                              ItemTemplate="{StaticResource TaskRow}" ItemContainerStyle="{StaticResource List.Row}"
                                              ItemsSource="{Binding Queue.View}" SelectionMode="Extended"
+                                             Visibility="{Binding Queue.HasItems, Converter={StaticResource BoolToVis}}"
+                                             AutomationProperties.Name="作业队列"
                                              SelectionChanged="OnQueueSelectionChanged"
                                              PreviewMouseLeftButtonDown="OnQueueListPreviewMouseLeftButtonDown"
                                              MouseDoubleClick="OnQueueDoubleClick"
                                              PreviewMouseRightButtonDown="OnQueueRightButtonDown"
-                                             KeyDown="OnQueueKeyDown"
-                                             ScrollViewer.VerticalScrollBarVisibility="Auto" />
+                                             KeyDown="OnQueueKeyDown" />
 
-                                    <!-- 空状态 -->
-                                    <Border x:Name="EmptyState" Grid.Row="3" Background="{DynamicResource Brush.Panel}"
+                                    <Border x:Name="EmptyState" Grid.Row="2" Background="{DynamicResource Brush.Panel}"
                                             Visibility="{Binding Queue.IsEmpty, Converter={StaticResource BoolToVis}}">
-                                        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Margin="0,0,0,16">
+                                        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Margin="20,0,20,16">
                                             <controls:TickStrip Width="150" Height="9" HorizontalAlignment="Center" Step="6" TickLength="2" LongEvery="4" LongLength="4" />
                                             <TextBlock Text="队列为空" Style="{StaticResource Text.PageTitle}" HorizontalAlignment="Center" Margin="0,14,0,0" />
-                                            <TextBlock Text="把工程文件夹、QC 或模型文件拖进窗口；也可以从下面两个入口导入。" Style="{StaticResource Text.Small}"
-                                                       HorizontalAlignment="Center" Margin="0,12,0,0" />
-                                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,16,0,0">
-                                                <Button Style="{StaticResource Btn.Secondary}" Height="34"
-                                                        AutomationProperties.Name="导入文件夹" Click="OnImportFolderClick">
+                                            <TextBlock Text="拖入工程文件夹、QC、GLB、SMD 或 DMX" Style="{StaticResource Text.Small}"
+                                                       TextAlignment="Center" TextWrapping="Wrap" Margin="0,8,0,0" />
+                                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,16,0,0" IsEnabled="{Binding CanEdit}">
+                                                <Button x:Name="BtnEmptyImportFolder" Style="{StaticResource Btn.Secondary}" Click="OnImportFolderClick"
+                                                        AutomationProperties.Name="导入文件夹">
                                                     <StackPanel Orientation="Horizontal">
                                                         <controls:Icon Kind="Folder" Size="14" IconBrush="{DynamicResource Brush.InkSoft}" />
                                                         <TextBlock Text="导入文件夹" Margin="8,0,0,0" VerticalAlignment="Center" />
                                                     </StackPanel>
                                                 </Button>
-                                                <Button Style="{StaticResource Btn.Secondary}" Height="34" Margin="8,0,0,0"
-                                                        AutomationProperties.Name="导入文件" Click="OnImportFilesClick">
+                                                <Button Style="{StaticResource Btn.Secondary}" Margin="8,0,0,0" Click="OnImportFilesClick"
+                                                        AutomationProperties.Name="导入文件">
                                                     <StackPanel Orientation="Horizontal">
                                                         <controls:Icon Kind="File" Size="14" IconBrush="{DynamicResource Brush.InkSoft}" />
                                                         <TextBlock Text="导入文件" Margin="8,0,0,0" VerticalAlignment="Center" />
@@ -516,75 +570,79 @@
                                         </StackPanel>
                                     </Border>
 
-                                    <!-- 无匹配 -->
-                                    <Border x:Name="NoMatchState" Grid.Row="3" Background="{DynamicResource Brush.Panel}"
+                                    <Border x:Name="NoMatchState" Grid.Row="2" Background="{DynamicResource Brush.Panel}"
                                             Visibility="{Binding Queue.IsNoMatch, Converter={StaticResource BoolToVis}}">
-                                        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Margin="0,0,0,16">
+                                        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Margin="16">
                                             <TextBlock Text="没有匹配的任务" Style="{StaticResource Text.PageTitle}" HorizontalAlignment="Center" />
-                                            <TextBlock Text="换个关键词，或清掉筛选条件。" Style="{StaticResource Text.Small}"
-                                                       HorizontalAlignment="Center" Margin="0,10,0,0" />
-                                            <Button Style="{StaticResource Btn.Ghost}" Height="32" Margin="0,14,0,0"
-                                                    HorizontalAlignment="Center" Click="OnResetFilterClick">
-                                                <TextBlock Text="清除筛选与搜索" />
-                                            </Button>
+                                            <Button Style="{StaticResource Btn.Secondary}" Height="30" Margin="0,12,0,0"
+                                                    Content="清除筛选与搜索" HorizontalAlignment="Center" Click="OnResetFilterClick" />
                                         </StackPanel>
                                     </Border>
 
-                                    <!-- 计划视图（覆盖列表区） -->
-                                    <Border x:Name="PlanOverlay" Grid.Row="1" Grid.RowSpan="4" Panel.ZIndex="5"
-                            Background="{DynamicResource Brush.Panel}"
-                                            Visibility="{Binding IsPlanVisible, Converter={StaticResource BoolToVis}}">
-                                        <Grid Margin="16,8,16,10">
-                                            <Grid.RowDefinitions>
-                                                <RowDefinition Height="Auto" />
-                                                <RowDefinition Height="Auto" />
-                                                <RowDefinition Height="*" />
-                                                <RowDefinition Height="Auto" />
-                                            </Grid.RowDefinitions>
-                                            <Grid Grid.Row="0">
-                                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                                    <TextBlock Text="作业计划" Style="{StaticResource Text.PageTitle}" />
+                                    <Border Grid.Row="3" BorderBrush="{DynamicResource Brush.Line}" BorderThickness="0,1,0,0"
+                                            Visibility="{Binding HasLastRun, Converter={StaticResource BoolToVis}}">
+                                        <TextBlock Text="{Binding LastRunText}" Style="{StaticResource Text.Small}" Margin="16,6"
+                                                   TextTrimming="CharacterEllipsis" ToolTip="{Binding LastRunText}" />
+                                    </Border>
+                                </Grid>
+
+                                <Grid x:Name="PlanOverlay" Visibility="{Binding IsPlanVisible, Converter={StaticResource BoolToVis}}">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="42" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="*" />
+                                    </Grid.RowDefinitions>
+                                    <Border BorderBrush="{DynamicResource Brush.Line}" BorderThickness="0,0,0,1">
+                                        <DockPanel Margin="16,0,14,0">
+                                            <Button x:Name="BtnClosePlan" DockPanel.Dock="Right" Style="{StaticResource Btn.Bare}" Height="28"
+                                                    AutomationProperties.Name="返回队列" IsEnabled="{Binding CanEdit}" Click="OnClosePlanClick" ToolTip="返回队列（Esc）">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <controls:Icon Kind="ChevronLeft" Size="11" IconBrush="{DynamicResource Brush.InkSoft}" />
+                                                    <TextBlock Text="返回队列" Margin="5,0,0,0" />
                                                 </StackPanel>
-                                                <Button Style="{StaticResource Btn.Bare}" HorizontalAlignment="Right" Click="OnClosePlanClick">
-                                                    <TextBlock Text="返回队列" />
-                                                </Button>
-                                            </Grid>
-                                            <StackPanel Grid.Row="1" Margin="0,6,0,8">
-                                                <TextBlock Text="{Binding PlanPreview.Headline}" Style="{StaticResource Text.Small}"
-                                                           Foreground="{DynamicResource Brush.Ink}" />
-                                                <TextBlock Text="{Binding PlanPreview.Subline}" Style="{StaticResource Text.Micro}" Margin="0,2,0,0" />
-                                            </StackPanel>
-                                            <ListBox Grid.Row="2" Style="{StaticResource List.Base}" ItemsSource="{Binding PlanPreview.Rows}"
-                                                     ItemTemplate="{StaticResource PlanRow}" ItemContainerStyle="{StaticResource List.Row}"
-                                                     ScrollViewer.VerticalScrollBarVisibility="Auto" />
-                                            <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
-                                                <Button Style="{StaticResource Btn.Ghost}" Height="32" Click="OnClosePlanClick">
-                                                    <TextBlock Text="返回队列" />
-                                                </Button>
-                                                <Button Style="{StaticResource Btn.Primary}" Height="34" Margin="8,0,0,0" Click="OnStartFromPlanClick"
-                                                        IsEnabled="{Binding PlanPreview.CanStartFromPlan}">
-                                                    <StackPanel Orientation="Horizontal">
-                                                        <controls:Icon Kind="Play" Size="13" IconBrush="{DynamicResource Brush.SignalInk}" />
-                                                        <TextBlock Text="按此计划开始生成" Margin="8,0,0,0" VerticalAlignment="Center" />
-                                                    </StackPanel>
-                                                </Button>
-                                            </StackPanel>
-                                        </Grid>
+                                            </Button>
+                                            <TextBlock Text="作业计划" Style="{StaticResource Text.PageTitle}" VerticalAlignment="Center" />
+                                        </DockPanel>
                                     </Border>
 
-                                    <!-- 页脚 -->
-                                    <Grid Grid.Row="4" Margin="16,0,16,0"
-                                          Visibility="{Binding Queue.HasItems, Converter={StaticResource BoolToVis}}">
-                                        <TextBlock Text="{Binding LastRunText}" Style="{StaticResource Text.Micro}" VerticalAlignment="Center" />
-                                        <Button Style="{StaticResource Btn.Bare}" HorizontalAlignment="Right" VerticalAlignment="Center"
-                                                Click="OnOpenReportClick" IsEnabled="{Binding CanOpenLastReport}">
-                                            <StackPanel Orientation="Horizontal">
-                                                <TextBlock Text="查看报告" FontSize="{StaticResource FS.Micro}" />
-                                                <controls:Icon Kind="ChevronRight" Size="10" IconBrush="{DynamicResource Brush.InkFaint}" Margin="4,0,0,0" />
+                                    <StackPanel Grid.Row="1" Margin="16,12,16,10">
+                                        <TextBlock Text="{Binding PlanPreview.Headline}" Style="{StaticResource Text.Section}"
+                                                   TextWrapping="Wrap" />
+                                        <TextBlock Text="{Binding PlanPreview.Subline}" Style="{StaticResource Text.Small}" Margin="0,3,0,0"
+                                                   Visibility="{Binding PlanPreview.HasBreakdown, Converter={StaticResource BoolToVis}}" />
+                                        <Border Background="{DynamicResource Brush.Sunken}" BorderBrush="{DynamicResource Brush.Line}"
+                                                BorderThickness="1" Padding="10,7" Margin="0,9,0,0">
+                                            <StackPanel>
+                                                <TextBlock Text="{Binding PlanPreview.LevelsText}" Style="{StaticResource Text.Small}"
+                                                           Foreground="{DynamicResource Brush.Ink}" TextWrapping="Wrap"
+                                                           ToolTip="{Binding PlanPreview.LevelsText}" />
+                                                <TextBlock Text="{Binding PlanPreview.WriteText}" Style="{StaticResource Text.Small}"
+                                                           TextWrapping="Wrap" Margin="0,3,0,0" />
                                             </StackPanel>
-                                        </Button>
-                                    </Grid>
-                                    <Border Grid.Row="4" Height="1" VerticalAlignment="Top" Background="{DynamicResource Brush.Line}" />
+                                        </Border>
+                                    </StackPanel>
+
+                                    <Border x:Name="StalePlanNotice" Grid.Row="2" Margin="16,0,16,10" Padding="9,6"
+                                            BorderThickness="2,0,0,0" BorderBrush="{DynamicResource Brush.Warn}"
+                                            Background="{DynamicResource Brush.WarnSoft}"
+                                            Visibility="{Binding PlanPreview.IsStale, Converter={StaticResource BoolToVis}}">
+                                        <TextBlock Text="预览已过期。重新扫描可更新档位、写入方式和任务清单。"
+                                                   Style="{StaticResource Text.Small}" Foreground="{DynamicResource Brush.Warn}" TextWrapping="Wrap" />
+                                    </Border>
+
+                                    <Border Grid.Row="3" BorderBrush="{DynamicResource Brush.Line}" BorderThickness="0,1,0,0">
+                                        <Grid>
+                                            <ListBox x:Name="PlanList" Style="{StaticResource List.Base}" ItemsSource="{Binding PlanPreview.Rows}"
+                                                     ItemTemplate="{StaticResource PlanRow}" ItemContainerStyle="{StaticResource List.Row}"
+                                                     AutomationProperties.Name="计划任务" KeyDown="OnPlanListKeyDown"
+                                                     IsEnabled="{Binding CanEdit}" />
+                                            <TextBlock Text="没有扫描到作业。可展开日志查看原因。" Style="{StaticResource Text.Small}"
+                                                       TextWrapping="Wrap" TextAlignment="Center" Margin="16"
+                                                       VerticalAlignment="Center" HorizontalAlignment="Center"
+                                                       Visibility="{Binding PlanPreview.IsEmpty, Converter={StaticResource BoolToVis}}" />
+                                        </Grid>
+                                    </Border>
                                 </Grid>
                             </Grid>
                         </Border>
@@ -598,11 +656,26 @@
                                     <RowDefinition Height="*" />
                                 </Grid.RowDefinitions>
                                 <Grid Grid.Row="0" Margin="16,0,10,0">
-                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                        <TextBlock Text="运行日志" Style="{StaticResource Text.Section}" VerticalAlignment="Center" />
-                                    </StackPanel>
-                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                                        <controls:Segmented x:Name="SegLogFilter" Variant="Tabs" FontSize="11" ItemPadding="8" />
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <Button x:Name="BtnToggleLog" Style="{StaticResource Btn.Bare}" Padding="0,0,5,0" Height="30"
+                                            VerticalAlignment="Center" Click="OnToggleLogClick" ToolTip="展开或折叠日志（Ctrl+L）"
+                                            AutomationProperties.Name="展开或折叠运行日志">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="运行日志" Style="{StaticResource Text.Section}" VerticalAlignment="Center" />
+                                            <controls:Icon x:Name="LogChevron" Kind="ChevronDown" Size="12" Margin="6,0,0,0"
+                                                           IconBrush="{DynamicResource Brush.InkSoft}" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                    </Button>
+                                    <TextBlock Grid.Column="1" Text="{Binding Log.CountText}" Style="{StaticResource Text.Small}"
+                                               TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="8,0"
+                                               ToolTip="{Binding Log.CountText}" />
+                                    <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                        <controls:Segmented x:Name="SegLogFilter" Variant="Tabs" FontSize="11" ItemPadding="8"
+                                                            AutomationProperties.Name="筛选日志级别" />
                                         <Border Width="1" Height="14" Background="{DynamicResource Brush.Line}" Margin="10,0,8,0" />
                                         <Button Style="{StaticResource Btn.Bare}" AutomationProperties.Name="复制日志" Click="OnCopyLogClick"
                                                 IsEnabled="{Binding Log.HasLines}" ToolTip="复制当前显示的日志">
@@ -612,10 +685,6 @@
                                                 IsEnabled="{Binding Log.HasLines}" ToolTip="清空日志">
                                             <TextBlock Text="清空" FontSize="{StaticResource FS.Micro}" />
                                         </Button>
-                                        <Button x:Name="BtnToggleLog" Style="{StaticResource Btn.Icon}" Width="24" Height="24" Margin="4,0,0,0"
-                                                Click="OnToggleLogClick" ToolTip="展开 / 折叠（Ctrl+L）">
-                                            <controls:Icon Kind="ChevronDown" Size="12" IconBrush="{DynamicResource Brush.InkSoft}" />
-                                        </Button>
                                     </StackPanel>
                                 </Grid>
                                 <Border Grid.Row="0" Height="1" VerticalAlignment="Bottom" Background="{DynamicResource Brush.Line}" />
@@ -623,8 +692,9 @@
                                 <Grid x:Name="LogBody" Grid.Row="1" Visibility="Collapsed">
                                     <ListBox x:Name="LogList" Style="{StaticResource List.Base}" ItemsSource="{Binding Log.View}"
                                              ItemTemplate="{StaticResource LogRow}" ItemContainerStyle="{StaticResource List.Row}"
-                                             Padding="16,4,10,6" ScrollViewer.VerticalScrollBarVisibility="Auto" />
-                                    <TextBlock Text="还没有日志" Style="{StaticResource Text.Micro}" HorizontalAlignment="Center"
+                                             Padding="16,4,10,6" KeyDown="OnLogKeyDown" AutomationProperties.Name="运行日志内容"
+                                             ScrollViewer.VerticalScrollBarVisibility="Auto" />
+                                    <TextBlock Text="{Binding Log.EmptyText}" Style="{StaticResource Text.Small}" HorizontalAlignment="Center"
                                                VerticalAlignment="Center" IsHitTestVisible="False"
                                                Visibility="{Binding Log.IsEmpty, Converter={StaticResource BoolToVis}}" />
                                     <Button x:Name="BtnNewLogs" Style="{StaticResource Btn.Primary}" Height="26" Padding="10,0,10,0"
@@ -638,116 +708,114 @@
                         </Border>
                     </Grid>
 
-                    <!-- ───── LOD 方案 ───── -->
+                    <!-- LOD 方案的档位区域独立滚动，底部写入方式始终可用 -->
                     <Border Grid.Column="2" Background="{DynamicResource Brush.Panel}"
-                            BorderBrush="{DynamicResource Brush.Line}" BorderThickness="1">
-                        <Grid Margin="16,0,16,6">
+                            BorderBrush="{DynamicResource Brush.Line}" BorderThickness="1" IsEnabled="{Binding CanEdit}">
+                        <Grid Margin="16,0,16,8">
                             <Grid.RowDefinitions>
-                                <RowDefinition Height="40" />
-                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="42" />
                                 <RowDefinition Height="*" />
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
 
-                            <Grid Grid.Row="0">
-                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                    <TextBlock Text="LOD 方案" Style="{StaticResource Text.PageTitle}" VerticalAlignment="Center" />
-                                </StackPanel>
-                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                                    <ComboBox x:Name="CmbPreset" Style="{StaticResource Combo.Base}" Width="172"
-                                              SelectionChanged="OnPresetSelectionChanged"
-                                              ToolTip="内置预设 + 我的预设" />
+                            <DockPanel>
+                                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <ComboBox x:Name="CmbPreset" Style="{StaticResource Combo.Base}" Width="152"
+                                              AutomationProperties.Name="LOD 预设" SelectionChanged="OnPresetSelectionChanged"
+                                              ToolTip="选择固定预设、自定义或自动估算" />
                                     <Button Style="{StaticResource Btn.Bare}" Margin="4,0,0,0" Click="OnRestorePresetClick"
-                                            IsEnabled="{Binding LodPlan.ShowRestore}" ToolTip="回到预设原始参数">
-                                        <TextBlock Text="恢复" FontSize="{StaticResource FS.Micro}" />
-                                    </Button>
+                                            IsEnabled="{Binding LodPlan.ShowRestore}" ToolTip="恢复修改前的预设" Content="恢复" />
                                 </StackPanel>
-                            </Grid>
-                            <Border Grid.Row="0" Height="1" VerticalAlignment="Bottom" Background="{DynamicResource Brush.Line}" />
+                                <TextBlock Text="LOD 方案" Style="{StaticResource Text.PageTitle}" VerticalAlignment="Center" />
+                            </DockPanel>
+                            <Border Height="1" VerticalAlignment="Bottom" Background="{DynamicResource Brush.Line}" />
 
-                            <!-- 级别表格：行高 = (可用高度 - 表头) / 8；8 级刚好铺满，少量级别正常留空 -->
-                            <Grid Grid.Row="1" x:Name="LodTableHost">
-                                <StackPanel VerticalAlignment="Top">
-                            <Border x:Name="LodTopFrame" Height="1" Margin="0,6,0,0" Background="{DynamicResource Brush.LineStrong}"
-                                    RenderOptions.EdgeMode="Aliased" />
-                            <Border Background="{DynamicResource Brush.Panel}"
-                                    BorderBrush="{DynamicResource Brush.LineStrong}" BorderThickness="1,0,1,0"
-                                    RenderOptions.EdgeMode="Aliased">
+                            <ScrollViewer x:Name="LodEditor" Grid.Row="1" Margin="0,6,0,0"
+                                          HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto" Focusable="False">
                                 <Grid>
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="26" />
-                                        <RowDefinition Height="Auto" />
-                                    </Grid.RowDefinitions>
+                                    <StackPanel x:Name="LodTableHost" Visibility="{Binding LodPlan.IsAutomatic, Converter={StaticResource InverseBoolToVis}}">
+                                        <Border x:Name="LodTopFrame" Height="1" Background="{DynamicResource Brush.LineStrong}" />
+                                        <Border BorderBrush="{DynamicResource Brush.LineStrong}" BorderThickness="1,0,1,0">
+                                            <StackPanel>
+                                                <Grid Height="26" Background="{DynamicResource Brush.Sunken}">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="34" />
+                                                        <ColumnDefinition Width="82" />
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="82" />
+                                                        <ColumnDefinition Width="28" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <Border BorderBrush="{DynamicResource Brush.Line}" BorderThickness="0,0,1,0">
+                                                        <TextBlock Text="级别" Style="{StaticResource Text.Small}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                    </Border>
+                                                    <Border Grid.Column="1" BorderBrush="{DynamicResource Brush.Line}" BorderThickness="0,0,1,0">
+                                                        <TextBlock Text="距离 HU" Style="{StaticResource Text.Small}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                    </Border>
+                                                    <Border Grid.Column="2" BorderBrush="{DynamicResource Brush.Line}" BorderThickness="0,0,1,0">
+                                                        <TextBlock Text="保留比例" Style="{StaticResource Text.Small}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                    </Border>
+                                                    <Border Grid.Column="3" BorderBrush="{DynamicResource Brush.Line}" BorderThickness="0,0,1,0">
+                                                        <TextBlock Text="比例 %" Style="{StaticResource Text.Small}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                    </Border>
+                                                    <Border Grid.ColumnSpan="5" Height="1" VerticalAlignment="Bottom" Background="{DynamicResource Brush.Line}" />
+                                                </Grid>
+                                                <ItemsControl x:Name="LevelList" ItemsSource="{Binding LodPlan.Levels}" ItemTemplate="{StaticResource LevelRow}" />
+                                            </StackPanel>
+                                        </Border>
+                                        <Border x:Name="LodBottomFrame" Height="1" Background="{DynamicResource Brush.LineStrong}" />
+                                        <Button Style="{StaticResource Btn.Secondary}" Height="32" Margin="0,6,0,0"
+                                                AutomationProperties.Name="添加一级" Click="OnAddLevelClick"
+                                                Visibility="{Binding LodPlan.CanAddLevel, Converter={StaticResource BoolToVis}}">
+                                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                                <controls:Icon Kind="Plus" Size="12" IconBrush="{DynamicResource Brush.InkSoft}" />
+                                                <TextBlock Text="添加一级" Margin="6,0,0,0" VerticalAlignment="Center" />
+                                            </StackPanel>
+                                        </Button>
+                                    </StackPanel>
 
-                                    <Grid Grid.Row="0" Background="{DynamicResource Brush.Sunken}">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="34" />
-                                            <ColumnDefinition Width="82" />
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="82" />
-                                            <ColumnDefinition Width="28" />
-                                        </Grid.ColumnDefinitions>
-                                        <Border Grid.Column="0" BorderBrush="{DynamicResource Brush.Line}" BorderThickness="0,0,1,0">
-                                            <TextBlock Text="级别" Style="{StaticResource Text.Micro}" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                        </Border>
-                                        <Border Grid.Column="1" BorderBrush="{DynamicResource Brush.Line}" BorderThickness="0,0,1,0">
-                                            <TextBlock Text="距离 HU" Style="{StaticResource Text.Micro}" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                        </Border>
-                                        <Border Grid.Column="2" BorderBrush="{DynamicResource Brush.Line}" BorderThickness="0,0,1,0">
-                                            <TextBlock Text="保留比例" Style="{StaticResource Text.Micro}" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                        </Border>
-                                        <Border Grid.Column="3" BorderBrush="{DynamicResource Brush.Line}" BorderThickness="0,0,1,0">
-                                            <TextBlock Text="比例 %" Style="{StaticResource Text.Micro}" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                        </Border>
-                                        <Border Grid.Column="4" />
-                                        <Border Grid.ColumnSpan="5" Height="1" VerticalAlignment="Bottom" Background="{DynamicResource Brush.Line}" />
-                                    </Grid>
-
-                                    <ItemsControl x:Name="LevelList" Grid.Row="1" ItemsSource="{Binding LodPlan.Levels}"
-                                                  ItemTemplate="{StaticResource LevelRow}" />
+                                    <Border x:Name="AutomaticHint" VerticalAlignment="Top" Margin="0,6,0,6" Padding="12,10" BorderThickness="1"
+                                            BorderBrush="{DynamicResource Brush.Line}" Background="{DynamicResource Brush.Sunken}"
+                                            Visibility="{Binding LodPlan.IsAutomatic, Converter={StaticResource BoolToVis}}">
+                                        <StackPanel>
+                                            <TextBlock Text="扫描后自动估算" Style="{StaticResource Text.Section}" />
+                                            <TextBlock Text="扫描会按模型估算候选档位和保留比例。生成报告会列出实际面数与切换距离。"
+                                                       Style="{StaticResource Text.Small}" TextWrapping="Wrap" Margin="0,5,0,0" />
+                                            <Border Height="1" Background="{DynamicResource Brush.Line}" Margin="0,10" />
+                                            <TextBlock Text="自动备份并写入有效档位。单独导入模型时只生成 LOD 网格。"
+                                                       Style="{StaticResource Text.Small}" TextWrapping="Wrap" />
+                                        </StackPanel>
+                                    </Border>
                                 </Grid>
-                            </Border>
-                            <Border x:Name="LodTableBottom" Height="1" Background="{DynamicResource Brush.LineStrong}"
-                                    RenderOptions.EdgeMode="Aliased" />
+                            </ScrollViewer>
 
-                            <!-- 添加一级：整宽大框按钮（表格下方；8 级时隐藏） -->
-                            <Button Style="{StaticResource Btn.Secondary}" Height="32" Margin="0,4,0,0" AutomationProperties.Name="添加一级"
-                                    HorizontalAlignment="Stretch" Click="OnAddLevelClick" ToolTip="在末尾添加一级"
-                                    Visibility="{Binding LodPlan.CanAddLevel, Converter={StaticResource BoolToVis}}">
-                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
-                                    <controls:Icon Kind="Plus" Size="12" IconBrush="{DynamicResource Brush.InkSoft}" />
-                                    <TextBlock Text="添加一级" FontSize="{StaticResource FS.Small}" Margin="6,0,0,0" VerticalAlignment="Center" />
-                                </StackPanel>
-                            </Button>
-                                </StackPanel>
-                                <!-- 8 级铺满时：表格底框线画在 host 最底部，保证不会被最后一行覆盖 -->
-                                <Border x:Name="LodBottomFrame" Height="1" VerticalAlignment="Bottom"
-                                        Background="{DynamicResource Brush.LineStrong}" RenderOptions.EdgeMode="Aliased"
-                                        Visibility="{Binding LodPlan.CanAddLevel, Converter={StaticResource InverseBoolToVis}}" />
-                            </Grid>
-
-                            <!-- 写入方式（与上方控件之间加横向分隔条） -->
-                            <StackPanel Grid.Row="3" Margin="0,12,0,0">
+                            <StackPanel Grid.Row="2" Margin="0,10,0,0"
+                                        Visibility="{Binding LodPlan.IsAutomatic, Converter={StaticResource InverseBoolToVis}}">
+                                <TextBlock x:Name="LodValidation" Text="{Binding LodPlan.ValidationError}" Style="{StaticResource Text.Small}"
+                                           Foreground="{DynamicResource Brush.Err}" TextWrapping="Wrap" Margin="0,0,0,8"
+                                           Visibility="{Binding LodPlan.IsValid, Converter={StaticResource InverseBoolToVis}}" />
                                 <Border x:Name="WriteSeparator" Height="1" Background="{DynamicResource Brush.Line}" />
-                                <TextBlock Text="写入方式" Style="{StaticResource Text.Micro}" Margin="0,10,0,6" />
+                                <TextBlock Text="写入方式" Style="{StaticResource Text.Small}" Margin="0,8,0,5" />
                                 <controls:Segmented x:Name="SegWriteMode" Variant="Boxed" EqualWidths="True"
-                                                    HorizontalAlignment="Stretch" FontSize="11.5" ItemPadding="10" Height="30"
-                                                    ToolTip="{Binding LodPlan.WriteModeHint}" />
+                                                    HorizontalAlignment="Stretch" FontSize="{StaticResource FS.Small}" ItemPadding="7" Height="30"
+                                                    AutomationProperties.Name="QC 写入方式" ToolTip="{Binding LodPlan.WriteModeHint}" />
+                                <TextBlock Text="{Binding LodPlan.WriteModeHint}" Style="{StaticResource Text.Small}"
+                                           TextWrapping="Wrap" Margin="0,6,0,0" />
                             </StackPanel>
 
-                            <!-- 高级参数：带外框、文字居中 -->
-                            <StackPanel Grid.Row="4" Margin="0,12,0,0">
+                            <StackPanel Grid.Row="3" Margin="0,10,0,0">
                                 <Border Height="1" Background="{DynamicResource Brush.Line}" />
-                                <Button Style="{StaticResource Btn.Secondary}" Height="38" Margin="0,10,0,0" AutomationProperties.Name="高级参数" Click="OnAdvancedClick"
-                                        HorizontalContentAlignment="Stretch"
-                                        ToolTip="质量优先 / 覆盖手写 / 试编译 / 跳过主模型 / 并行数（在设置的第 3 页）">
-                                    <Grid HorizontalAlignment="Stretch">
-                                        <TextBlock Text="高级参数" Style="{StaticResource Text.Small}" HorizontalAlignment="Center"
-                                                   VerticalAlignment="Center" Foreground="{DynamicResource Brush.Ink}" />
-                                        <controls:Icon Kind="ChevronRight" Size="11" IconBrush="{DynamicResource Brush.InkFaint}"
-                                                       HorizontalAlignment="Right" Margin="0,0,12,0" VerticalAlignment="Center" />
-                                    </Grid>
+                                <Button Style="{StaticResource Btn.Secondary}" Height="42" Margin="0,8,0,0" Padding="10,0"
+                                        AutomationProperties.Name="高级参数" Click="OnAdvancedClick"
+                                        HorizontalContentAlignment="Stretch" ToolTip="{Binding AdvancedSummary}">
+                                    <DockPanel>
+                                        <controls:Icon DockPanel.Dock="Right" Kind="ChevronRight" Size="11" IconBrush="{DynamicResource Brush.InkSoft}"
+                                                       Margin="8,0,0,0" VerticalAlignment="Center" />
+                                        <StackPanel VerticalAlignment="Center">
+                                            <TextBlock Text="高级参数" Style="{StaticResource Text.Body}" />
+                                            <TextBlock Text="{Binding AdvancedSummary}" TextTrimming="CharacterEllipsis" Style="{StaticResource Text.Small}" />
+                                        </StackPanel>
+                                    </DockPanel>
                                 </Button>
                             </StackPanel>
                         </Grid>
@@ -772,64 +840,77 @@
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
 
-                            <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                                <StackPanel Orientation="Horizontal">
-                                    <Ellipse Tag="{Binding StatusTone}" Style="{StaticResource ToneDot}" Margin="0,0,8,0" />
-                                    <TextBlock Text="{Binding StatusTitle}" FontSize="{StaticResource FS.Section}" FontWeight="SemiBold"
-                                               VerticalAlignment="Center" Foreground="{DynamicResource Brush.Ink}" />
-                                </StackPanel>
-                                <TextBlock Text="{Binding StatusSub}" Style="{StaticResource Text.Micro}" Margin="13,3,0,0"
-                                           TextTrimming="CharacterEllipsis" />
-                            </StackPanel>
+                            <Grid VerticalAlignment="Center">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="13" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <Ellipse Tag="{Binding StatusTone}" Style="{StaticResource ToneDot}" HorizontalAlignment="Left" />
+                                <TextBlock x:Name="StatusTitle" Grid.Column="1" Text="{Binding StatusTitle}" Style="{StaticResource Text.Section}"
+                                           TextTrimming="CharacterEllipsis" AutomationProperties.LiveSetting="Polite" />
+                                <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding StatusSub}" Style="{StaticResource Text.Small}"
+                                           Margin="0,2,0,0" TextTrimming="CharacterEllipsis" TextWrapping="Wrap"
+                                           MaxHeight="30" LineHeight="15" LineStackingStrategy="BlockLineHeight">
+                                    <TextBlock.ToolTip>
+                                        <ToolTip Style="{StaticResource WrappedToolTip}" Content="{Binding StatusSub}" />
+                                    </TextBlock.ToolTip>
+                                </TextBlock>
+                            </Grid>
 
-                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="18,0,20,0">
-                                <TextBlock Text="{Binding ReadoutMainText}" FontFamily="{StaticResource Font.Latin}"
-                                           FontSize="{StaticResource FS.Readout}" FontWeight="SemiBold"
-                                           Foreground="{DynamicResource Brush.Ink}" VerticalAlignment="Center" />
-                                <TextBlock Text="{Binding ReadoutSub}" Style="{StaticResource Text.Micro}" Margin="6,10,0,0"
-                                           VerticalAlignment="Center" />
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="16,0,18,0">
+                                <TextBlock Text="{Binding ReadoutMainText}" Style="{StaticResource Text.Readout}" VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding ReadoutSub}" Style="{StaticResource Text.Small}" Margin="6,9,0,0" VerticalAlignment="Center" />
                             </StackPanel>
 
                             <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-                                <Button x:Name="BtnPreview" Style="{StaticResource Btn.Secondary}" Height="34"
-                                        Visibility="{Binding ShowStartButton, Converter={StaticResource BoolToVis}}"
-                                        IsEnabled="{Binding CanPreview}" Click="OnPreviewClick" ToolTip="只读：列出会做什么、哪些跳过">
-                                    <StackPanel Orientation="Horizontal">
-                                        <controls:Icon Kind="Scan" Size="13" IconBrush="{DynamicResource Brush.InkSoft}" />
-                                        <TextBlock Text="扫描预览" Margin="8,0,0,0" VerticalAlignment="Center" />
-                                    </StackPanel>
-                                </Button>
-                                <Button x:Name="BtnStart" Style="{StaticResource Btn.Primary}" Height="34" Margin="8,0,0,0"
-                                        Visibility="{Binding ShowStartButton, Converter={StaticResource BoolToVis}}"
-                                        IsEnabled="{Binding CanStart}" Click="OnStartClick"
-                                        ToolTip="{Binding StartHint}" ToolTipService.ShowOnDisabled="True">
-                                    <StackPanel Orientation="Horizontal">
-                                        <controls:Icon Kind="Play" Size="12" IconBrush="{DynamicResource Brush.SignalInk}" />
-                                        <TextBlock Text="开始生成" Margin="8,0,0,0" VerticalAlignment="Center" />
-                                    </StackPanel>
-                                </Button>
-                                <Button x:Name="BtnStop" Style="{StaticResource Btn.Danger}" Height="34"
-                                        Visibility="{Binding ShowStopButton, Converter={StaticResource BoolToVis}}"
-                                        Click="OnStopClick" ToolTip="停止（Esc）">
-                                    <StackPanel Orientation="Horizontal">
-                                        <controls:Icon Kind="Stop" Size="11" IconBrush="{DynamicResource Brush.Panel}" />
-                                        <TextBlock Text="停止" Margin="8,0,0,0" VerticalAlignment="Center" />
-                                    </StackPanel>
-                                </Button>
-                                <Button x:Name="BtnOpenReport" Style="{StaticResource Btn.Secondary}" Height="34" Margin="8,0,0,0"
-                                        Visibility="{Binding HasLastRun, Converter={StaticResource BoolToVis}}"
-                                        IsEnabled="{Binding CanOpenLastReport}" Click="OnOpenReportClick" ToolTip="打开上次的运行报告">
+                                <Button x:Name="BtnShowIssues" Style="{StaticResource Btn.Bare}" Height="34" Margin="0,0,6,0"
+                                        Visibility="{Binding ShowResultLog, Converter={StaticResource BoolToVis}}" Click="OnOpenErrorLogClick"
+                                        Content="查看日志" />
+                                <Button x:Name="BtnOpenReport" Style="{StaticResource Btn.Secondary}" Height="34" Margin="0,0,8,0"
+                                        Visibility="{Binding CanOpenLastReport, Converter={StaticResource BoolToVis}}"
+                                        AutomationProperties.Name="打开报告" Click="OnOpenReportClick" ToolTip="打开上次的运行报告">
                                     <StackPanel Orientation="Horizontal">
                                         <controls:Icon Kind="Report" Size="13" IconBrush="{DynamicResource Brush.InkSoft}" />
                                         <TextBlock Text="报告" Margin="7,0,0,0" VerticalAlignment="Center" />
                                     </StackPanel>
                                 </Button>
-                                <Button x:Name="BtnOpenFolder" Style="{StaticResource Btn.Secondary}" Height="34" Margin="8,0,0,0"
-                                        Visibility="{Binding HasLastRun, Converter={StaticResource BoolToVis}}"
-                                        Click="OnOpenFolderClick" ToolTip="打开输出目录">
+                                <Button x:Name="BtnOpenFolder" Style="{StaticResource Btn.Secondary}" Height="34" Margin="0,0,12,0"
+                                        Visibility="{Binding CanOpenOutputFolder, Converter={StaticResource BoolToVis}}"
+                                        AutomationProperties.Name="打开产物目录" Click="OnOpenFolderClick" ToolTip="打开本次产物所在目录">
                                     <StackPanel Orientation="Horizontal">
                                         <controls:Icon Kind="Folder" Size="13" IconBrush="{DynamicResource Brush.InkSoft}" />
-                                        <TextBlock Text="目录" Margin="7,0,0,0" VerticalAlignment="Center" />
+                                        <TextBlock Text="产物目录" Margin="7,0,0,0" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </Button>
+                                <Button x:Name="BtnPreview" Style="{StaticResource Btn.Secondary}" Height="34" MinWidth="104"
+                                        Visibility="{Binding ShowStartButton, Converter={StaticResource BoolToVis}}"
+                                        IsEnabled="{Binding CanPreview}" Click="OnPreviewClick"
+                                        AutomationProperties.Name="{Binding PreviewButtonText}" ToolTip="读取 QC 和模型，列出档位、写入方式和跳过原因">
+                                    <StackPanel Orientation="Horizontal">
+                                        <controls:Icon Kind="Scan" Size="13" IconBrush="{DynamicResource Brush.InkSoft}" />
+                                        <TextBlock Text="{Binding PreviewButtonText}" Margin="7,0,0,0" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </Button>
+                                <Button x:Name="BtnStart" Style="{StaticResource Btn.Primary}" Height="34" MinWidth="116" Margin="8,0,0,0"
+                                        Visibility="{Binding ShowStartButton, Converter={StaticResource BoolToVis}}"
+                                        IsEnabled="{Binding CanStart}" Click="OnStartClick" AutomationProperties.Name="{Binding StartButtonText}"
+                                        ToolTip="{Binding StartHint}" ToolTipService.ShowOnDisabled="True">
+                                    <StackPanel Orientation="Horizontal">
+                                        <controls:Icon Kind="Play" Size="11" IconBrush="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                                        <TextBlock Text="{Binding StartButtonText}" Margin="7,0,0,0" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </Button>
+                                <Button x:Name="BtnStop" Style="{StaticResource Btn.Danger}" Height="34" MinWidth="116"
+                                        Visibility="{Binding ShowStopButton, Converter={StaticResource BoolToVis}}"
+                                        IsEnabled="{Binding IsStopping, Converter={StaticResource InverseBoolToVis}}"
+                                        AutomationProperties.Name="{Binding StopButtonText}" Click="OnStopClick" ToolTip="取消或停止（Esc）">
+                                    <StackPanel Orientation="Horizontal">
+                                        <controls:Icon Kind="Stop" Size="11" IconBrush="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                                        <TextBlock Text="{Binding StopButtonText}" Margin="7,0,0,0" VerticalAlignment="Center" />
                                     </StackPanel>
                                 </Button>
                             </StackPanel>
@@ -850,7 +931,7 @@
                 <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
                     <controls:Icon Kind="Folder" Size="44" IconBrush="{DynamicResource Brush.Signal}" HorizontalAlignment="Center" />
                     <TextBlock Text="松开加入任务" Style="{StaticResource Text.PageTitle}" HorizontalAlignment="Center" Margin="0,14,0,0" />
-                    <TextBlock x:Name="DropHint" Text="支持工程文件夹 / QC / GLB / SMD" Style="{StaticResource Text.Small}"
+                    <TextBlock x:Name="DropHint" Text="支持工程文件夹 / QC / GLB / SMD / DMX" Style="{StaticResource Text.Small}"
                                HorizontalAlignment="Center" Margin="0,6,0,0" />
                 </StackPanel>
             </Border>

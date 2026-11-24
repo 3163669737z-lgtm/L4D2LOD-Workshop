@@ -1,18 +1,22 @@
 # 第三方组件与许可
 
-本程序（远景工坊 · L4D2 自动 LOD 工具）以单文件 exe 形式分发。以下第三方组件被编入 exe 或随程序使用。
+本程序以 GUI 和 CLI 两个可独立运行的 EXE 分发。以下第三方组件被编入两个入口。
 
 ## gltfpack / meshoptimizer
 
 - 组件：`gltfpack.exe`（Windows x64，版本 v1.3）
 - 来源：https://github.com/zeux/meshoptimizer
-- 用途：GLB 的拓扑感知减面（`meshopt_simplify`），作为减面后端内置在 exe 中，运行时释放到临时目录调用
+- 本地改动：按连通块减面及外观检查，构建补丁见 `tools/gltfpack-lod.patch`。
+- 用途：GLB 的拓扑感知减面（`meshopt_simplifyWithAttributes`）。内置在 EXE 中，运行时释放到临时目录调用。
 - 许可：MIT License
 
 ```
 MIT License
 
-Copyright (c) 2016-2024 Arseny Kapoulkine
+Copyright (c) 2016-2026 Arseny Kapoulkine
+Copyright (c) 2018-2021 Johannes Kuhlmann (cgltf)
+Copyright (c) 2010 Serge A. Zaitsev (jsmn, included in cgltf)
+Copyright (c) 2018-2021 Richard Knight (fast_obj)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -33,12 +37,11 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## Blender
+## Datamodel.NET
 
-Blender 由用户自行安装，不随本程序分发。Blender 是 GNU GPL 软件，许可与源码见
-https://www.blender.org/about/license/。本程序仅通过命令行调用用户已安装的 Blender，
-不修改、不打包 Blender 本体。
+- 组件为 DMX 二进制和 KeyValues2 编解码源码。来源为 [Artfunkel/Datamodel.NET](https://github.com/Artfunkel/Datamodel.NET/tree/8ad741f69829d85d9deacddc6a19bb965a83e942)。
+- Copyright (c) 2013 Tom Edwards。MIT 许可全文见发布包内的 `Datamodel.NET-LICENSE.txt`，源码中对应 [COPYING](src/ThirdParty/Datamodel/COPYING)。
 
 ## nekomdl
 
-`nekomdl.exe` 由用户自行提供（可选，仅"生成后试编译"使用），不随本程序分发。
+`nekomdl.exe` 由用户自行提供。CLI 的手动兼容模式可以显式调用它试编译。编译器由用户单独获取。

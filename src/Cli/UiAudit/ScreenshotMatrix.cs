@@ -20,11 +20,11 @@ namespace LodStudio.Cli.UiAudit
         public static readonly string[] MatrixStates =
         {
             "empty", "tasks", "running", "done", "failed", "nomatch", "plan", "log",
-            "min", "wide", "eight", "dialog_confirm", "dialog_info", "dialog_prompt", "toast", "drop"
+            "min", "wide", "eight", "auto_plan", "stale_plan", "cancelled", "dialog_confirm", "dialog_info", "dialog_prompt", "toast", "drop"
         };
 
         /// <summary>布局审计覆盖的状态（docs/02 §8 要求）。</summary>
-        public static readonly string[] LayoutStates = { "empty", "tasks", "running", "plan", "log", "dialog_confirm" };
+        public static readonly string[] LayoutStates = { "empty", "tasks", "running", "plan", "auto_plan", "stale_plan", "log", "dialog_confirm" };
 
         public static string Label(string state)
         {
@@ -40,7 +40,10 @@ namespace LodStudio.Cli.UiAudit
                 case "log": return "日志展开（22 行 · 含错误）";
                 case "min": return "最小窗口 1120×720";
                 case "wide": return "宽屏 1600×900";
-                case "eight": return "8 级 LOD（角色·极致）";
+                case "eight": return LodPlan.MaxLevels + " 级 LOD";
+                case "auto_plan": return "自动挡与计划";
+                case "stale_plan": return "过期预览与展开的日志";
+                case "cancelled": return "已停止";
                 case "dialog_confirm": return "危险确认框";
                 case "dialog_info": return "信息框（带详情）";
                 case "dialog_prompt": return "文本输入框";
@@ -78,7 +81,7 @@ namespace LodStudio.Cli.UiAudit
                     s.AddMixedTasks();
                     s.Vm.TestSetRunning(false);
                     s.Vm.TestSetProgress(true, 1.0, false, false);
-                    s.Vm.TestSetLastRun(true);
+                    s.Vm.TestSetLastRun(true, Path.Combine(s.OutDir, "progress.txt"), s.OutDir);
                     s.Vm.TestSetStatus("全部完成", "写入 6 个 QC · 24 个模型 · 用时 2 分 14 秒", "Ok");
                     s.Vm.TestSetReadout("24", "个减面任务");
                     s.SelectFirstTask();
@@ -88,7 +91,7 @@ namespace LodStudio.Cli.UiAudit
                     s.AddMixedTasks();
                     s.Vm.TestSetRunning(false);
                     s.Vm.TestSetProgress(true, 0.62, false, true);
-                    s.Vm.TestSetLastRun(false);
+                    s.Vm.TestSetLastRun(false, Path.Combine(s.OutDir, "progress.txt"), null);
                     s.Vm.TestSetStatus("运行失败", "5 个完成 · 1 个失败 · 详见运行日志", "Err");
                     s.Vm.TestSetReadout("5", "个减面任务");
                     s.SelectFirstTask();
@@ -102,6 +105,30 @@ namespace LodStudio.Cli.UiAudit
                 case "plan":
                     s.AddMixedTasks();
                     s.Vm.TestSetPlanPreview(6, 12, 24);
+                    break;
+
+                case "auto_plan":
+                    s.AddMixedTasks();
+                    s.Vm.LodPlan.SelectedPresetIndex = PresetLibrary.AutomaticIndex;
+                    s.Vm.TestSetPlanPreview(3, 18, 50);
+                    s.Win.TestSetLogExpanded(true);
+                    break;
+
+                case "stale_plan":
+                    s.AddMixedTasks();
+                    s.Vm.LodPlan.LoadFrom(WidgetPreviewRunner.MaxLevelPlan(), PresetLibrary.CustomName);
+                    s.Vm.TestSetPlanPreview(6, 12, 42);
+                    s.Vm.OnWriteModeChanged(1);
+                    s.Vm.TestFillLogs(22, false);
+                    s.Win.TestSetLogExpanded(true);
+                    break;
+
+                case "cancelled":
+                    s.AddMixedTasks();
+                    s.Vm.Queue.Items[0].Status = TaskStatus.Cancelled;
+                    s.Vm.TestSetLastRun(false, Path.Combine(s.OutDir, "progress.txt"), null);
+                    s.Vm.TestSetStatus("已停止", "1 项未完成 · 用时 3 秒", "Warn");
+                    s.Vm.TestSetReadout("0", "项完成");
                     break;
 
                 case "log":
@@ -124,7 +151,7 @@ namespace LodStudio.Cli.UiAudit
 
                 case "eight":
                     s.AddMixedTasks();
-                    s.Vm.LodPlan.LoadFrom(LodPlan.FromPreset(PresetLibrary.Builtins()[6]), "角色·极致（8级）");
+                    s.Vm.LodPlan.LoadFrom(WidgetPreviewRunner.MaxLevelPlan(), PresetLibrary.CustomName);
                     break;
 
                 case "dialog_confirm":
@@ -137,13 +164,13 @@ namespace LodStudio.Cli.UiAudit
                 case "dialog_info":
                     s.AddMixedTasks();
                     s.OpenInfo("运行环境诊断",
-                        "Blender：4.1.1（已探测）\n编译器 nekomdl：未设置（可选）\n权限：普通权限",
+                        "减面后端：内置 meshoptimizer\n编译器 nekomdl：未设置（可选）\n权限：普通权限",
                         "配置文件：%APPDATA%\\L4D2LOD远景工坊\\settings.ini\n临时目录：%TEMP%\\L4D2LOD远景工坊\n日志：12 条 · 0 错误");
                     break;
 
                 case "dialog_prompt":
                     s.AddMixedTasks();
-                    s.OpenPrompt("保存为预设", "预设名称", "角色·8级 轻量");
+                    s.OpenPrompt("输入名称", "名称", "测试名称");
                     break;
 
                 case "toast":
@@ -183,7 +210,7 @@ namespace LodStudio.Cli.UiAudit
 
         public static void RunMatrix(ShellAuditSession s, AuditReport report, string outDir)
         {
-            report.Section("1. 状态矩阵（16 状态 × 浅/暗）");
+            report.Section("1. 状态矩阵（" + MatrixStates.Length + " 状态 × 浅/暗）");
             var files = new List<string>();
             int shots = 0;
             int bad = 0;
@@ -283,55 +310,46 @@ namespace LodStudio.Cli.UiAudit
 
         public static void RunScaling(ShellAuditSession s, AuditReport report, string outDir)
         {
-            report.Section("6. 三档缩放（100% / 125% / 150%）");
-            report.Info("基准窗口 = 最小尺寸 1120×720（150% 时窗口 1680×1080，不超过本机窗口上限），" +
-                        "因此三种缩放的逻辑布局尺寸都是 1120×720。");
-            report.Info("做法：窗口尺寸 × scale + 根内容 LayoutTransform(scale)（TestApplyLayoutScale），" +
-                        "再以 96dpi 渲染整个窗口 → 像素尺寸 = 1120×720 × scale，等价真实 100%/125%/150% DPI。");
-            report.Info("注意：不能把 scale 再传给 UiCapture.CaptureWindow —— 它会给根内容再加一次 LayoutTransform(scale) " +
-                        "并按 96×scale dpi 渲染，形成二次缩放（实测 125% 时图像被放大到约 1.56× 且右下裁切）。");
+            report.Section("6. 三档离屏缩放（100% / 125% / 150%）");
+            report.Info("按目标 DPI 渲染 PNG，逻辑尺寸不变。覆盖两种主题、默认和最小窗口。");
+            report.Info("原生窗口 DPI 为 " + System.Windows.Media.VisualTreeHelper.GetDpi(s.Win).PixelsPerDip.ToString("P0") + "。");
 
-            const double baseW = 1120.0;
-            const double baseH = 720.0;
+            var sizes = new[] { (W: 1320, H: 860, Label: "default"), (W: 1120, H: 720, Label: "min") };
+            var states = new[] { "empty", "eight", "auto_plan", "stale_plan", "dialog_confirm" };
             double[] scales = { 1.0, 1.25, 1.5 };
-            int bad = 0;
-            foreach (string state in new[] { "empty", "tasks" })
+            int groups = 0, bad = 0;
+            foreach (ThemeKind theme in new[] { ThemeKind.Light, ThemeKind.Dark })
             {
-                foreach (double scale in scales)
+                s.SetTheme(theme);
+                foreach (var size in sizes)
                 {
-                    s.ResetToRestState();
-                    ApplyState(s, state);
-                    s.SetSize(baseW * scale, baseH * scale);
-                    s.Win.TestApplyLayoutScale(scale);
-                    UiPump.For(240);
-
-                    string pct = (scale * 100).ToString("0");
-                    string name = state + "_scale" + pct + ".png";
-                    string path = Path.Combine(outDir, name);
-                    s.Capture(path);
-
-                    int pw = 0, ph = 0;
-                    PngSize(path, out pw, out ph);
-                    int expW = (int)Math.Ceiling(baseW * scale);
-                    int expH = (int)Math.Ceiling(baseH * scale);
-                    bool sizeOk = Math.Abs(pw - expW) <= 2 && Math.Abs(ph - expH) <= 2;
-                    report.Info(name + "  (" + pw + "×" + ph + "，期望 " + expW + "×" + expH + ")  " +
-                                Label(state) + " · " + pct + "%");
-                    if (!sizeOk)
-                        report.Detail("像素尺寸与期望不符（窗口可能被系统窗口上限截断，或缩放链路失效）：实际 " + pw + "×" + ph);
-
-                    var res = LayoutAuditor.Audit(s.Root, Label(state) + " " + pct + "%");
-                    bool ok = res.Ok && sizeOk;
-                    if (!res.Ok || !sizeOk) bad++;
-                    report.Check("缩放 " + pct + "% · " + state + " 布局审计", ok,
-                        res.Summary + (sizeOk ? "" : "；像素尺寸不符"));
-                    if (!res.Ok) PrintDetails(report, res);
-
-                    s.Win.TestClearLayoutScale();
-                    s.SetSize(ShellAuditSession.DefaultWidth, ShellAuditSession.DefaultHeight);
+                    foreach (string state in states)
+                    {
+                        s.ResetToRestState();
+                        s.SetSize(size.W, size.H);
+                        ApplyState(s, state);
+                        SettleState(s, state);
+                        string tag = state + "_" + size.Label + "_" + theme.ToString().ToLowerInvariant();
+                        var layout = LayoutAuditor.Audit(s.Root, tag);
+                        if (!layout.Ok) PrintDetails(report, layout);
+                        foreach (double scale in scales)
+                        {
+                            string pct = (scale * 100).ToString("0");
+                            string name = tag + "_scale" + pct + ".png";
+                            string path = Path.Combine(outDir, name);
+                            s.Capture(path, scale);
+                            PngSize(path, out int pw, out int ph);
+                            bool sizeOk = Math.Abs(pw - size.W * scale) <= 1 && Math.Abs(ph - size.H * scale) <= 1;
+                            bool ok = layout.Ok && sizeOk;
+                            groups++;
+                            if (!ok) bad++;
+                            report.Check(name, ok, pw + "×" + ph + " · " + layout.Summary);
+                        }
+                        s.CloseDialogs();
+                    }
                 }
             }
-            report.Check("三档缩放的布局审计全部 0/0", bad == 0, "6 组（empty/tasks × 100/125/150）");
+            report.Check("三档缩放布局与截图尺寸", bad == 0, groups + " 组，失败 " + bad + " 组");
         }
 
         // ══════════════════════ 工具 ══════════════════════

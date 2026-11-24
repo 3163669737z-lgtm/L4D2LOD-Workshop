@@ -9,23 +9,10 @@ using LodStudio.Engine;
 
 namespace LodStudio.Views.Settings
 {
-    /// <summary>
-    /// 引擎页：Blender / nekomdl.exe 路径与可用性。
-    /// 探测都在后台线程（ProbeVersion 15s 超时），不阻塞界面；探测中状态行显示「检测中…」。
-    /// </summary>
     public partial class SettingsPageEngine : SettingsPageBase
     {
-        private const string BlenderFilter =
-            "Blender (blender.exe)|blender.exe|可执行文件 (*.exe)|*.exe|所有文件 (*.*)|*.*";
-
         private const string CompilerFilter =
             "nekomdl (nekomdl.exe)|nekomdl.exe|可执行文件 (*.exe)|*.exe|所有文件 (*.*)|*.*";
-
-        private bool _probeInFlight;
-        private string _probeAttemptedPath;
-        private DateTime _probeAttemptedAt = DateTime.MinValue;
-        private string _probeText = "未检测";
-        private string _probeTone = "Faint";
 
         public SettingsPageEngine()
         {
@@ -34,9 +21,6 @@ namespace LodStudio.Views.Settings
 
         protected override void OnAttached()
         {
-            CmbBackend.SelectionChanged += OnBackendChanged;
-            BtnBrowseBlender.Click += OnBrowseBlender;
-            BtnFindBlender.Click += OnFindBlender;
             BtnBrowseCompiler.Click += OnBrowseCompiler;
             BtnFindCompiler.Click += OnFindCompiler;
         }
@@ -47,176 +31,13 @@ namespace LodStudio.Views.Settings
             Syncing = true;
             try
             {
-                CmbBackend.SelectedIndex = Math.Max(0, Math.Min(1, Settings.ReduceBackend));
-                TxtBackendHint.Visibility = Settings.ReduceBackend == (int)ReduceBackend.Gltfpack
-                    ? Visibility.Visible : Visibility.Collapsed;
-
-                string blender = Settings.BlenderPath ?? "";
-                TxtBlenderPath.Text = blender;
-                TxtBlenderPath.ToolTip = string.IsNullOrEmpty(blender)
-                    ? "还没有指定 blender.exe（启动时会自动查找一次）"
-                    : blender;
-
                 string compiler = Settings.NekomdlPath ?? "";
                 TxtCompilerPath.Text = compiler;
                 TxtCompilerPath.ToolTip = string.IsNullOrEmpty(compiler) ? "还没有指定 nekomdl.exe（可选）" : compiler;
 
-                RefreshBlenderStatus();
                 RefreshCompilerStatus();
             }
             finally { Syncing = false; }
-        }
-
-        private void OnBackendChanged(object sender, SelectionChangedEventArgs e)
-        {
-            if (Syncing || Settings == null) return;
-            Settings.ReduceBackend = Math.Max(0, Math.Min(1, CmbBackend.SelectedIndex));
-            TxtBackendHint.Visibility = Settings.ReduceBackend == (int)ReduceBackend.Gltfpack
-                ? Visibility.Visible : Visibility.Collapsed;
-            Apply(false);
-            RefreshBlenderStatus();
-        }
-
-        public override void OnPageShown()
-        {
-            base.OnPageShown();
-            EnsureProbe();
-        }
-
-        /// <summary>路径存在且还没探测（或超过 30 秒）时，后台探测一次版本。其它页也可以调用（例如诊断页需要版本号）。</summary>
-        public void EnsureProbe()
-        {
-            if (Settings == null || _probeInFlight) return;
-            string path = Settings.BlenderPath ?? "";
-            if (string.IsNullOrEmpty(path) || !File.Exists(path)) return;
-            bool stale = !string.Equals(path, _probeAttemptedPath, StringComparison.OrdinalIgnoreCase) ||
-                         (DateTime.UtcNow - _probeAttemptedAt).TotalSeconds > 30;
-            if (stale) _ = ProbeAsync(false);
-        }
-
-        // ─────────────────────────── Blender ───────────────────────────
-
-        private async void OnBrowseBlender(object sender, RoutedEventArgs e)
-        {
-            try
-            {
-                string picked = await Win.Shell.PickFile("选择 blender.exe", BlenderFilter, InitialDir(Settings.BlenderPath));
-                if (string.IsNullOrEmpty(picked)) return;
-                Settings.BlenderPath = FileUtil.Normalize(picked);
-                Apply(false);
-                SyncFromSettings();
-                await ProbeAsync(true);
-            }
-            catch (Exception ex)
-            {
-                Win.Shell.Toast("选择 Blender 失败", ex.Message, ToastTone.Err);
-            }
-        }
-
-        private async void OnFindBlender(object sender, RoutedEventArgs e)
-        {
-            BtnFindBlender.IsEnabled = false;
-            SetBlenderState("正在查找…", "Signal");
-            try
-            {
-                string found = await Task.Run(() => BlenderLocator.Find(null));
-                if (string.IsNullOrEmpty(found) || !File.Exists(found))
-                {
-                    SetBlenderState("未找到：请点「浏览…」指定 blender.exe", "Err");
-                    Win.Shell.Toast("没有自动找到 Blender", "请点「浏览…」指定 blender.exe 的完整路径", ToastTone.Warn);
-                    return;
-                }
-                Settings.BlenderPath = found;
-                Apply(false);
-                SyncFromSettings();
-                await ProbeAsync(true);
-                Win.Shell.Toast("已找到 Blender", found, ToastTone.Ok);
-            }
-            catch (Exception ex)
-            {
-                SetBlenderState("自动查找失败：" + ex.Message, "Err");
-                Win.Shell.Toast("自动查找失败", ex.Message, ToastTone.Err);
-            }
-            finally
-            {
-                BtnFindBlender.IsEnabled = true;
-            }
-        }
-
-        /// <summary>后台探测 Blender 版本。announce=true 时探测失败会额外弹 Toast。</summary>
-        private async Task ProbeAsync(bool announce)
-        {
-            string path = Settings == null ? "" : (Settings.BlenderPath ?? "");
-            if (string.IsNullOrEmpty(path) || !File.Exists(path))
-            {
-                RefreshBlenderStatus();
-                if (announce) Win.Shell.Toast("路径不可用", "指定的 blender.exe 不存在，请重新选择", ToastTone.Warn);
-                return;
-            }
-            if (_probeInFlight) return;
-
-            _probeInFlight = true;
-            Win.SetEngineProbeBusy(true);
-            SetBlenderState("检测中…", "Faint");
-            if (TxtBlenderPath.Text != path) { TxtBlenderPath.Text = path; TxtBlenderPath.ToolTip = path; }
-            try
-            {
-                string version = await Task.Run(() => BlenderLocator.ProbeVersion(path, 15000));
-                _probeAttemptedPath = path;
-                _probeAttemptedAt = DateTime.UtcNow;
-                if (!string.IsNullOrEmpty(version))
-                {
-                    _probeText = version;
-                    _probeTone = "Ok";
-                    Win.SetBlenderVersion(version);
-                    SetBlenderState(version, "Ok");
-                }
-                else
-                {
-                    _probeText = "无法运行：文件存在但启动失败（可能不是 blender.exe，或被安全软件拦截）";
-                    _probeTone = "Err";
-                    Win.SetBlenderVersion("");
-                    SetBlenderState(_probeText, "Err");
-                    if (announce) Win.Shell.Toast("Blender 无法运行", "文件存在但启动失败；请确认路径正确、未被拦截", ToastTone.Err);
-                }
-            }
-            catch (Exception ex)
-            {
-                _probeText = "探测失败：" + ex.Message;
-                _probeTone = "Err";
-                SetBlenderState(_probeText, "Err");
-            }
-            finally
-            {
-                _probeInFlight = false;
-                Win.SetEngineProbeBusy(false);
-                Win.OnEngineProbeFinished();
-            }
-        }
-
-        private void RefreshBlenderStatus()
-        {
-            if (_probeInFlight) { SetBlenderState("检测中…", "Faint"); return; }
-            bool gpMode = Settings != null && Settings.ReduceBackend == (int)ReduceBackend.Gltfpack;
-            string path = Settings == null ? "" : (Settings.BlenderPath ?? "");
-            if (string.IsNullOrWhiteSpace(path))
-            {
-                if (gpMode) { SetBlenderState("无需 Blender（内置 gltfpack 后端）；装了可作回退", "Faint"); return; }
-                SetBlenderState("未找到：点「自动查找」或「浏览…」指定", "Err");
-                return;
-            }
-            if (!File.Exists(path)) { SetBlenderState("文件不存在：请重新选择或点「自动查找」", gpMode ? "Faint" : "Err"); return; }
-            if (!string.Equals(path, _probeAttemptedPath, StringComparison.OrdinalIgnoreCase))
-            {
-                SetBlenderState("未检测", "Faint");
-                return;
-            }
-            SetBlenderState(_probeText, _probeTone);
-        }
-
-        private void SetBlenderState(string text, string tone)
-        {
-            ApplyTone(TxtBlenderStatus, DotBlender, text, tone);
         }
 
         // ─────────────────────────── 编译器 ───────────────────────────

@@ -63,7 +63,7 @@ namespace LodStudio.ViewModels
         public bool DistanceInvalid { get { return _distanceInvalid; } set { Set(ref _distanceInvalid, value); } }
         public bool RatioInvalid { get { return _ratioInvalid; } set { Set(ref _ratioInvalid, value); } }
         public string Error { get { return _error; } set { Set(ref _error, value); } }
-        public bool CanRemove { get { return true; } }
+        public bool CanRemove => _owner.Count > LodPlan.MinLevels;
 
         /// <summary>从方案刷新显示（不触发写回）</summary>
         public void RefreshFromPlan()
@@ -71,6 +71,7 @@ namespace LodStudio.ViewModels
             _distanceText = _owner.Plan.Levels[_index].Distance.ToString("0.###", CultureInfo.InvariantCulture);
             _ratioText = Math.Round(_owner.Plan.Levels[_index].Ratio * 100.0, 1).ToString("0.#", CultureInfo.InvariantCulture);
             Raise("DistanceText"); Raise("RatioText"); Raise("Ratio"); Raise("Distance"); Raise("RatioPercent"); Raise("MaxRatio");
+            Raise(nameof(CanRemove));
         }
 
         public void SetInvalid(bool distance, bool ratio, string error)
@@ -95,29 +96,27 @@ namespace LodStudio.ViewModels
     {
         private LodPlan _plan = LodPlan.CreateDefault();
         private readonly ObservableCollection<LodLevelVm> _levels = new ObservableCollection<LodLevelVm>();
-        private int _selectedPresetIndex;
-        private readonly List<LodPreset> _presets = new List<LodPreset>();
+        private int _selectedPresetIndex = PresetLibrary.DefaultIndex;
+        private int _restorePresetIndex = -1;
+        private LodPlan _customPlan = LodPlan.CreateDefault();
         private string _validationError;
+        private string _inputError;
         private int _writeMode;
-        private bool _modified;
-        private string _basePresetName = "";
 
         public event EventHandler PlanChanged;
         public event EventHandler<int> EditRequested;      // 请求把焦点移到某行数字框
-        public event EventHandler PresetListChanged;
 
         public LodPlanViewModel()
         {
-            RebuildPresetList(null);
             RefreshLevels();
         }
 
         public LodPlan Plan { get { return _plan; } }
         public ObservableCollection<LodLevelVm> Levels { get { return _levels; } }
-        public IReadOnlyList<LodPreset> Presets { get { return _presets; } }
-        public ObservableCollection<string> PresetNames { get; } = new ObservableCollection<string>();
-        public string ValidationError { get { return _validationError; } }
-        public bool IsValid { get { return string.IsNullOrEmpty(_validationError); } }
+        public IReadOnlyList<string> PresetNames { get; } = PresetLibrary.Builtins()
+            .Select(p => p.Name).Concat(new[] { PresetLibrary.CustomName, PresetLibrary.AutomaticName }).ToArray();
+        public string ValidationError => _inputError ?? _validationError;
+        public bool IsValid => IsAutomatic || string.IsNullOrEmpty(ValidationError);
 
         /// <summary>0 原 QC / 1 独立 _LOD.qc / 2 仅合集</summary>
         public int WriteMode
@@ -141,21 +140,23 @@ namespace LodStudio.ViewModels
             {
                 switch (_writeMode)
                 {
-                    case 1: return "每个 QC 旁生成 _LOD.qc，原 QC 只加一行 $include。";
-                    case 2: return "不改任何 QC，只在工程根输出 _LOD合集.qc（不能编译）。";
-                    default: return "在 QC 末尾追加带标记的 $lod 块，重跑只替换不叠加。";
+                    case 1: return "在 QC 旁生成 _LOD.qc，并在原 QC 中添加 $include。";
+                    case 2: return "在工程根目录生成 _LOD合集.qc，供手动复制 $lod 块。";
+                    default: return "将有效 $lod 写回 QC 或包含文件，重复生成会更新工具块。";
                 }
             }
         }
 
         public int Count { get { return _levels.Count; } }
-        public bool CanAddLevel { get { return _levels.Count < LodPlan.MaxLevels && !IsLocked; } }
+        public bool CanAddLevel { get { return !IsAutomatic && _levels.Count < LodPlan.MaxLevels && !IsLocked; } }
         public bool IsLocked { get; set; }
+        public bool IsAutomatic => _selectedPresetIndex == PresetLibrary.AutomaticIndex;
 
         public string SpecText
         {
             get
             {
+                if (IsAutomatic) return "扫描后估算级数、距离和保留比例";
                 if (_plan.Levels.Count == 0) return "未设置";
                 var dists = string.Join("/", _plan.Levels.Select(x => LodPlan.Fmt(x.Distance)).ToArray());
                 return dists + " HU · " + _plan.Levels.Count + " 级 · " +
@@ -163,52 +164,39 @@ namespace LodStudio.ViewModels
             }
         }
 
-        public string PresetDisplay
-        {
-            get
-            {
-                var p = SelectedPreset;
-                if (p != null) return p.Name;
-                if (!string.IsNullOrEmpty(_basePresetName)) return _basePresetName + " · 已修改";
-                return "自定义";
-            }
-        }
-
-        public bool ShowRestore { get { return _modified && FindPresetByName(_basePresetName) != null; } }
-
-        public LodPreset SelectedPreset
-        {
-            get
-            {
-                if (_selectedPresetIndex < 0 || _selectedPresetIndex >= _presets.Count) return null;
-                return _presets[_selectedPresetIndex];
-            }
-        }
+        public string PresetDisplay => PresetNames[_selectedPresetIndex];
+        public bool ShowRestore => _restorePresetIndex >= 0 && !IsLocked;
 
         public int SelectedPresetIndex
         {
-            get { return _selectedPresetIndex; }
+            get => _selectedPresetIndex;
             set
             {
-                if (value < 0 || value >= _presets.Count) return;
-                if (!Set(ref _selectedPresetIndex, value)) return;
-                ApplyPreset(_presets[value]);
+                if (IsLocked || value < 0 || value >= PresetNames.Count || value == _selectedPresetIndex) return;
+                _selectedPresetIndex = value;
+                _restorePresetIndex = -1;
+                if (!IsAutomatic)
+                    _plan = value == PresetLibrary.CustomIndex
+                        ? _customPlan.Clone()
+                        : LodPlan.FromPreset(PresetLibrary.Builtins()[value]);
+                RefreshLevels();
+                Revalidate();
+                RaiseAll();
+                OnPlanChanged(-1);
             }
         }
 
+        public LodPlan CloneCustomPlan() => _customPlan.Clone();
 
-        /// <summary>用户自定义（改了数字且与预设不同）</summary>
-        public bool IsModified { get { return _modified; } }
-
-
-        // ── 方案装载 ──
-
-        public void LoadFrom(LodPlan plan, string presetName)
+        public void LoadFrom(LodPlan plan, string presetName, LodPlan customPlan = null)
         {
-            _plan = plan == null ? LodPlan.CreateDefault() : plan.Clone();
-            _basePresetName = presetName ?? "";
-            _modified = false;
-            RebuildPresetList(presetName);
+            _plan = plan?.Clone() ?? LodPlan.CreateDefault();
+            _selectedPresetIndex = PresetLibrary.SelectionFor(presetName, _plan);
+            _restorePresetIndex = -1;
+            if (customPlan != null && customPlan.Validate() == null)
+                _customPlan = customPlan.Clone();
+            if (_selectedPresetIndex == PresetLibrary.CustomIndex && _plan.Validate() == null)
+                _customPlan = _plan.Clone();
             RefreshLevels();
             Revalidate();
             RaiseAll();
@@ -218,11 +206,15 @@ namespace LodStudio.ViewModels
         public void SetPlan(LodPlan plan, bool fromUser)
         {
             if (plan == null) return;
+            if (!fromUser)
+            {
+                LoadFrom(plan, PresetDisplay);
+                return;
+            }
             _plan = plan.Clone();
             RefreshLevels();
             Revalidate();
-            RebuildPresetList(_basePresetName, keepSelection: false);
-            if (fromUser) MarkModified();
+            MarkModified();
             RaiseAll();
             OnPlanChanged(-1);
         }
@@ -249,71 +241,14 @@ namespace LodStudio.ViewModels
 
         // ── 预设 ──
 
-        private void RebuildPresetList(string presetName, bool keepSelection = true)
-        {
-            _presets.Clear();
-            PresetNames.Clear();
-            foreach (var p in PresetLibrary.Builtins()) { _presets.Add(p); PresetNames.Add(p.Name); }
-            PresetListChanged?.Invoke(this, EventArgs.Empty);
-            int sel = -1;
-            if (!string.IsNullOrEmpty(presetName))
-                for (int i = 0; i < _presets.Count; i++)
-                    if (string.Equals(_presets[i].Name, presetName, StringComparison.Ordinal)) { sel = i; break; }
-            if (sel < 0)
-            {
-                // 没有预设名（默认设置）时按参数匹配一次，避免下拉框空白
-                for (int i = 0; i < _presets.Count; i++)
-                    if (_presets[i].SameAs(_plan)) { sel = i; _basePresetName = _presets[i].Name; break; }
-            }
-            _selectedPresetIndex = sel;
-            Raise("PresetDisplay");
-            Raise("SelectedPresetIndex");
-            Raise("ShowRestore");
-        }
-
-        public void SetUserPresets(IEnumerable<LodPreset> userPresets)
-        {
-            _presets.Clear();
-            PresetNames.Clear();
-            foreach (var p in PresetLibrary.Builtins()) { _presets.Add(p); PresetNames.Add(p.Name); }
-            if (userPresets != null) foreach (var p in userPresets) { _presets.Add(p); PresetNames.Add(p.Name); }
-            PresetListChanged?.Invoke(this, EventArgs.Empty);
-            int sel = -1;
-            for (int i = 0; i < _presets.Count; i++)
-                if (string.Equals(_presets[i].Name, _basePresetName, StringComparison.Ordinal)) { sel = i; break; }
-            _selectedPresetIndex = sel;
-            Raise("SelectedPresetIndex");
-            Raise("PresetDisplay");
-        }
-
-        public LodPreset FindPresetByName(string name)
-        {
-            if (string.IsNullOrEmpty(name)) return null;
-            foreach (var p in _presets) if (string.Equals(p.Name, name, StringComparison.Ordinal)) return p;
-            return null;
-        }
-
-        public void ApplyPreset(LodPreset p)
-        {
-            if (p == null) return;
-            _plan = LodPlan.FromPreset(p);
-            _basePresetName = p.Name;
-            _modified = false;
-            EnforceAll();
-            RefreshLevels();
-            Revalidate();
-            RaiseAll();
-            OnPlanChanged(-1);
-        }
-
         public void RestorePreset()
         {
-            var p = FindPresetByName(_basePresetName);
-            if (p != null) ApplyPreset(p);
+            if (ShowRestore) SelectedPresetIndex = _restorePresetIndex;
         }
 
         public void AddLevel()
         {
+            if (IsAutomatic || IsLocked) return;
             if (!_plan.TryAddLevel()) return;
             EnforceAll();
             RefreshLevels();
@@ -326,6 +261,7 @@ namespace LodStudio.ViewModels
 
         public void RemoveLevel(int index)
         {
+            if (IsAutomatic || IsLocked) return;
             if (_plan.Count <= LodPlan.MinLevels) return;
             if (index < 0 || index >= _plan.Count) return;
             _plan.Levels.RemoveAt(index);
@@ -341,25 +277,29 @@ namespace LodStudio.ViewModels
 
         internal void OnDistanceEdited(int index, string text)
         {
+            if (IsAutomatic) return;
             if (index < 0 || index >= _plan.Levels.Count) return;
             string t = (text ?? "").Trim();
             if (t.Length == 0)
             {
-                _levels[index].SetInvalid(true, _levels[index].RatioInvalid, "距离不能为空");
+                FlagInputError(index, true, "请输入切换距离");
                 return;
             }
             double v;
-            if (!double.TryParse(t.Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out v))
+            if (!double.TryParse(t.Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out v) ||
+                double.IsNaN(v) || double.IsInfinity(v))
             {
-                _levels[index].SetInvalid(true, _levels[index].RatioInvalid, "距离必须是数字");
+                FlagInputError(index, true, "切换距离必须是有限数值");
                 return;
             }
+            bool correctedInput = _inputError != null;
+            _inputError = null;
             v = Math.Max(1.0, Math.Min(10000.0, v));                 // 合法范围夹取（1..10000 HU）
             v = Math.Max(v, MinDistanceFor(index));                   // 必须比上一级大（至少 +1 HU）
             v = Math.Min(10000.0, v);
             if (Math.Abs(v - _plan.Levels[index].Distance) < 1e-9)
             {
-                _levels[index].SetInvalid(false, _levels[index].RatioInvalid, "");
+                if (correctedInput) { Revalidate(); OnPlanChanged(index); }
                 return;
             }
             _plan.Levels[index].Distance = v;
@@ -373,25 +313,29 @@ namespace LodStudio.ViewModels
 
         internal void OnRatioEdited(int index, string text)
         {
+            if (IsAutomatic) return;
             if (index < 0 || index >= _plan.Levels.Count) return;
             string t = (text ?? "").Trim().Replace("%", "").Replace(',', '.');
             if (t.Length == 0)
             {
-                _levels[index].SetInvalid(_levels[index].DistanceInvalid, true, "比例不能为空");
+                FlagInputError(index, false, "请输入保留比例");
                 return;
             }
             double v;
-            if (!double.TryParse(t, NumberStyles.Float, CultureInfo.InvariantCulture, out v))
+            if (!double.TryParse(t, NumberStyles.Float, CultureInfo.InvariantCulture, out v) ||
+                double.IsNaN(v) || double.IsInfinity(v))
             {
-                _levels[index].SetInvalid(_levels[index].DistanceInvalid, true, "比例必须是数字");
+                FlagInputError(index, false, "保留比例必须是有限数值");
                 return;
             }
+            bool correctedInput = _inputError != null;
+            _inputError = null;
             double r = Math.Max(0.001, Math.Min(1.0, v / 100.0));     // 0.1% .. 100%
             if (index > 0) r = Math.Min(r, MaxRatioFor(index));       // 必须比上一级小（至少 -1 个百分点）
             r = Math.Max(0.001, r);
             if (Math.Abs(r - _plan.Levels[index].Ratio) < 1e-9)
             {
-                _levels[index].SetInvalid(_levels[index].DistanceInvalid, false, "");
+                if (correctedInput) { Revalidate(); OnPlanChanged(index); }
                 return;
             }
             _plan.Levels[index].Ratio = r;
@@ -403,9 +347,19 @@ namespace LodStudio.ViewModels
             OnPlanChanged(index);
         }
 
+        private void FlagInputError(int index, bool distance, string message)
+        {
+            _inputError = "第 " + (index + 1) + " 级 · " + message;
+            _levels[index].SetInvalid(distance, !distance, _inputError);
+            Raise(nameof(ValidationError));
+            Raise(nameof(IsValid));
+            OnPlanChanged(index);
+        }
+
         /// <summary>失焦/回车时把文本规范成 plan 里的规范格式（例如 010 → 10），并兜底修正顺序。</summary>
         public void NormalizeLevelText(int index)
         {
+            if (IsAutomatic) return;
             if (index < 0 || index >= _levels.Count) return;
             bool changed = EnforceAll();
             RefreshLevels();                 // 被自动强制改写的行在这里显示为强制后的值
@@ -417,6 +371,7 @@ namespace LodStudio.ViewModels
 
         public void SetDistance(int index, double value)
         {
+            if (IsAutomatic) return;
             if (index < 0 || index >= _plan.Levels.Count) return;
             double v = Math.Max(1.0, Math.Min(10000.0, Math.Round(value, 3)));
             v = Math.Min(10000.0, Math.Max(v, MinDistanceFor(index)));
@@ -429,6 +384,7 @@ namespace LodStudio.ViewModels
 
         public void SetRatio(int index, double ratio)
         {
+            if (IsAutomatic) return;
             if (index < 0 || index >= _plan.Levels.Count) return;
             double r = Math.Max(0.001, Math.Min(1.0, Math.Round(ratio, 4)));
             r = Math.Min(MaxRatioFor(index), r);
@@ -490,6 +446,7 @@ namespace LodStudio.ViewModels
 
         private void RefreshLevels()
         {
+            _inputError = null;
             while (_levels.Count < _plan.Levels.Count)
                 _levels.Add(new LodLevelVm(this, _levels.Count));
             while (_levels.Count > _plan.Levels.Count)
@@ -544,10 +501,15 @@ namespace LodStudio.ViewModels
 
         private void MarkModified()
         {
-            _modified = true;
-            Raise("IsModified");
-            Raise("PresetDisplay");
-            Raise("ShowRestore");
+            if (_selectedPresetIndex != PresetLibrary.CustomIndex)
+            {
+                _restorePresetIndex = _selectedPresetIndex;
+                _selectedPresetIndex = PresetLibrary.CustomIndex;
+                Raise("SelectedPresetIndex");
+                Raise("PresetDisplay");
+                Raise("ShowRestore");
+            }
+            if (_plan.Validate() == null) _customPlan = _plan.Clone();
         }
 
         private void OnPlanChanged(int level)
@@ -561,8 +523,9 @@ namespace LodStudio.ViewModels
         /// <summary>运行前校验：参数合法且至少一级；返回 null = 通过，否则中文原因。</summary>
         public string ValidateForRun()
         {
+            if (IsAutomatic) return null;
             Revalidate();
-            if (!IsValid) return _validationError;
+            if (!IsValid) return ValidationError;
             if (_plan.Levels.Count < LodPlan.MinLevels) return "至少要设置 " + LodPlan.MinLevels + " 级 LOD。";
             return null;
         }

@@ -3,10 +3,13 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Text;
+using System.Threading.Tasks;
 using System.Windows;
 using LodStudio.Cli.UiAudit;
 using LodStudio.Controls;
+using LodStudio.Engine;
 using LodStudio.Services;
 
 namespace LodStudio.Cli
@@ -77,11 +80,16 @@ namespace LodStudio.Cli
                     ProbeDialog(session, report, outDir);
                     return 0;
                 }
+                if (string.Equals(cli.GetOption("probe"), "automatic", StringComparison.OrdinalIgnoreCase))
+                {
+                    ProbeAutomaticPreset(session, cli, outDir);
+                    return 0;
+                }
 
                 WriteHeader(report, session, outDir);
                 report.Info("窗口：" + session.Win.ActualWidth.ToString("0") + "×" +
                             session.Win.ActualHeight.ToString("0") + "（离屏 Left=-20000,Top=-20000,ShowInTaskbar=false）");
-                report.Info("环境读数：已用 TestSetEnvStrings 固定为 Blender 4.1.1 / 编译器未设置 / 普通权限（保证截图像素可复现）");
+                report.Info("环境读数：已用 TestSetEnvStrings 固定为内置 meshoptimizer / 编译器未设置 / 普通权限（保证截图像素可复现）");
                 report.Info("");
 
                 // 先做主题往返（此时还没有任何 Toast/动画残留），再做状态矩阵
@@ -91,6 +99,7 @@ namespace LodStudio.Cli
                 RunPhase(report, outDir, "4. 对比度审计", delegate { ContrastAuditor.Run(session, report); });
                 RunPhase(report, outDir, "5. 附加断言", delegate { ExtraAssertions.Run(session, report); });
                 RunPhase(report, outDir, "6. 三档缩放", delegate { ScreenshotMatrix.RunScaling(session, report, outDir); });
+                RunPhase(report, outDir, "7. 导入、计划与写入交互", delegate { WorkflowAssertions.Run(session, report); });
 
                 if (session.UsedForceClose)
                     report.Note("关闭对话框时用了 ForceCloseForTest 兜底（说明 DialogHost.ForceCloseForTest 未走 Finish/TCS 完成）。");
@@ -121,12 +130,11 @@ namespace LodStudio.Cli
             // ── 汇总 ──
             report.Section("汇总");
             report.Info("状态数：" + ScreenshotMatrix.MatrixStates.Length + "（浅/暗各一套）");
-            report.Info("截图数：" + shots.Count + " 张 PNG（含主题往返 3 张 + 缩放 6 张）");
-            report.Info("布局审计：36 组（6 状态 × 浅/暗 × 3 尺寸）+ 6 组缩放");
+            report.Info("截图数：" + shots.Count + " 张 PNG（含主题往返与三档离屏缩放）");
             report.Info("对比度：23 组组合 × 2 主题 = 46 项（其中 2 组为允许标注的辅助网格）");
             report.Info("耗时：" + swAll.Elapsed.TotalSeconds.ToString("0.0", CultureInfo.InvariantCulture) + " 秒");
             report.Info("输出目录：" + outDir);
-            report.Info("复现命令：\"" + Path.Combine(AppInfo.ExeDir, "L4D2LOD远景工坊.exe") + "\" --ui-audit --out \"" + outDir + "\"");
+            report.Info("复现命令：\"" + System.Reflection.Assembly.GetExecutingAssembly().Location + "\" --ui-audit --out \"" + outDir + "\"");
             report.Info("");
             report.Info("检查汇总：PASS " + report.PassCount + " / FAIL " + report.FailCount + " / NOTE " + report.NoteCount);
 
@@ -215,7 +223,7 @@ namespace LodStudio.Cli
             session.ResetToRestState();
             session.AddMixedTasks();
             session.OpenInfo("运行环境诊断",
-                "Blender：4.1.1（已探测）\n编译器 nekomdl：未设置（可选）\n权限：普通权限",
+                "减面后端：内置 meshoptimizer\n编译器 nekomdl：未设置（可选）\n权限：普通权限",
                 "配置文件：%APPDATA%\\L4D2LOD远景工坊\\settings.ini\n临时目录：%TEMP%\\L4D2LOD远景工坊\n日志：12 条 · 0 错误");
             // 打开后按 150/400/900ms 三个时刻检查主按钮是否可见（排除"截图太早"的可能）
             foreach (int delay in new[] { 150, 250, 500 })
@@ -243,10 +251,38 @@ namespace LodStudio.Cli
             UiPump.For(260);
             DumpDialog(session, report, outDir, "confirm");
             session.CloseDialogs();
-            session.OpenPrompt("保存为预设", "预设名称", "角色·8级 轻量");
+            session.OpenPrompt("输入名称", "名称", "测试名称");
             UiPump.For(260);
             DumpDialog(session, report, outDir, "prompt");
             session.CloseDialogs();
+        }
+
+        private static void ProbeAutomaticPreset(ShellAuditSession session, CommandLine cli, string outDir)
+        {
+            var picker = session.Named("CmbPreset") as System.Windows.Controls.ComboBox;
+            if (picker == null || !picker.Items.Cast<string>().SequenceEqual(new[] { "保守", "平衡", "激进", "自定义", "自动" }))
+                throw new InvalidOperationException("主界面预设列表不正确");
+            picker.SelectedIndex = PresetLibrary.AutomaticIndex;
+            UiPump.Frames(3);
+            var options = session.Vm.BuildRunOptions(outDir);
+            if (!options.Automatic || options.Plan != null || session.Named("LodTableHost").Visibility != Visibility.Collapsed)
+                throw new InvalidOperationException("自动预设未切换到按模型估算");
+            session.Capture(Path.Combine(outDir, "automatic-preset.png"));
+
+            if (cli.Paths.Count == 0) return;
+            var import = session.Win.Dispatcher.InvokeAsync(new Func<Task>(() => session.Vm.AddPathsAsync(cli.Paths))).Task.Unwrap();
+            if (!UiPump.WaitTask(import, 15000)) throw new TimeoutException("导入超时");
+            import.GetAwaiter().GetResult();
+            var preview = session.Win.Dispatcher.InvokeAsync(new Func<Task>(() => session.Vm.PreviewPlanAsync())).Task.Unwrap();
+            if (!UiPump.WaitTask(preview, 15000)) throw new TimeoutException("扫描预览超时");
+            preview.GetAwaiter().GetResult();
+            var plan = session.Vm.PlanPreview?.Plan;
+            if (plan == null || !plan.Automatic || plan.ErrorCount != 0)
+                throw new InvalidOperationException("原主界面的扫描预览未生成自动计划");
+            foreach (var qc in plan.QcPlans)
+                Console.WriteLine(Path.GetFileName(qc.QcPath) + " · " + qc.SourceTriangles + " 面 · " +
+                    (qc.Levels?.Count ?? 0) + " 个候选档");
+            session.Capture(Path.Combine(outDir, "automatic-plan.png"));
         }
 
         private static List<FrameworkElement> AllButtons(DependencyObject root)
@@ -365,7 +401,7 @@ namespace LodStudio.Cli
         private static readonly string[] KeyStates =
         {
             "empty", "tasks", "running", "done", "failed", "plan", "log",
-            "dialog_confirm", "toast", "eight", "min", "wide"
+            "dialog_confirm", "toast", "eight", "min", "wide", "auto_plan", "stale_plan", "cancelled"
         };
 
         /// <summary>把关键截图复制到 docs\screenshots\main\（没有 docs 目录时只记录 NOTE）。</summary>
@@ -418,7 +454,7 @@ namespace LodStudio.Cli
 
             report.Info("归档目录：" + target);
             report.Info("已复制：" + copied + " 张（" + string.Join(", ", KeyStates) + " × 浅/暗）");
-            report.Check("关键截图已归档到 docs/screenshots/main", missing.Count == 0,
+            report.Check("关键截图已归档", missing.Count == 0,
                 copied + " 张，缺失 " + missing.Count + (missing.Count == 0 ? "" : "：" + string.Join(", ", missing.ToArray())));
         }
     }

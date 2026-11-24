@@ -8,7 +8,7 @@ using System.Text;
 namespace LodStudio.Engine
 {
     /// <summary>任务行的类型（与界面/持久化共用）。</summary>
-    public enum TaskKind { Folder = 0, Qc = 1, Glb = 2, Smd = 3 }
+    public enum TaskKind { Folder = 0, Qc = 1, Glb = 2, Smd = 3, Dmx = 4 }
 
     /// <summary>队列里的一个任务（持久化格式：kind|path）。</summary>
     public sealed class TaskRef
@@ -19,6 +19,28 @@ namespace LodStudio.Engine
         public TaskRef() { }
         public TaskRef(TaskKind kind, string path) { Kind = kind; Path = path; }
 
+        public static TaskRef FromPath(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return null;
+            try
+            {
+                path = System.IO.Path.GetFullPath(path);
+                if (Directory.Exists(path)) return new TaskRef(TaskKind.Folder, path);
+                if (!File.Exists(path)) return null;
+                switch (System.IO.Path.GetExtension(path).ToLowerInvariant())
+                {
+                    case ".qc": return new TaskRef(TaskKind.Qc, path);
+                    case ".glb": return new TaskRef(TaskKind.Glb, path);
+                    case ".smd": return new TaskRef(TaskKind.Smd, path);
+                    case ".dmx": return new TaskRef(TaskKind.Dmx, path);
+                    default: return null;
+                }
+            }
+            catch (ArgumentException) { return null; }
+            catch (NotSupportedException) { return null; }
+            catch (PathTooLongException) { return null; }
+        }
+
         public string Serialize() { return ((int)Kind).ToString(CultureInfo.InvariantCulture) + "|" + (Path ?? ""); }
 
         public static TaskRef Deserialize(string s)
@@ -28,7 +50,7 @@ namespace LodStudio.Engine
             if (bar <= 0) return null;
             int k;
             if (!int.TryParse(s.Substring(0, bar), NumberStyles.Integer, CultureInfo.InvariantCulture, out k)) return null;
-            if (k < 0 || k > 3) return null;
+            if (k < 0 || k > (int)TaskKind.Dmx) return null;
             string p = s.Substring(bar + 1);
             if (string.IsNullOrWhiteSpace(p)) return null;
             return new TaskRef((TaskKind)k, p);
@@ -42,10 +64,7 @@ namespace LodStudio.Engine
     public sealed class AppSettings
     {
         // ── 引擎 ──
-        public string BlenderPath = "";
         public string NekomdlPath = "";
-        /// <summary>减面后端：0=Blender（默认）1=内置 gltfpack（无 Blender 模式）</summary>
-        public int ReduceBackend = 0;
 
         // ── 外观 ──
         /// <summary>0=浅色 1=暗色 2=跟随系统</summary>
@@ -70,19 +89,24 @@ namespace LodStudio.Engine
         public string BackupCustomDir = "";
 
         // ── 方案（当前界面参数） ──
-        public string PresetName = "";
-        public int Levels = 4;
-        public List<double> Distances = new List<double> { 10, 15, 25, 50 };
-        /// <summary>百分比数值（99.7），与界面一致；读回不要再乘 100。</summary>
-        public List<double> Ratios = new List<double> { 99.7, 65.3, 34.0, 16.1 };
+        public string PresetName = PresetLibrary.DefaultName;
+        public int Levels;
+        public List<double> Distances;
+        /// <summary>以百分比保存，与界面一致。</summary>
+        public List<double> Ratios;
+        internal List<double> CustomDistances = new List<double>();
+        internal List<double> CustomRatios = new List<double>();
         /// <summary>0=原 QC 1=独立 _LOD.qc 2=仅合集</summary>
         public int OutputMode = 0;
 
         // ── 高级 ──
         public bool QualityFirst = true;
+        public bool AdaptiveTriangleBudget = true;
+        public bool AllowVertexUpdates;
+        public string KeepOriginalModels = "";
         public bool ForceOverwriteLod = false;
         public bool CompileAfter = false;
-        public bool NoFacial = true;
+        public bool NoFacial;
         public bool SkipMainModel = false;
         public List<string> SkipMainQcs = new List<string>();
         /// <summary>0=自动</summary>
@@ -99,13 +123,17 @@ namespace LodStudio.Engine
 
         // ── 列表 ──
         public List<TaskRef> Tasks = new List<TaskRef>();
-        public List<LodPreset> UserPresets = new List<LodPreset>();
         /// <summary>首次启动从旧版导入过一次（"v4"），避免重复导入</summary>
         public string MigratedFrom = "";
 
         // ── 派生 ──
 
         public bool DarkNow { get { return ThemeMode == 1 || (ThemeMode == 2 && SystemTheme.PrefersDark()); } }
+
+        public AppSettings()
+        {
+            SetPlan(LodPlan.CreateDefault());
+        }
 
         public LodPlan GetPlan()
         {
@@ -127,15 +155,21 @@ namespace LodStudio.Engine
             Ratios = new List<double>(plan.Ratios.Select(x => Math.Round(x * 100.0, 4)).ToArray());
         }
 
-        /// <summary>当前参数对应的预设（名字与参数完全一致才返回内置/用户预设，否则 null = 已修改）。</summary>
-        public LodPreset MatchPreset(LodPlan plan)
+        public LodPlan GetCustomPlan()
         {
-            if (plan == null) return null;
-            foreach (var p in PresetLibrary.Builtins())
-                if (p.SameAs(plan)) return p;
-            foreach (var p in UserPresets)
-                if (p.SameAs(plan)) return p;
-            return null;
+            if (CustomDistances.Count != CustomRatios.Count || CustomDistances.Count > LodPlan.MaxLevels)
+                return LodPlan.CreateDefault();
+            var plan = new LodPlan();
+            for (int i = 0; i < CustomDistances.Count; i++)
+                plan.Levels.Add(new LodLevel(CustomDistances[i], CustomRatios[i] / 100.0));
+            return plan.Validate() == null ? plan : LodPlan.CreateDefault();
+        }
+
+        public void SetCustomPlan(LodPlan plan)
+        {
+            if (plan == null || plan.Validate() != null) return;
+            CustomDistances = plan.Distances.ToList();
+            CustomRatios = plan.Ratios.Select(r => Math.Round(r * 100, 4)).ToList();
         }
 
         public void Normalize()
@@ -143,7 +177,6 @@ namespace LodStudio.Engine
             Levels = Math.Max(LodPlan.MinLevels, Math.Min(LodPlan.MaxLevels, Levels));
             Workers = Math.Max(0, Math.Min(16, Workers));
             OutputMode = Math.Max(0, Math.Min(2, OutputMode));
-            ReduceBackend = Math.Max(0, Math.Min(1, ReduceBackend));
             ThemeMode = Math.Max(0, Math.Min(2, ThemeMode));
             MinTriangles = Math.Max(0, Math.Min(2000000, MinTriangles));
             ReportLocation = Math.Max(0, Math.Min(2, ReportLocation));
@@ -158,14 +191,15 @@ namespace LodStudio.Engine
             var plan = GetPlan();
             if (plan.Validate() != null)
             {
-                var p = PresetLibrary.Builtins()[0];
-                SetPlan(LodPlan.FromPreset(p));
-                PresetName = p.Name;
+                SetPlan(LodPlan.CreateDefault());
+                if (PresetName != PresetLibrary.AutomaticName) PresetName = PresetLibrary.DefaultName;
             }
-
-            // 预设名与参数不一致时不要谎报预设名（保存时由界面决定是否写"已修改"）
-            if (!string.IsNullOrEmpty(PresetName) && MatchPreset(GetPlan()) == null)
-                PresetName = "";
+            else if (PresetLibrary.SelectionFor(PresetName, plan) == PresetLibrary.CustomIndex)
+            {
+                // Retain the active parameters when loading a retired preset.
+                PresetName = PresetLibrary.CustomName;
+                SetCustomPlan(plan);
+            }
         }
     }
 
@@ -233,9 +267,7 @@ namespace LodStudio.Engine
             sb.AppendLine("; 版本: " + AppInfo.Version + "    生成: " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture));
             sb.AppendLine();
             sb.AppendLine("[General]");
-            sb.AppendLine("BlenderPath=" + s.BlenderPath);
             sb.AppendLine("NekomdlPath=" + s.NekomdlPath);
-            sb.AppendLine("ReduceBackend=" + s.ReduceBackend);
             sb.AppendLine("ThemeMode=" + s.ThemeMode);
             sb.AppendLine("RestoreTasks=" + B(s.RestoreTasks));
             sb.AppendLine("Animations=" + B(s.Animations));
@@ -253,10 +285,15 @@ namespace LodStudio.Engine
             sb.AppendLine("Levels=" + s.Levels);
             sb.AppendLine("Distances=" + Join(s.Distances));
             sb.AppendLine("Ratios=" + Join(s.Ratios));
+            sb.AppendLine("CustomDistances=" + Join(s.CustomDistances));
+            sb.AppendLine("CustomRatios=" + Join(s.CustomRatios));
             sb.AppendLine("OutputMode=" + s.OutputMode);
             sb.AppendLine();
             sb.AppendLine("[Advanced]");
             sb.AppendLine("QualityFirst=" + B(s.QualityFirst));
+            sb.AppendLine("AdaptiveTriangleBudget=" + B(s.AdaptiveTriangleBudget));
+            sb.AppendLine("AllowVertexUpdates=" + B(s.AllowVertexUpdates));
+            sb.AppendLine("KeepOriginalModels=" + s.KeepOriginalModels);
             sb.AppendLine("ForceOverwriteLod=" + B(s.ForceOverwriteLod));
             sb.AppendLine("CompileAfter=" + B(s.CompileAfter));
             sb.AppendLine("NoFacial=" + B(s.NoFacial));
@@ -274,14 +311,6 @@ namespace LodStudio.Engine
             sb.AppendLine();
             sb.AppendLine("[SkipMain]");
             foreach (var q in s.SkipMainQcs) sb.AppendLine("qc=" + q);
-            sb.AppendLine();
-            sb.AppendLine("[UserPresets]");
-            foreach (var p in s.UserPresets)
-            {
-                var plan = new LodPlan();
-                for (int i = 0; i < p.Distances.Length; i++) plan.Levels.Add(new LodLevel(p.Distances[i], p.Ratios[i]));
-                sb.AppendLine("preset=" + PresetLibrary.EncodeUserPreset(p.Name, plan));
-            }
             sb.AppendLine();
             sb.AppendLine("[Tasks]");
             foreach (var t in s.Tasks) sb.AppendLine("task=" + t.Serialize());
@@ -312,11 +341,7 @@ namespace LodStudio.Engine
                         if (k == "task") { var t = TaskRef.Deserialize(v); if (t != null) s.Tasks.Add(t); }
                         continue;
                     }
-                    if (section == "userpresets")
-                    {
-                        if (k == "preset") { var p = PresetLibrary.DecodeUserPreset(v); if (p != null) s.UserPresets.Add(p); }
-                        continue;
-                    }
+                    if (section == "userpresets") continue;
                     if (section == "skipmain")
                     {
                         if (k == "qc" && v.Length > 0) s.SkipMainQcs.Add(v);
@@ -325,9 +350,7 @@ namespace LodStudio.Engine
 
                     switch (k)
                     {
-                        case "blenderpath": s.BlenderPath = v; break;
                         case "nekomdlpath": s.NekomdlPath = v; break;
-                        case "reducebackend": s.ReduceBackend = I(v, s.ReduceBackend); break;
                         case "thememode": s.ThemeMode = I(v, s.ThemeMode); break;
                         case "restoretasks": s.RestoreTasks = B(v, s.RestoreTasks); break;
                         case "popuponsuccess": s.PopupOnSuccess = B(v, s.PopupOnSuccess); break;
@@ -342,8 +365,13 @@ namespace LodStudio.Engine
                         case "levels": s.Levels = I(v, s.Levels); break;
                         case "distances": { var d = Doubles(v); if (d.Count > 0) s.Distances = d; break; }
                         case "ratios": { var r = Doubles(v); if (r.Count > 0) s.Ratios = r; break; }
+                        case "customdistances": s.CustomDistances = Doubles(v); break;
+                        case "customratios": s.CustomRatios = Doubles(v); break;
                         case "outputmode": s.OutputMode = I(v, s.OutputMode); break;
                         case "qualityfirst": s.QualityFirst = B(v, s.QualityFirst); break;
+                        case "adaptivetrianglebudget": s.AdaptiveTriangleBudget = B(v, s.AdaptiveTriangleBudget); break;
+                        case "allowvertexupdates": s.AllowVertexUpdates = B(v, s.AllowVertexUpdates); break;
+                        case "keeporiginalmodels": s.KeepOriginalModels = v; break;
                         case "forceoverwritelod": s.ForceOverwriteLod = B(v, s.ForceOverwriteLod); break;
                         case "compileafter": s.CompileAfter = B(v, s.CompileAfter); break;
                         case "nofacial": s.NoFacial = B(v, s.NoFacial); break;
@@ -374,7 +402,6 @@ namespace LodStudio.Engine
                 int levels = 0;
                 List<double> dist = new List<double>(), ratios = new List<double>();
                 var tasks = new List<TaskRef>();
-                var presets = new List<LodPreset>();
                 string presetName = "";
                 int outputMode = -1;
                 foreach (var raw in File.ReadAllLines(oldFile, Encoding.UTF8))
@@ -405,22 +432,14 @@ namespace LodStudio.Engine
                                     {
                                         // 旧版枚举：0 文件夹 1 QC 2 GLB 3 SMD —— 与本版一致
                                         int kk;
-                                        if (int.TryParse(kind, NumberStyles.Integer, CultureInfo.InvariantCulture, out kk) && kk >= 0 && kk <= 3)
+                                        if (int.TryParse(kind, NumberStyles.Integer, CultureInfo.InvariantCulture, out kk) && kk >= 0 && kk <= (int)TaskKind.Dmx)
                                             tasks.Add(new TaskRef((TaskKind)kk, path));
                                     }
                                 }
                             }
                             continue;
                         }
-                        if (section == "presets")
-                        {
-                            if (k == "preset")
-                            {
-                                var p = PresetLibrary.DecodeUserPreset(v);
-                                if (p != null) presets.Add(p);
-                            }
-                            continue;
-                        }
+                        if (section == "presets") continue;
                         if (section == "skipmain")
                         {
                             if (k == "qc" && v.Length > 0) s.SkipMainQcs.Add(v);
@@ -428,7 +447,6 @@ namespace LodStudio.Engine
                         }
                         switch (k)
                         {
-                            case "blenderpath": if (v.Length > 0) s.BlenderPath = v; break;
                             case "nekomdlpath": if (v.Length > 0) s.NekomdlPath = v; break;
                             case "quality": s.QualityFirst = B(v, s.QualityFirst); break;
                             case "compileafter": s.CompileAfter = B(v, s.CompileAfter); break;
@@ -466,7 +484,6 @@ namespace LodStudio.Engine
                 }
                 if (!string.IsNullOrEmpty(presetName)) s.PresetName = presetName;
                 if (outputMode >= 0 && outputMode <= 2) s.OutputMode = outputMode;
-                foreach (var p in presets) if (!s.UserPresets.Any(x => x.Name == p.Name)) s.UserPresets.Add(p);
                 foreach (var t in tasks) s.Tasks.Add(t);
                 s.MigratedFrom = "v4";
                 Save(s);

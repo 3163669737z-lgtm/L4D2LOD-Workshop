@@ -20,7 +20,7 @@ namespace LodStudio.Engine
     {
         None = 0,
         Planning = 1,
-        Blender = 2,
+        Reducing = 2,
         ConvertingSmd = 3,
         Injecting = 4,
         Compiling = 5,
@@ -55,7 +55,7 @@ namespace LodStudio.Engine
     public interface IBatchObserver
     {
         void Log(LogLevel level, string text);
-        /// <summary>done/total 为 Blender 任务粒度；total=0 表示未知。</summary>
+        /// <summary>done/total 为 减面任务粒度；total=0 表示未知。</summary>
         void Progress(int done, int total, TimeSpan elapsed);
         void Stage(BatchStage stage, string detail);
     }

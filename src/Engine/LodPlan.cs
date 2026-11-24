@@ -26,7 +26,7 @@ namespace LodStudio.Engine
     public sealed class LodPlan
     {
         public const int MinLevels = 1;
-        public const int MaxLevels = 8;
+        public const int MaxLevels = 7;
         public const double MinDistance = 0.1;
         public const double MaxDistance = 100000;
         public const double MinRatio = 0.01;
@@ -38,7 +38,7 @@ namespace LodStudio.Engine
 
         public static LodPlan CreateDefault()
         {
-            return FromPreset(PresetLibrary.Builtins()[0]);
+            return FromPreset(PresetLibrary.Builtins()[PresetLibrary.DefaultIndex]);
         }
 
         public static LodPlan FromPreset(LodPreset p)
@@ -152,41 +152,12 @@ namespace LodStudio.Engine
         }
     }
 
-    /// <summary>内置/用户预设：名称 + 描述 + 距离数组 + 比例数组（0..1）。</summary>
+    /// <summary>内置预设的名称、距离和保留比例（0..1）。</summary>
     public sealed class LodPreset
     {
         public string Name;
-        public string Description;
         public double[] Distances;
         public double[] Ratios;
-        public bool IsUser;
-
-        /// <summary>"除 LOD0 外的级数"——与旧版命名保持一致（"5级" = LOD0..LOD4）。</summary>
-        public int LevelCount { get { return Distances == null ? 0 : Distances.Length; } }
-
-        public LodPreset Clone()
-        {
-            return new LodPreset
-            {
-                Name = Name,
-                Description = Description,
-                Distances = Distances == null ? new double[0] : (double[])Distances.Clone(),
-                Ratios = Ratios == null ? new double[0] : (double[])Ratios.Clone(),
-                IsUser = IsUser
-            };
-        }
-
-        public string Summary()
-        {
-            if (Distances == null || Ratios == null || Distances.Length == 0) return "（未设置）";
-            var p = new StringBuilder();
-            for (int i = 0; i < Distances.Length; i++)
-            {
-                if (i > 0) p.Append("  ");
-                p.Append(LodPlan.Fmt(Distances[i])).Append(" HU→").Append(LodPlan.Pct(Ratios[i])).Append('%');
-            }
-            return p.ToString();
-        }
 
         public bool SameAs(LodPlan plan)
         {
@@ -201,131 +172,46 @@ namespace LodStudio.Engine
         }
     }
 
-    /// <summary>
-    /// 内置预设。基准来自官方 zoey 实测（survivor_teenangst.dx90.vtx，LOD0..4）：
-    /// 距离 10/15/25/50、面数 99.7%/65.3%/34.0%/16.1%。数值与旧版完全一致（用户认识它们）。
-    /// </summary>
     public static class PresetLibrary
     {
-        private static LodPreset[] _builtins;
+        public const string DefaultName = "平衡";
+        public const string CustomName = "自定义";
+        public const string AutomaticName = "自动";
+        public const int DefaultIndex = 1;
+        public const int CustomIndex = 3;
+        public const int AutomaticIndex = 4;
 
-        public static LodPreset[] Builtins()
+        private static readonly LodPreset[] Presets =
         {
-            if (_builtins != null) return _builtins;
-            _builtins = new[]
+            new LodPreset
             {
-                new LodPreset
-                {
-                    Name = "角色·标准（5级）",
-                    Description = "官方 zoey 实测数据：距离 10/15/25/50，面数 99.7%/65.3%/34.0%/16.1%。与原版角色表现一致。",
-                    Distances = new[] { 10.0, 15.0, 25.0, 50.0 },
-                    Ratios = new[] { 0.997, 0.653, 0.340, 0.161 }
-                },
-                new LodPreset
-                {
-                    Name = "角色·温和（5级）",
-                    Description = "沿用官方距离 10/15/25/50，但降面更保守：85%/65%/45%/30%。适合减面容易破面的模型。",
-                    Distances = new[] { 10.0, 15.0, 25.0, 50.0 },
-                    Ratios = new[] { 0.85, 0.65, 0.45, 0.30 }
-                },
-                new LodPreset
-                {
-                    Name = "角色·精简（3级）",
-                    Description = "3 级：距离 15/30/60，降面 70%/45%/25%。文件更小、切换次数更少。",
-                    Distances = new[] { 15.0, 30.0, 60.0 },
-                    Ratios = new[] { 0.70, 0.45, 0.25 }
-                },
-                new LodPreset
-                {
-                    Name = "道具·标准（2级）",
-                    Description = "静态道具：距离 30/70，降面 55%/30%。适合箱子、家具、载具。",
-                    Distances = new[] { 30.0, 70.0 },
-                    Ratios = new[] { 0.55, 0.30 }
-                },
-                new LodPreset
-                {
-                    Name = "极保守（2级）",
-                    Description = "只降到 85%/65%，距离 40/80。几乎不会破面，适合先用它验证流程。",
-                    Distances = new[] { 40.0, 80.0 },
-                    Ratios = new[] { 0.85, 0.65 }
-                },
-                new LodPreset
-                {
-                    Name = "角色·性能（6级）",
-                    Description = "6 级：10/15/25/50/100/200，降面 99.7%/85%/65%/45%/25%/12%。远距离降得更狠。",
-                    Distances = new[] { 10.0, 15.0, 25.0, 50.0, 100.0, 200.0 },
-                    Ratios = new[] { 0.997, 0.85, 0.65, 0.45, 0.25, 0.12 }
-                },
-                new LodPreset
-                {
-                    Name = "角色·极致（8级）",
-                    Description = "8 级满上限：10/15/25/40/60/90/130/180，降面 99.7%/92%/78%/62%/46%/32%/18%/10%。过渡最平滑。",
-                    Distances = new[] { 10.0, 15.0, 25.0, 40.0, 60.0, 90.0, 130.0, 180.0 },
-                    Ratios = new[] { 0.997, 0.92, 0.78, 0.62, 0.46, 0.32, 0.18, 0.10 }
-                },
-                new LodPreset
-                {
-                    Name = "载具·大件（3级）",
-                    Description = "3 级：距离 30/70/150，降面 70%/45%/20%。适合载具、大型静态物。",
-                    Distances = new[] { 30.0, 70.0, 150.0 },
-                    Ratios = new[] { 0.70, 0.45, 0.20 }
-                }
-            };
-            return _builtins;
-        }
-
-        public static LodPreset FindBuiltin(string name)
-        {
-            if (string.IsNullOrEmpty(name)) return null;
-            foreach (var p in Builtins())
-                if (string.Equals(p.Name, name, StringComparison.Ordinal)) return p;
-            return null;
-        }
-
-        /// <summary>用户预设编码：名称|距离列表|百分比列表（与旧版格式兼容，便于导入）。</summary>
-        public static string EncodeUserPreset(string name, LodPlan plan)
-        {
-            var safe = (name ?? "").Replace("|", "/").Replace("\r", " ").Replace("\n", " ").Trim();
-            return safe + "|" + string.Join(",", plan.Distances.Select(d => d.ToString("0.###", CultureInfo.InvariantCulture)).ToArray())
-                        + "|" + string.Join(",", plan.Ratios.Select(r => (r * 100.0).ToString("0.####", CultureInfo.InvariantCulture)).ToArray());
-        }
-
-        /// <summary>解析用户预设；失败返回 null（坏数据绝不让程序起不来）。</summary>
-        public static LodPreset DecodeUserPreset(string line)
-        {
-            try
+                Name = "保守",
+                Distances = new[] { 10.0, 15.0, 25.0, 50.0 },
+                Ratios = new[] { 0.95, 0.80, 0.65, 0.50 }
+            },
+            new LodPreset
             {
-                if (string.IsNullOrEmpty(line)) return null;
-                var parts = line.Split('|');
-                if (parts.Length != 3) return null;
-                var d = ParseDoubles(parts[1]);
-                var r = ParseDoubles(parts[2]);
-                if (d.Count == 0 || d.Count != r.Count || d.Count > LodPlan.MaxLevels) return null;
-                var plan = new LodPlan();
-                for (int i = 0; i < d.Count; i++) plan.Levels.Add(new LodLevel(d[i], r[i] / 100.0));
-                if (plan.Validate() != null) return null;
-                return new LodPreset
-                {
-                    Name = parts[0].Trim(),
-                    Description = "我的预设",
-                    Distances = plan.Distances,
-                    Ratios = plan.Ratios,
-                    IsUser = true
-                };
+                Name = DefaultName,
+                Distances = new[] { 10.0, 15.0, 25.0, 50.0 },
+                Ratios = new[] { 0.85, 0.65, 0.45, 0.30 }
+            },
+            new LodPreset
+            {
+                Name = "激进",
+                Distances = new[] { 10.0, 15.0, 25.0, 50.0 },
+                Ratios = new[] { 0.70, 0.50, 0.30, 0.15 }
             }
-            catch { return null; }
-        }
+        };
 
-        private static List<double> ParseDoubles(string s)
+        public static LodPreset[] Builtins() => Presets;
+
+        internal static int SelectionFor(string name, LodPlan plan)
         {
-            var list = new List<double>();
-            if (string.IsNullOrEmpty(s)) return list;
-            foreach (var part in s.Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries))
-            {
-                double v;
-                if (double.TryParse(part.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out v)) list.Add(v);
-            }
-            return list;
+            if (string.Equals(name, AutomaticName, StringComparison.Ordinal)) return AutomaticIndex;
+            for (int i = 0; i < Presets.Length; i++)
+                if (string.Equals(Presets[i].Name, name, StringComparison.Ordinal) && Presets[i].SameAs(plan))
+                    return i;
+            return CustomIndex;
         }
     }
 }

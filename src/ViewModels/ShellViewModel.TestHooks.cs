@@ -25,14 +25,14 @@ namespace LodStudio.ViewModels
                 vm.ModelCount = it.models;
                 vm.Note = it.note ?? "";
                 vm.Status = it.status;
-                if (it.status == TaskStatus.Failed) { vm.RunDetail = "已写入 0 / 2 个 QC"; vm.RunErrors = "模型 body_lod2.glb 简化失败：Blender 崩溃（退出码 -1073741819）"; }
+                if (it.status == TaskStatus.Failed) { vm.RunDetail = "已写入 0 / 2 个 QC"; vm.RunErrors = "模型 body_lod2.glb 简化失败：减面进程崩溃（退出码 -1073741819）"; }
                 if (it.status == TaskStatus.Partial) { vm.RunDetail = "已写入 2 / 3 个 QC，跳过 1"; vm.RunErrors = "weapon.qc：模型 crate_lod1.glb 输出文件不存在"; }
                 if (it.status == TaskStatus.Ok) vm.RunDetail = "已写入 3 / 3 个 QC";
                 if (it.status == TaskStatus.Skipped) vm.RunDetail = "已有手写 $lod，已跳过";
             }
             Queue.Renumber();
             Queue.UpdateCounts();
-            Raise("CanStart"); Raise("CanPreview"); Raise("ImportHint");
+            UpdateActions();
             IsPlanVisible = false;
         }
 
@@ -64,9 +64,9 @@ namespace LodStudio.ViewModels
             if (running) { ProgressIndeterminate = true; SetStatus("正在生成…", "准备减面任务", "Signal", true); }
         }
 
-        internal void TestSetEnvStrings(string blenderText, string blenderTone, string compilerText, string compilerTone, string permText, string permTone)
+        internal void TestSetEnvStrings(string reductionText, string reductionTone, string compilerText, string compilerTone, string permText, string permTone)
         {
-            BlenderText = blenderText; BlenderTone = blenderTone;
+            ReductionText = reductionText; ReductionTone = reductionTone;
             CompilerText = compilerText; CompilerTone = compilerTone;
             PermissionText = permText; PermissionTone = permTone;
             RefreshEnvStatus();
@@ -99,7 +99,7 @@ namespace LodStudio.ViewModels
                 "正在把 $lod 写回 QC（4 个）",
                 "✔ actor.qc → 追加 4 级 $lod",
                 "✔ weapon.qc → 追加 4 级 $lod",
-                "═══ 开始生成：角色·标准（5级） · 6 个 QC · 24 个任务 ═══",
+                "═══ 开始生成：平衡 · 6 个 QC · 24 个任务 ═══",
                 "简化完成：成功 24 / 24，用时 1.8 分钟",
                 "总报告：_LOD运行报告_1115_184210.md",
                 "════ 全部完成 ════"
@@ -116,11 +116,13 @@ namespace LodStudio.ViewModels
 
         internal void TestSetPlanPreview(int qcCount, int modelCount, int jobCount)
         {
+            var options = BuildRunOptions(null);
             var plan = new BatchPlan
             {
                 RootDir = @"E:\L4D2\求生之路2 MOD制作\工程文件\8人自动编译",
                 BuiltAt = DateTime.Now,
-                PresetName = "角色·标准（5级）",
+                Automatic = options.Automatic,
+                PresetName = options.PresetName,
                 Plan = LodPlan.ClonePlan(),
                 JobCount = jobCount,
                 TotalSourceTriangles = 428800,
@@ -134,6 +136,11 @@ namespace LodStudio.ViewModels
                     Action = i == 1 ? BatchQcAction.Skip : BatchQcAction.Process,
                     Reason = i == 1 ? "已有手写 $lod（在 actor_main.qc）；要覆盖请在高级设置里勾选「覆盖手写 $lod」" : ""
                 };
+                if (plan.Automatic)
+                {
+                    qp.SourceTriangles = 169498;
+                    qp.Levels = AutomaticLod.Plan(qp.SourceTriangles);
+                }
                 for (int m = 0; m < Math.Max(1, modelCount / Math.Max(1, qcCount)); m++)
                 {
                     var pm = new PlannedModel
@@ -143,27 +150,26 @@ namespace LodStudio.ViewModels
                         Dir = @"E:\L4D2\...\models\SMD",
                         Size = 1024 * 1024,
                         Triangles = 12964,
-                        Jobs = new List<BlenderJobSpec>()
+                        Jobs = new List<ReductionJob>()
                     };
-                    for (int j = 0; j < LodPlan.Plan.Count; j++) pm.Jobs.Add(new BlenderJobSpec());
+                    for (int j = 0; j < LodPlan.Plan.Count; j++) pm.Jobs.Add(new ReductionJob());
                     qp.Models.Add(pm);
                 }
                 foreach (var pm0 in qp.Models) plan.Models.Add(pm0);   // 摘要按 plan.Models.Count 显示
                 plan.QcPlans.Add(qp);
             }
-            PlanPreview = new PlanPreviewViewModel(plan);
-            IsPlanVisible = true;
+            ShowPreview(CapturePlanRequest(), plan);
         }
 
-        internal void TestSetLastRun(bool ok)
+        internal void TestSetLastRun(bool ok, string reportPath, string outputDir)
         {
             _lastRunAt = DateTime.Now.AddMinutes(-3);
             _lastOk = ok ? 6 : 4;
             _lastPartial = 0;
             _lastFailed = ok ? 0 : 1;
-            _lastReportPath = null;
-            _lastOutputDir = null;
-            Raise("HasLastRun"); Raise("LastRunText"); Raise("CanOpenLastReport"); Raise("ImportHint");
+            _lastReportPath = reportPath;
+            _lastOutputDir = outputDir;
+            Raise("HasLastRun"); Raise("LastRunText"); Raise("CanOpenLastReport"); Raise("CanOpenOutputFolder");
         }
 
         internal void TestResetState()
@@ -173,7 +179,9 @@ namespace LodStudio.ViewModels
             Queue.FilterIndex = 0;
             Queue.UpdateCounts();
             Log.Clear();
+            Log.Filter = 0;
             PlanPreview = null;
+            _previewRequest = null;
             IsPlanVisible = false;
             IsRunning = false;
             ProgressVisible = false;
@@ -183,9 +191,8 @@ namespace LodStudio.ViewModels
             _lastRunAt = DateTime.MinValue;
             _lastReportPath = null;
             _lastOutputDir = null;
-            Raise("HasLastRun"); Raise("LastRunText"); Raise("CanOpenLastReport");
-            SetStatus("准备就绪", "把工程文件夹、QC 或模型拖进窗口，或点「导入」", "Normal", false);
-            SetReadout(0, "项就绪");
+            Raise("HasLastRun"); Raise("LastRunText"); Raise("CanOpenLastReport"); Raise("CanOpenOutputFolder");
+            UpdateQueueStatus();
 
         }
     }

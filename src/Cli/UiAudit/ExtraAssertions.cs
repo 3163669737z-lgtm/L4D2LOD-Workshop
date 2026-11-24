@@ -16,7 +16,7 @@ namespace LodStudio.Cli.UiAudit
     ///  - Toast 与 HUD / 日志矩形不相交；
     ///  - 危险对话框默认焦点在「取消」、Enter 不触发确认、Esc 关闭且 Task 完成；
     ///  - 日志计数文本与行数一致；
-    ///  - 8 级 LOD 在 1320×860 / 1280×840 下级别区不需要滚动（1120×720 只记录）；
+    ///  - LOD 上限与产品一致，紧凑窗口能局部滚到最后一档；
     ///  - 搜索框有文字时清除按钮可见、无文字时隐藏；
     ///  - HUD 按钮随运行状态切换（扫描预览/开始生成 ↔ 停止）；
     ///  - 空状态 / 无匹配 / 计划视图三种画面各自出现。
@@ -35,7 +35,7 @@ namespace LodStudio.Cli.UiAudit
             LogCountText(s, report);
             LogBodyText(s, report);
             QueueRowText(s, report);
-            EightLevelScroll(s, report);
+            MaxLevelScroll(s, report);
             SearchClearButton(s, report);
             StateSwitches(s, report);
             PlanViewContent(s, report);
@@ -172,7 +172,7 @@ namespace LodStudio.Cli.UiAudit
             s.AddMixedTasks();
             UiPump.For(80);
 
-            s.OpenInfo("运行环境诊断", "Blender：4.1.1（已探测）\n编译器 nekomdl：未设置（可选）\n权限：普通权限",
+            s.OpenInfo("运行环境诊断", "减面后端：内置 meshoptimizer\n编译器 nekomdl：未设置（可选）\n权限：普通权限",
                 "配置文件：%APPDATA%\\L4D2LOD远景工坊\\settings.ini\n临时目录：%TEMP%\\L4D2LOD远景工坊\n日志：12 条 · 0 错误");
             bool infoOk = ButtonShown(s, "确定");
             string infoPanel = PanelSize(s);
@@ -184,7 +184,7 @@ namespace LodStudio.Cli.UiAudit
             string confirmPanel = PanelSize(s);
             s.CloseDialogs();
 
-            s.OpenPrompt("保存为预设", "预设名称", "角色·8级 轻量");
+            s.OpenPrompt("输入名称", "名称", "测试名称");
             bool promptOk = ButtonShown(s, "取消") && ButtonShown(s, "确定");
             string promptPanel = PanelSize(s);
             s.CloseDialogs();
@@ -301,14 +301,7 @@ namespace LodStudio.Cli.UiAudit
                 "名称=" + foundName + "，路径=" + foundPath + "，类型=" + foundKind);
         }
 
-        // ══════════════════════ 计划视图内容 / 覆盖层 z 序 ══════════════════════
-
-        /// <summary>
-        /// 计划视图两项机检：
-        ///  1) 计划行必须有文字（PlanQcRowVm 的字段若不是属性，WPF 绑定会静默失败 → 6 行全空白）；
-        ///  2) 计划覆盖层（PlanOverlay，不透明）之后声明的兄弟（队列页脚 + 1px 分隔线）不能压在它上面
-        ///     （WPF 里后声明的兄弟 z 序更高，页脚会画在计划视图底部按钮上）。
-        /// </summary>
+        // ══════════════════════ 计划视图内容与键盘入口 ══════════════════════
         private static void PlanViewContent(ShellAuditSession s, AuditReport report)
         {
             s.ResetToRestState();
@@ -339,34 +332,9 @@ namespace LodStudio.Cli.UiAudit
                 "非空文本块 " + nonEmpty + " 个（6 行 × 至少 2 列）" +
                 (sample.Length > 0 ? "，示例=\"" + Clip(sample) + "\"" : "，计划行全空白（绑定失败）"));
 
-            // 覆盖层 z 序：PlanOverlay 之后声明的可见兄弟不应与它相交
-            string hit = "";
-            if (overlay != null)
-            {
-                var parent = UiTree.ParentOf(overlay);
-                if (parent != null)
-                {
-                    int count = System.Windows.Media.VisualTreeHelper.GetChildrenCount(parent);
-                    int index = -1;
-                    for (int i = 0; i < count; i++)
-                    {
-                        if (ReferenceEquals(System.Windows.Media.VisualTreeHelper.GetChild(parent, i), overlay)) { index = i; break; }
-                    }
-                    Rect overlayRect = s.RectOf(overlay);
-                    for (int i = index + 1; i < count; i++)
-                    {
-                        var sibling = System.Windows.Media.VisualTreeHelper.GetChild(parent, i) as FrameworkElement;
-                        if (sibling == null || !sibling.IsVisible) continue;
-                        Rect r = s.RectOf(sibling);
-                        double area = UiTree.IntersectArea(overlayRect, r);
-                        if (area > 1.0)
-                            hit += UiTree.Describe(sibling) + " " + UiTree.RectText(r) + " 相交 " +
-                                   area.ToString("0.#", CultureInfo.InvariantCulture) + "px²；";
-                    }
-                }
-            }
-            report.Check("计划视图不被队列页脚覆盖（PlanOverlay 与页脚 z 序正确）", hit.Length == 0,
-                hit.Length == 0 ? "覆盖层之后的兄弟无相交" : "压住计划视图的兄弟：" + hit);
+            report.Check("计划与队列互斥，键盘可返回队列",
+                s.Named("QueuePane")?.IsVisible == false && s.Named("BtnClosePlan")?.IsEnabled == true,
+                "预览期间隐藏队列工具和列表");
         }
 
         private static string Clip(string s)
@@ -375,47 +343,43 @@ namespace LodStudio.Cli.UiAudit
             return s.Length <= 24 ? s : s.Substring(0, 24) + "…";
         }
 
-        // ══════════════════════ 8 级 LOD 滚动 ══════════════════════
+        // ══════════════════════ LOD 表格滚动 ══════════════════════
 
-        private static void EightLevelScroll(ShellAuditSession s, AuditReport report)
+        private static void MaxLevelScroll(ShellAuditSession s, AuditReport report)
         {
             s.ResetToRestState();
             s.AddMixedTasks();
-            s.Vm.LodPlan.LoadFrom(LodPlan.FromPreset(PresetLibrary.Builtins()[6]), "角色·极致（8级）");
+            s.Vm.LodPlan.LoadFrom(WidgetPreviewRunner.MaxLevelPlan(), PresetLibrary.CustomName);
             UiPump.For(260);
 
             int levelCount = s.Vm.LodPlan.Levels.Count;
-            report.Check("8 级 LOD 已装载（8 级 · 「添加一级」隐藏）",
-                levelCount == 8 && !s.Vm.LodPlan.CanAddLevel, "级别数=" + levelCount + "，CanAddLevel=" + s.Vm.LodPlan.CanAddLevel);
+            report.Check("LOD 档位达到上限",
+                levelCount == LodPlan.MaxLevels && !s.Vm.LodPlan.CanAddLevel, "级别数=" + levelCount + "，CanAddLevel=" + s.Vm.LodPlan.CanAddLevel);
 
-            foreach (var size in new[] { new { W = 1320.0, H = 860.0 }, new { W = 1280.0, H = 840.0 }, new { W = 1120.0, H = 720.0 } })
+            foreach (var size in new[] { (W: 1320.0, H: 860.0), (W: 1120.0, H: 720.0), (W: 960.0, H: 550.0) })
             {
                 s.SetSize(size.W, size.H);
                 UiPump.For(300);
-                var levels = s.Named("LevelList");
-                var sep = s.Named("WriteSeparator");
-                var items = levels as ItemsControl;
-                int rows = items != null ? items.Items.Count : 0;
-                FrameworkElement lastRow = rows > 0 && items != null
-                    ? items.ItemContainerGenerator.ContainerFromIndex(rows - 1) as FrameworkElement : null;
-                Rect last = lastRow != null ? UiTree.Slot(lastRow, s.Root) : Rect.Empty;
-                Rect sepRect = sep != null ? UiTree.Slot(sep, s.Root) : Rect.Empty;
-                bool noScroll = UiTree.FindAncestor<ScrollViewer>(levels) == null;
+                var items = (ItemsControl)s.Named("LevelList");
+                var scroll = (ScrollViewer)s.Named("LodEditor");
+                int rows = items.Items.Count;
+                var lastRow = items.ItemContainerGenerator.ContainerFromIndex(rows - 1) as FrameworkElement;
                 double rowHeight = lastRow != null ? lastRow.ActualHeight : -1;
-                report.Check("8 级 LOD · " + size.W.ToString("0") + "×" + size.H.ToString("0") + " 行高固定 40（不铺满，4–7 级正常留空）",
-                    noScroll && rows == 8 && Math.Abs(rowHeight - 40.0) <= 1.0,
-                    "行数=" + rows + "，最后一行高=" + Num(rowHeight) + "，ScrollViewer=" + !noScroll +
-                    "，表格底到分隔线=" + Num(!last.IsEmpty && !sepRect.IsEmpty ? sepRect.Top - last.Bottom : -999));
-
-                var bottomFrame = s.Named("LodBottomFrame");
-                Rect bf = bottomFrame != null ? UiTree.Slot(bottomFrame, s.Root) : Rect.Empty;
-                var topFrame = s.Named("LodTopFrame");
-                Rect tf = topFrame != null ? UiTree.Slot(topFrame, s.Root) : Rect.Empty;
-                report.Check("8 级 LOD · " + size.W.ToString("0") + "×" + size.H.ToString("0") + " 外框上下边线可见",
-                    bottomFrame != null && topFrame != null && bf.Height >= 0.5 && bf.Width > 100 &&
-                    tf.Height >= 0.5 && tf.Width > 100,
-                    "上边线=" + Num(tf.Top) + "/h" + Num(tf.Height) + "/w" + Num(tf.Width) +
-                    "，下边线=" + Num(bf.Top) + "/h" + Num(bf.Height) + "/w" + Num(bf.Width));
+                bool needsScroll = size.H < 720;
+                if (needsScroll)
+                {
+                    scroll.ScrollToEnd();
+                    UiPump.Frames(3);
+                }
+                Rect viewport = s.RectOf(scroll);
+                Rect last = s.RectOf(lastRow);
+                Rect output = s.RectOf(s.Named("SegWriteMode"));
+                Rect action = s.RectOf(s.Named("BtnStart"));
+                report.Check("LOD 档位区 · " + size.W + "×" + size.H,
+                    rows == LodPlan.MaxLevels && Math.Abs(rowHeight - 40) <= 1 &&
+                    (scroll.ScrollableHeight > 0.5) == needsScroll && !last.IsEmpty && last.Bottom <= viewport.Bottom + 1 &&
+                    !output.IsEmpty && output.Top >= viewport.Bottom - 1 && !action.IsEmpty && action.Bottom < size.H,
+                    "最后一行高=" + Num(rowHeight) + "，滚动范围=" + Num(scroll.ScrollableHeight));
             }
         }
 

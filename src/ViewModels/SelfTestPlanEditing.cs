@@ -9,8 +9,42 @@ namespace LodStudio.ViewModels
         private static LodPlanViewModel NewVm()
         {
             var vm = new LodPlanViewModel();
-            vm.LoadFrom(LodPlan.CreateDefault(), "角色·标准（5级）");
+            vm.LoadFrom(LodPlan.CreateDefault(), PresetLibrary.DefaultName);
             return vm;
+        }
+
+        [SelfTest("LOD 方案：内置预设、自定义和自动，旧方案参数可继续编辑")]
+        public static void PresetSelection(SelfTestContext ctx)
+        {
+            var vm = NewVm();
+            ctx.AssertEqual("保守,平衡,激进,自定义,自动", string.Join(",", vm.PresetNames), "减面选项");
+            ctx.AssertEqual(PresetLibrary.DefaultName, vm.PresetDisplay, "默认使用平衡");
+
+            vm.Levels[0].DistanceText = "12";
+            ctx.AssertEqual(PresetLibrary.CustomName, vm.PresetDisplay, "修改后选中自定义");
+            string edited = vm.Plan.Signature();
+            vm.RestorePreset();
+            ctx.AssertEqual(PresetLibrary.DefaultName, vm.PresetDisplay, "可以恢复编辑前的预设");
+            vm.SelectedPresetIndex = 2;
+            ctx.AssertEqual("激进", vm.PresetDisplay, "可以切换到激进");
+            vm.SelectedPresetIndex = PresetLibrary.CustomIndex;
+            ctx.AssertEqual(edited, vm.Plan.Signature(), "重新选自定义可恢复已编辑的方案");
+
+            var settings = new AppSettings { PresetName = "旧预设" };
+            settings.SetPlan(vm.Plan);
+            settings.Normalize();
+            ctx.AssertEqual(PresetLibrary.CustomName, settings.PresetName, "旧预设转为自定义");
+            ctx.AssertEqual(edited, settings.GetCustomPlan().Signature(), "迁移保留当前参数");
+
+            vm.SelectedPresetIndex = PresetLibrary.AutomaticIndex;
+            ctx.Assert(vm.IsAutomatic && !vm.CanAddLevel, "自动档由工具规划级数");
+            vm.Levels[0].RatioText = "52";
+            ctx.AssertEqual(PresetLibrary.AutomaticName, vm.PresetDisplay, "自动模式不接受手动行编辑");
+            settings.PresetName = PresetLibrary.AutomaticName;
+            settings.Normalize();
+            ctx.AssertEqual(PresetLibrary.AutomaticName, settings.PresetName, "设置记住自动档");
+            vm.SelectedPresetIndex = PresetLibrary.CustomIndex;
+            ctx.AssertEqual(edited, vm.Plan.Signature(), "退出自动后仍可恢复自定义方案");
         }
 
         [SelfTest("LOD 方案：距离/比例边输入边生效（不需要回车）")]
@@ -35,11 +69,11 @@ namespace LodStudio.ViewModels
             ctx.AssertEqual("50", vm.Levels[0].RatioText, "输入文本不应被改写");
             ctx.AssertEqual(0.49, vm.Plan.Levels[1].Ratio, 1e-9, "第 2 级应自动压到 49%");
             ctx.Assert(vm.IsValid, "自动压低后方案应保持合法");
-            vm.Levels[0].RatioText = "99.7";
-            ctx.Assert(vm.IsValid, "改回 99.7 后应重新合法");
+            vm.Levels[0].RatioText = "85";
+            ctx.Assert(vm.IsValid, "改回 85 后应重新合法");
 
             // 百分比派生值跟着走
-            ctx.AssertEqual(99.7, vm.Levels[0].RatioPercent, 0.05, "RatioPercent");
+            ctx.AssertEqual(85, vm.Levels[0].RatioPercent, 0.05, "RatioPercent");
         }
 
         [SelfTest("LOD 方案：拖动比例条后百分比文本同步；失焦整理格式")]
@@ -94,11 +128,11 @@ namespace LodStudio.ViewModels
         [SelfTest("LOD 方案：比例自动保持递减（比上一级大 → 强制上一级 -1）")]
         public static void RatioAutoCorrect(SelfTestContext ctx)
         {
-            var vm = NewVm();                                  // 99.7 / 65.3 / 34 / 16.1
-            vm.Levels[1].RatioText = "99";                     // 上一级 99.7 → 上限 98.7
-            ctx.AssertEqual(0.987, vm.Plan.Levels[1].Ratio, 1e-9, "第 2 级比例应强制为 98.7%");
+            var vm = NewVm();                                  // 85 / 65 / 45 / 30
+            vm.Levels[1].RatioText = "99";                     // 上一级 85 → 上限 84
+            ctx.AssertEqual(0.84, vm.Plan.Levels[1].Ratio, 1e-9, "第 2 级比例应强制为 84%");
             vm.NormalizeLevelText(1);
-            ctx.AssertEqual("98.7", vm.Levels[1].RatioText, "失焦后显示强制值");
+            ctx.AssertEqual("84", vm.Levels[1].RatioText, "失焦后显示强制值");
 
             // 降低第 1 级：后面所有级别都要被压着递减
             vm.Levels[0].RatioText = "10";
@@ -114,10 +148,10 @@ namespace LodStudio.ViewModels
         public static void RatioBarCap(SelfTestContext ctx)
         {
             var vm = NewVm();
-            ctx.AssertEqual(0.987, vm.Levels[1].MaxRatio, 1e-9, "第 2 级比例条上限=98.7%");
+            ctx.AssertEqual(0.84, vm.Levels[1].MaxRatio, 1e-9, "第 2 级比例条上限=84%");
             vm.Levels[1].Ratio = 0.995;                        // 模拟比例条拖到超过上限
-            ctx.Assert(vm.Plan.Levels[1].Ratio <= 0.987 + 1e-9, "比例不应超过上限");
-            ctx.AssertEqual(0.987, vm.Plan.Levels[1].Ratio, 1e-9, "被夹到 98.7%");
+            ctx.Assert(vm.Plan.Levels[1].Ratio <= 0.84 + 1e-9, "比例不应超过上限");
+            ctx.AssertEqual(0.84, vm.Plan.Levels[1].Ratio, 1e-9, "被夹到 84%");
         }
     }
 }

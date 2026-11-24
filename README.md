@@ -1,181 +1,50 @@
-# 远景工坊 · L4D2 自动 LOD 工具
+# 远景工坊 · 求生之路 2 自动 LOD
 
-给《求生之路 2》的模型工程自动生成多级 LOD。拖进工程、看一眼计划、点开始，剩下交给它。
+Windows 10/11 x64 人物模组工具。支持工程文件夹、QC、GLB、参考 SMD 和 DMX。GUI 和 CLI 共用内置 meshoptimizer 后端，解压后可离线运行。
 
-**v0.2.0** · Windows 10 / 11 · 单文件 exe · [下载最新版](https://github.com/3163669737z-lgtm/L4D2LOD-Workshop/releases/latest) · [English ↓](#english)
+[下载 Windows 分发包和源码包](https://github.com/3163669737z-lgtm/L4D2LOD-Workshop/releases/latest)
 
-## 它帮你做什么
+## GUI
 
-- **找 QC**：从工程里找出真正会参与编译的 QC，展开 `$include`，把模型引用收齐。
-- **做 LOD**：按距离生成 `*_lod1.glb`、`*_lod2.glb`……默认 4 级。
-- **写回 QC**：把 `$lod { replacemodel … }` 幂等写进去，重复跑不会叠加。
-- **留后路**：改过的 QC 旁都有 `.lodbak`，想还原改回 `.qc` 就行。
+双击 `L4D2LOD远景工坊.exe`，将工程文件夹、QC 或模型拖入窗口，也可通过队列中的「导入」选择文件或文件夹。将「LOD 方案」设为「自动」，点「扫描预览」查看候选档位、写入方式和跳过原因。点「按计划生成」执行当前预览。改动队列或有效参数后，先重新扫描。生成后可从底栏打开报告和产物目录。实际面数、估算距离和写入的 Source 阈值见报告。
 
-它不碰你的 `.bat`、材质、贴图和模型源文件，也不替你编译。生成完照旧运行你自己的 `批量编译.bat`。
+自动模式下，导入 QC 或包含 QC 的文件夹会处理工程引用，导入独立模型只在模型旁写对应格式的 LOD 文件。处理多个模型时可一次导入多个文件。
 
-## 两种减面后端
-
-| 后端 | 说明 | 适合 |
-|---|---|---|
-| **Blender**（默认） | 逐连通块精细减面，质量优先；需要安装 Blender 4.0 / 4.1 / 4.2 | 机器上有 Blender，想要更好的细节 |
-| **内置 gltfpack**（v0.2.0 新增，实验） | 不用装 Blender，速度约快一个量级；Body 内缩同样生效 | 想开箱即用、快速出 LOD |
-
-在「设置 → 引擎 → 减面后端」里切换。选「内置 gltfpack」时，Blender 仍可保留作回退，不会偷偷切换。
-
-## 五分钟上手
-
-1. 从 [Releases](https://github.com/3163669737z-lgtm/L4D2LOD-Workshop/releases/latest) 下载分发包，解压到一个**有写权限**的目录。桌面、D 盘都行，别放 `C:\Program Files`。
-2. 双击 `L4D2LOD远景工坊.exe`。第一次先到「设置 → 引擎」选后端：有 Blender 就用默认，没装就选「内置 gltfpack」。
-3. 把工程文件夹拖进窗口，或点「导入文件夹」。工具会先只读扫描，不会改任何文件。
-4. 点「扫描预览」，看看哪些 QC 会处理、哪些会跳过、为什么。没问题就点「开始生成」。
-5. 生成完，回到自己的工程按平时流程编译。想还原，就把 `.lodbak` 改回 `.qc`。
-
-> 第一次建议拿**工程副本**试跑。默认 4 级 LOD（10 / 15 / 25 / 50 HU）和官方角色参数一致，不确定就用默认。
-
-## 下载与系统要求
-
-- 分发包：`farsight-l4d2-lod-studio-v0.2.0-release.zip`（exe + 完整使用说明 + 第三方声明）
-- 源码包：`farsight-l4d2-lod-studio-v0.2.0-source.zip`
-- Windows 10 1903+ / Windows 11；系统自带 .NET Framework 4.8，不需要 Python，也不需要命令行
-- Blender 只在选 Blender 后端时需要；`nekomdl.exe` 只在开「生成后试编译」时需要
-- 内置 gltfpack 来自 meshoptimizer（MIT）
-
-## 安全与还原
-
-- 改 QC 前先备份，所有备份成功后才写入；写入用原子替换，失败会回滚。
-- `.lodbak` 不会被覆盖；之后每次修改会另存带时间戳的备份。
-- QC 只读、编码异常或工具标记块损坏时，直接拒绝修改，不会硬写。
-- 同一个模型被多个 QC 引用时，只减面一次。
-
-## 命令行（可选）
+## CLI
 
 ```powershell
-L4D2LOD远景工坊.exe --plan  <工程目录>   # 只读预览，输出 plan.json
-L4D2LOD远景工坊.exe --batch <工程目录>   # 无界面批量执行
-L4D2LOD远景工坊.exe --backend gltfpack --batch <工程目录>
-L4D2LOD远景工坊.exe --selftest           # 引擎自测
+.\L4D2LOD-cli.exe --help
+.\L4D2LOD-cli.exe --plan 'D:\工程\survivor.qc' --out 'D:\LOD报告\预览'
+.\L4D2LOD-cli.exe --batch 'D:\工程\survivor.qc' --out 'D:\LOD报告\生成'
+.\L4D2LOD-cli.exe --batch 'D:\模型\角色.glb' 'D:\模型\配件.smd'
 ```
 
-`--plan` 不写模型和 QC；`--batch` 的报告和 `batch.json` 默认写到临时目录，可用 `--out` / `--report-dir` 指定。
+- `--plan` 只读取工程，并将计划写入 `plan.json`。`--batch` 另外写入 `batch.json`、运行报告及日志。省略 `--out` 时输出到临时目录。
+- `--workers N` 调整并行任务数，`--keep-models 'SMD\Face.glb|SMD\Hair.glb'` 指定需要沿用原网格的部件。
+- 批处理退出码为 0（完成，可能包含跳过项）、1（存在失败）、2（参数或实例冲突）、3（程序异常）。命令行批处理与 GUI 共用单实例锁。
+- `--preset 4` 显式选择自动。固定预设和手工参数可通过 `--preset 0` 至 `--preset 3` 或成对的 `--dist` 与 `--ratio` 使用。
 
-## 常见问题
+## 自动规划与写回
 
-**没有 Blender 能用吗？**  
-能。选「内置 gltfpack」后端，全程不需要 Blender。
+- 根据每个 QC 的可见组合估算原始面数。同一 BodyGroup 的互斥选项取三角面数最大的选项。超过 10,000 面时按对数生成候选，LOD0 加自动 LOD 一共最多 8 级。
+- 每档以 LOD0 为基础，目标保留比例根据原始面数和候选级数估算。共享网格按引用它的最高面数方案生成一次。模型会依据几何、轮廓和属性检查保留更多面，并舍弃相对上一个有效档节省不足 10% 的候选。
+- 切换阈值根据参考尺寸、减面比例、1080p 高度和垂直视角 60° 估算。报告分别列出估算的 Hammer 单位和 `$lod` 阈值。QC 模型使用工程坐标和 `$scale`，独立 GLB 按 glTF 米制估算。[Valve Source SDK 的 LODMetric](https://github.com/ValveSoftware/source-sdk-2013/blob/master/src/public/studio.h#L1510)
+- 自动模式先生成模型，再备份 `.qc` 并原子写回。已有手写 `$lod` 或 `$shadowlod` 的工程会跳过。多个 QC 共享模型声明时，工具可能将自动块写入该 include，结果会标出实际写入的文件。重复执行更新同一个工具块。
+- `.lodbak` 保留首次修改前的 QC。随后的修改使用时间戳备份。生成的模型名带内容摘要，回滚旧 QC 后仍可引用原来的 LOD。
 
-**减面后部件会粘在一起吗？**  
-不会按空间位置把不相连的部件焊在一起；gltfpack 只折叠原网格已有的边。
+## 支持范围
 
-**为什么面数没降到设定比例？**  
-形状优先。面数少的部件会自动少减，误差到上限也会提前停。目标比例是上限参考，不是硬指标。
-
-**中文 / GBK 的 QC 会乱码吗？**  
-不会。写回沿用原 QC 的编码、BOM 和换行。
-
-**杀毒软件拦截写文件？**  
-把工具加入信任区，或右键「以管理员身份运行」。管理员模式收不到拖放，请用「导入」按钮。
+- GLB 的表情图元与 QC 中声明表情的 SMD/VTA 继续使用源拓扑。DMX 支持二进制和 KeyValues2 的普通参考网格，当前验证的组合为 `model 1`、`binary 2` 或 `keyvalues2 1`。含 Flex 的 DMX 引用沿用原网格。
+- 减面质量校验依据绑定姿势中的表面、投影轮廓及蒙皮属性采样。游戏动画、动态附件穿插和表情播放仍需在 HLMV++ 或游戏内验收。带 Morph 的独立 GLB 可以出几何 LOD，实际减面量取决于可安全简化的图元。
+- 自动生成流程输出模型源、QC 和报告。游戏编译可沿用工程自己的 NekoMDL 或批处理流程。
 
 ## 从源码构建
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File build.ps1
-```
-
-需要 .NET SDK 8；脚本会自动查找便携版 SDK。产物在 `dist\L4D2LOD远景工坊.exe`。
-
-完整使用说明在分发包的 `README.md` 里；源码包内包含完整源码和构建脚本。
-
-## 版本
-
-- **0.2.0**：新增「内置 gltfpack」减面后端，不需要 Blender；保留 Blender 后端作为精细 / 回退方案。
-- 更早版本记录见 Releases。
-
----
-
-## English
-
-**Yuanjing Workshop** is a Windows app that generates multi-level LODs for *Left 4 Dead 2* model projects. Drop in a project, check the plan, press Start — it does the rest.
-
-**v0.2.0** · Windows 10 / 11 · single exe · [Download the latest release](https://github.com/3163669737z-lgtm/L4D2LOD-Workshop/releases/latest)
-
-### What it does
-
-- **Finds the QCs** that are actually compiled, expands `$include` chains, and collects model references.
-- **Builds the LODs**: generates `*_lod1.glb`, `*_lod2.glb`, and so on at the distances you set (4 levels by default).
-- **Writes them back**: inserts the `$lod { replacemodel … }` blocks idempotently, so repeated runs do not stack up.
-- **Keeps a way back**: every modified QC gets a `.lodbak` file. Rename it back to `.qc` to restore.
-
-It does not touch your `.bat`, materials, textures, or source models, and it does not compile for you. Run your usual build script afterwards.
-
-### Two decimation backends
-
-| Backend | Details | Best for |
-|---|---|---|
-| **Blender** (default) | Per-connected-component decimation, quality first. Requires Blender 4.0 / 4.1 / 4.2. | You have Blender and care about detail. |
-| **Built-in gltfpack** (new in v0.2.0, experimental) | No Blender needed. About 10× faster. Body shrinking still works. | Quick setup and fast LODs. |
-
-Switch it in *Settings → Engine → Decimation backend*. With the built-in gltfpack backend, Blender stays optional as a fallback; the app never switches behind your back.
-
-### Quick start
-
-1. Download the release package and unzip it to a **writable** folder (Desktop or D: is fine; avoid `C:\Program Files`).
-2. Run `L4D2LOD远景工坊.exe`. On first launch, open *Settings → Engine* and pick a backend: keep Blender if you have it, or choose built-in gltfpack.
-3. Drag a project folder into the window, or click *Import Folder*. The first scan is read-only.
-4. Click *Scan Preview* to see what will be processed, what will be skipped, and why. If it looks right, click *Start Generation*.
-5. Build your models with your usual pipeline. To undo, rename the `.lodbak` file back to `.qc`.
-
-> Start with a **copy of the project** the first time. The default 4 levels (10 / 15 / 25 / 50 HU) match the official character settings.
-
-### Requirements
-
-- Windows 10 1903+ / Windows 11. .NET Framework 4.8 is already included.
-- No Python, no installer, no command line required.
-- Blender only for the Blender backend. `nekomdl.exe` only for the optional "trial compile" step.
-- The app UI and the bundled manual are currently Chinese-only.
-
-### Safety and restore
-
-- Backs up every QC before writing; writes only after all backups succeed, using atomic replace with rollback.
-- `.lodbak` files are never overwritten. Later edits get timestamped backups.
-- Read-only, badly encoded, or corrupted QCs are refused instead of force-written.
-- A model referenced by several QCs is decimated only once.
-
-### Command line (optional)
+需要 .NET SDK 和 .NET Framework 4.8 引用程序集。运行 `pwsh -File ./build.ps1`，在 `dist` 获取两种入口。重建原生减面组件请运行 `tools/build-gltfpack.ps1`，使用 x64 MinGW、CMake 和 Ninja。
 
 ```powershell
-L4D2LOD远景工坊.exe --plan  <project>   # read-only plan, writes plan.json
-L4D2LOD远景工坊.exe --batch <project>   # headless batch run
-L4D2LOD远景工坊.exe --backend gltfpack --batch <project>
-L4D2LOD远景工坊.exe --selftest          # engine self-test
+.\dist\L4D2LOD-cli.exe --selftest --out "$env:TEMP\lod-selftest"
+.\dist\L4D2LOD-cli.exe --ui-audit --probe automatic 'D:\工程\survivor.qc' --out "$env:TEMP\lod-ui"
 ```
 
-`--plan` does not write models or QCs. `--batch` writes its report and `batch.json` to the temp directory by default; use `--out` / `--report-dir` to change that.
-
-### FAQ
-
-**Can I use it without Blender?**  
-Yes. Choose the built-in gltfpack backend; Blender is not needed at all.
-
-**Will separate parts get welded together?**  
-No. Parts are not merged by spatial position; gltfpack only collapses edges that already exist in the mesh.
-
-**Why is the triangle count above the target ratio?**  
-Shape comes first. Low-poly parts are decimated less, and the error limit can stop decimation early. The target is a reference ceiling, not a hard guarantee.
-
-**What about Chinese / GBK QCs?**  
-They are preserved. Writes keep the original encoding, BOM, and line endings.
-
-### Build from source
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File build.ps1
-```
-
-Requires .NET SDK 8; the script can locate a portable SDK automatically. The output is `dist\L4D2LOD远景工坊.exe`.
-
-The full manual is the `README.md` inside the release package; the source package includes the full source and build script.
-
-### Version
-
-- **0.2.0**: added the built-in gltfpack decimation backend (no Blender required); the Blender backend remains for fine decimation or fallback.
-- See Releases for older builds.
+第三方依赖见 `THIRD_PARTY_NOTICES.md`。

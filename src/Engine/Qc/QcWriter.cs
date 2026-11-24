@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Text;
 
 namespace LodStudio.Engine
@@ -120,12 +121,14 @@ namespace LodStudio.Engine
 
         /// <summary>
         /// 生成一个 QC 的 $lod 文本块；没有可写条目时返回 null。
-        /// generatedLodFiles：本次真正生成成功的 LOD 文件绝对路径集合（只引用其中存在的级）。
+        /// generatedLodFiles：本次发布的 LOD 文件绝对路径集合。可让较远档直接引用已通过检查的前一网格。
         /// 格式逐字固定（见规格 §6.2）：注释行 → $lod 距离 → { → replacemodel… → （可选 nofacial）→ }；
         /// 数字一律 InvariantCulture；某级没有条目就整级不写。
         /// </summary>
         public static string BuildLodBlock(QcInfo info, LodPlan plan, HashSet<string> generatedLodFiles,
-                                           bool skipMainModel, bool noFacial)
+                                           bool skipMainModel, bool noFacial, bool reuseEarlierLods = false,
+                                           Func<string, int, string> publishedPath = null,
+                                           IReadOnlyDictionary<int, AutomaticLodResult> automaticLevels = null)
         {
             if (info == null || plan == null || plan.Levels == null || plan.Levels.Count == 0) return null;
 
@@ -145,7 +148,7 @@ namespace LodStudio.Engine
             {
                 if (s == null) continue;
                 if (skipMainModel && s.IsMainModel) continue;          // 跳过主模型的 QC 不引用主模型
-                if (QcPathResolver.IneligibleReason(s) != null) continue;   // fallback / 缺失 / 非 glb-smd / innode
+                if (QcPathResolver.IneligibleReason(s) != null) continue;
 
                 string dir, baseName, ext;
                 try
@@ -157,6 +160,7 @@ namespace LodStudio.Engine
                 catch { continue; }
                 if (string.IsNullOrEmpty(baseName)) continue;
 
+                string lastPublished = null;
                 for (int li = 0; li < levelCount; li++)
                 {
                     int level = li + 1;
@@ -166,9 +170,11 @@ namespace LodStudio.Engine
 
                     string fullLod;
                     try { fullLod = Path.GetFullPath(lodFile); } catch { fullLod = lodFile; }
-                    if (!generated.Contains(fullLod)) continue;        // 这一级没生成 → 让引擎继续用上一级
-
-                    string rel = FileUtil.MakeRelative(info.QcDir, lodFile);
+                    string actualPath = publishedPath?.Invoke(s.ResolvedPath, li + 1);
+                    if (actualPath != null) lastPublished = actualPath;
+                    else if (publishedPath == null && generated.Contains(fullLod)) lastPublished = fullLod;
+                    else if (!reuseEarlierLods || lastPublished == null) continue;
+                    string rel = FileUtil.MakeRelative(info.QcDir, lastPublished);
                     AddReplacement(replacements[li], keyIndex[li], s.RawFile ?? "", rel);
                 }
             }
@@ -178,18 +184,24 @@ namespace LodStudio.Engine
             if (!any) return null;
 
             var sb = new StringBuilder();
+            List<KeyValuePair<string, string>> previous = null;
+            int emitted = 0;
             for (int li = 0; li < levelCount; li++)
             {
+                AutomaticLodResult automatic = null;
+                if (automaticLevels != null && !automaticLevels.TryGetValue(li + 1, out automatic)) continue;
                 var list = replacements[li];
                 if (list.Count == 0) continue;      // 某级没有条目 → 整级不写
+                if (reuseEarlierLods && previous != null && previous.SequenceEqual(list)) continue;
+                previous = list;
 
                 LodLevel lv = plan.Levels[li];
-                int level = li + 1;
-                string distance = lv.Distance.ToString("0.###", Inv);
+                int level = automatic == null ? li + 1 : ++emitted;
+                string distance = (automatic?.SwitchPoint ?? lv.Distance).ToString("0.###", Inv);
                 string percent = (lv.Ratio * 100.0).ToString("0.#", Inv);
 
                 sb.Append("// LOD").Append(level.ToString(Inv))
-                  .Append("  切换距离 ").Append(distance)
+                  .Append(automatic == null ? "  切换距离 " : "  Source 阈值 ").Append(distance)
                   .Append("  目标 ").Append(percent).Append('%')
                   .Append("  条目 ").Append(list.Count.ToString(Inv)).Append('\n');
                 sb.Append("$lod ").Append(distance).Append('\n');
@@ -466,6 +478,8 @@ namespace LodStudio.Engine
                 {
                     w.File.Write(w.NewText);
                     w.Written = true;
+                    if (!string.Equals(QcTextFile.Read(w.File.FilePath).Text, w.NewText, StringComparison.Ordinal))
+                        throw new IOException("写入后重新读取的 QC 内容不一致");
                 }
                 catch (Exception ex)
                 {

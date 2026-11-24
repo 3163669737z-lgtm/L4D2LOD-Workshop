@@ -40,7 +40,7 @@ namespace LodStudio.Cli.UiAudit
 
         public static ShellAuditSession Create(string outDir)
         {
-            var win = new ShellWindow
+            var win = new ShellWindow(false)
             {
                 WindowStartupLocation = WindowStartupLocation.Manual,
                 Left = -20000,
@@ -200,7 +200,7 @@ namespace LodStudio.Cli.UiAudit
         }
 
         /// <summary>
-        /// 等 Loaded 里那个异步环境检测（BlenderLocate/ProbeVersion，最多 15s）跑完并稳定，
+        /// 等 Loaded 里那个异步环境检测跑完并稳定，
         /// 否则它会在截图过程中往日志/顶栏里写东西，主题往返就不可能逐像素一致。
         /// </summary>
         public void SettleEnvironment(int timeoutMs = 25000)
@@ -210,7 +210,7 @@ namespace LodStudio.Cli.UiAudit
             int stable = 0;
             while (sw.ElapsedMilliseconds < timeoutMs)
             {
-                string cur = Vm.BlenderText + "|" + Vm.CompilerText + "|" + Vm.PermissionText + "|" +
+                string cur = Vm.ReductionText + "|" + Vm.CompilerText + "|" + Vm.PermissionText + "|" +
                              Vm.Log.Lines.Count + "|" + Vm.Queue.Items.Count;
                 if (cur == last)
                 {
@@ -229,7 +229,7 @@ namespace LodStudio.Cli.UiAudit
         /// <summary>把顶栏三组只读读数固定成确定值，保证截图/往返可复现（不触发真实探测）。</summary>
         public void PinEnvironment()
         {
-            try { Vm.TestSetEnvStrings("4.1.1", "Ok", "未设置", "Faint", "普通权限", "Faint"); } catch { }
+            try { Vm.TestSetEnvStrings("内置 meshoptimizer", "Ok", "未设置", "Faint", "普通权限", "Faint"); } catch { }
             UiPump.For(60);
         }
 
@@ -250,15 +250,13 @@ namespace LodStudio.Cli.UiAudit
         {
             CloseDialogs();
             try { Win.TestShowDropOverlay(false); } catch { }
-            try { Win.TestClearLayoutScale(); } catch { }
             SetSize(DefaultWidth, DefaultHeight);
             try { Win.TestSetLogExpanded(false); } catch { }
             Vm.TestResetState();
-            // TestResetState 不动 LOD 方案：上一条状态（eight）改过 8 级方案，这里必须复位到默认预设，
-            // 否则后续状态（dialog/toast/drop、暗色整轮）会带着 8 级方案出现在截图里。
+            // 复位到默认预设，避免上一张截图的档位和写入方式影响后续状态。
             try
             {
-                Vm.LodPlan.LoadFrom(LodPlan.CreateDefault(), PresetLibrary.Builtins()[0].Name);
+                Vm.LodPlan.LoadFrom(LodPlan.CreateDefault(), PresetLibrary.DefaultName);
                 Vm.LodPlan.WriteMode = 0;
             }
             catch { }

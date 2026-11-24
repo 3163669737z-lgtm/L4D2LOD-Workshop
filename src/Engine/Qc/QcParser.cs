@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 
 namespace LodStudio.Engine
@@ -24,6 +25,7 @@ namespace LodStudio.Engine
             public string CurDir;
             public Stack<string> DirStack = new Stack<string>();
             public int BgIndex;
+            public double Scale = 1;
         }
 
         /// <summary>解析根 QC（不会抛异常；读取失败记在 QcInfo.ReadFailed + Warnings）。</summary>
@@ -271,6 +273,11 @@ namespace LodStudio.Engine
                         info.IsStaticProp = true;
                         break;
 
+                    case "$scale":
+                        if (hasArg && double.TryParse(tokens[i + 1].Text, NumberStyles.Float, CultureInfo.InvariantCulture, out double scale) &&
+                            scale != 0 && !double.IsNaN(scale) && !double.IsInfinity(scale)) st.Scale = Math.Abs(scale);
+                        break;
+
                     case "$cd":
                         if (hasArg) st.CurDir = CombineDir(st.CurDir, tokens[i + 1].Text);
                         break;
@@ -322,6 +329,10 @@ namespace LodStudio.Engine
                         i = ParseBodygroup(tokens, i, st, full, lineStarts, depth);
                         break;
 
+                    case "$nekomodel":
+                        i = ParseBodygroup(tokens, i, st, full, lineStarts, depth, nekoModel: true);
+                        break;
+
                     case "$model":
                         i = ParseModel(tokens, i, st, full, lineStarts, depth);
                         break;
@@ -331,11 +342,13 @@ namespace LodStudio.Engine
 
         /// <summary>解析 $bodygroup 块；返回主循环接下来要处理的下标（最后一个已消费的 token）。</summary>
         private static int ParseBodygroup(List<QcToken> tokens, int i, CollectState st, string declFile,
-                                          List<int> lineStarts, int depth)
+                                          List<int> lineStarts, int depth, bool nekoModel = false)
         {
             if (!(i + 2 < tokens.Count && !tokens[i + 1].IsBrace && tokens[i + 2].IsWord("{"))) return i;
 
             string bgName = tokens[i + 1].Text;
+            int firstEntry = st.Info.Studios.Count;
+            bool hasFacial = false;
             int j = i + 3, braceDepth = 1;
 
             while (j < tokens.Count && braceDepth > 0)
@@ -343,6 +356,7 @@ namespace LodStudio.Engine
                 QcToken tj = tokens[j];
                 if (tj.IsWord("{")) { braceDepth++; j++; continue; }
                 if (tj.IsWord("}")) { braceDepth--; j++; continue; }
+                if (nekoModel && braceDepth == 1 && IsFacialToken(tj)) hasFacial = true;
 
                 // 只在最外层（bodygroup 直接子级）识别 studio；更深的嵌套留给 studiomdl 自己处理
                 if (braceDepth == 1 && tj.IsWord("studio") && j + 1 < tokens.Count && !tokens[j + 1].IsBrace)
@@ -375,6 +389,9 @@ namespace LodStudio.Engine
                 j++;
             }
 
+            if (hasFacial)
+                for (int k = firstEntry; k < st.Info.Studios.Count; k++)
+                    st.Info.Studios[k].HasFacial = true;
             st.BgIndex++;
             return j - 1;
         }
@@ -403,8 +420,7 @@ namespace LodStudio.Engine
                     {
                         string w = tj.Text.ToLowerInvariant();
                         // flexfile/flexcontroller/localvar（以及 $include 进来可能带 flex 的）→ 加 nofacial 会丢表情
-                        if (w == "flexfile" || w == "flexcontroller" || w == "localvar" || w == "$include" ||
-                            w == "flex" || w == "flexpair")
+                        if (IsFacialToken(tj))
                             e.HasFacial = true;
                         else if (w == "innode" && j + 1 < tokens.Count && !tokens[j + 1].IsBrace)
                             e.Innnode = tokens[j + 1].Text;
@@ -424,10 +440,15 @@ namespace LodStudio.Engine
             return next - 1;
         }
 
+        private static bool IsFacialToken(QcToken token) =>
+            token.IsWord("flexfile") || token.IsWord("flexcontroller") || token.IsWord("localvar") ||
+            token.IsWord("$include") || token.IsWord("flex") || token.IsWord("flexpair");
+
         private static StudioRef MakeEntry(string raw, string declFile, CollectState st)
         {
             var e = new StudioRef();
             e.DeclaredInQc = declFile;
+            e.Scale = st.Scale;
             QcPathResolver.Resolve(e, raw, declFile, st.CurDir, st.RootDir, st.Info.Warnings);
             return e;
         }

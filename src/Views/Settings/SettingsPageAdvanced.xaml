@@ -24,11 +24,33 @@
 
         <CheckBox x:Name="ChkQuality" Style="{StaticResource Set.Toggle}" Margin="0,6,0,2">
             <StackPanel>
-                <TextBlock Text="质量优先" Style="{StaticResource Set.Label}" />
+                <TextBlock Text="更严几何预算" Style="{StaticResource Set.Label}" />
                 <TextBlock Style="{StaticResource Set.Hint}" Margin="0,2,0,0"
-                           Text="按连通块分配面数预算，小部件不会被压扁。关闭后按整体比例减面，更快但细节可能不均。" />
+                           Text="同时检查局部表面、法线、UV 和蒙皮。开启后进一步收紧几何误差。" />
             </StackPanel>
         </CheckBox>
+
+        <CheckBox x:Name="ChkAdaptiveBudget" Style="{StaticResource Set.Toggle}" Margin="0,8,0,2">
+            <StackPanel>
+                <TextBlock Text="按部件面数均匀减面" Style="{StaticResource Set.Label}" />
+                <TextBlock Style="{StaticResource Set.Hint}" Margin="0,2,0,0"
+                           Text="高面部件多减，低面部件少减。同一连通部件的各区域限制减面比例差。" />
+            </StackPanel>
+        </CheckBox>
+
+        <CheckBox x:Name="ChkVertexUpdates" Style="{StaticResource Set.Toggle}" Margin="0,8,0,2">
+            <StackPanel>
+                <TextBlock Text="尝试顶点微调" Style="{StaticResource Set.Label}" />
+                <TextBlock Style="{StaticResource Set.Hint}" Margin="0,2,0,0"
+                           Text="锁定边界和接缝。微调通过外观检查且能进一步减面时采用。" />
+            </StackPanel>
+        </CheckBox>
+
+        <TextBlock Text="保留原网格的模型" Style="{StaticResource Set.Label}" Margin="0,10,0,0" />
+        <TextBox x:Name="TxtKeepOriginalModels" Style="{StaticResource Input.Mono}" Margin="0,5,0,0"
+                 AutomationProperties.Name="保留原网格的模型" Tag="例如 SMD\Body.glb" />
+        <TextBlock Style="{StaticResource Set.Hint}" Margin="0,4,0,0"
+                   Text="填写源 GLB、SMD 或 DMX 路径。指定的模型会在各级沿用原网格，多个路径用 | 分隔。" />
 
         <CheckBox x:Name="ChkForce" Style="{StaticResource Set.Toggle}" Margin="0,8,0,2">
             <StackPanel>
@@ -48,9 +70,9 @@
 
         <CheckBox x:Name="ChkNofacial" Style="{StaticResource Set.Toggle}" Margin="0,8,0,2">
             <StackPanel>
-                <TextBlock Text="写入 nofacial" Style="{StaticResource Set.Label}" />
+                <TextBlock Text="禁用远处表情" Style="{StaticResource Set.Label}" />
                 <TextBlock Style="{StaticResource Set.Hint}" Margin="0,2,0,0"
-                           Text="LOD1 起冻结面部表情，官方同款取舍；不做面部动画的模型可以开着。" />
+                           Text="开启会写入 nofacial。关闭时保留 QC 表情模型的原网格，维持表情顶点映射。" />
             </StackPanel>
         </CheckBox>
 
@@ -83,7 +105,7 @@
         <controls:Rule Margin="0,22,0,0" />
         <TextBlock Text="并行" Style="{StaticResource Set.GroupTitle}" Margin="0,18,0,0" />
 
-        <settings:SettingRow Title="并行 Blender 进程" Hint="0 = 自动：min(核数/2, 空闲内存GB/1.2, 8, 任务数)。机械硬盘或内存不足时建议手动调低。"
+        <settings:SettingRow Title="并行减面进程" Hint="0 表示按 CPU、可用内存和任务数自动选择。"
                              Margin="0,8,0,0">
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                 <TextBox x:Name="TxtWorkers" Style="{StaticResource Input.Num}" Width="84" />

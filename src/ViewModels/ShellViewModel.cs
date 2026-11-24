@@ -30,34 +30,35 @@ namespace LodStudio.ViewModels
         private int _pendingDone = -1;
         private int _pendingTotal = -1;
         private TimeSpan _pendingElapsed;
+        private BatchStage _pendingStage;
+        private BatchStage _runStage;
 
         private bool _isRunning;
         private bool _isBusy;
         private bool _isPlanVisible;
+        private bool _isStopping;
+        private bool _loadingTaskDetails;
         private CancellationTokenSource _cts;
-        private CancellationTokenSource _scanCts;
 
         private string _statusTitle = "准备就绪";
-        private string _statusSub = "把工程文件夹、QC 或模型拖进窗口，或点「导入」";
+        private string _statusSub = "导入后可扫描预览或开始生成";
         private string _statusTone = "Normal";
-        private double _readoutMain;
         private string _readoutMainText = "0";
-        private string _readoutSub = "项就绪";
+        private string _readoutSub = "项在队列";
         private bool _progressVisible;
         private double _progressValue;
         private bool _progressIndeterminate;
         private bool _progressFailed;
 
-        private string _blenderText = "检测中";
-        private string _blenderTone = "Faint";
-        private string _blenderVersion = "";
+        private string _reductionText = "检测中";
+        private string _reductionTone = "Faint";
         private string _compilerText = "未设置";
         private string _compilerTone = "Faint";
         private string _permissionText = "…";
         private string _permissionTone = "Faint";
         private string _envText = "环境检测中";
         private string _envTone = "Faint";
-        private string _envTip = "正在检测 Blender / 编译器 / 权限…";
+        private string _envTip = "正在检测减面后端 / 编译器 / 权限…";
 
         private string _lastReportPath;
         private string _lastOutputDir;
@@ -79,7 +80,14 @@ namespace LodStudio.ViewModels
             Log = new LogViewModel();
 
             LodPlan.PlanChanged += delegate { InvalidatePlan(); };
+            LodPlan.PropertyChanged += (s, e) =>
+            {
+                if (e.PropertyName == nameof(LodPlan.WriteMode)) InvalidatePlan();
+                if (string.IsNullOrEmpty(e.PropertyName) || e.PropertyName == nameof(LodPlan.IsAutomatic) ||
+                    e.PropertyName == nameof(LodPlan.WriteMode)) RefreshAdvancedSummary();
+            };
             LodPlan.EditRequested += delegate (object s, int idx) { _ui.FocusLodLevel(idx); };
+            Queue.Items.CollectionChanged += delegate { InvalidatePlan(); };
 
             Commands = new ShellCommands(this);
 
@@ -101,37 +109,39 @@ namespace LodStudio.ViewModels
         public PlanPreviewViewModel PlanPreview
         {
             get { return _planPreview; }
-            private set { if (Set(ref _planPreview, value)) { Raise("IsPlanVisible"); } }
+            private set { if (Set(ref _planPreview, value)) UpdateActions(); }
         }
 
         public bool IsPlanVisible
         {
             get { return _isPlanVisible; }
-            private set { if (Set(ref _isPlanVisible, value)) { Raise("ShowStartButton"); Raise("CanPreview"); } }
+            private set { if (Set(ref _isPlanVisible, value)) UpdateActions(); }
         }
 
         public bool IsRunning
         {
             get { return _isRunning; }
-            private set
-            {
-                if (Set(ref _isRunning, value))
-                {
-                    Raise("ShowStartButton"); Raise("ShowStopButton"); Raise("CanPreview"); Raise("CanStart");
-                    Queue.Locked = value;
-                    LodPlan.IsLocked = value;
-                    Raise("LodEnabled");
-                }
-            }
+            private set { if (Set(ref _isRunning, value)) UpdateOperationState(); }
         }
 
-        public bool IsBusy { get { return _isBusy; } private set { if (Set(ref _isBusy, value)) { Raise("ShowStartButton"); } } }
-        public bool LodEnabled { get { return !IsRunning; } }
+        public bool IsBusy { get { return _isBusy; } private set { if (Set(ref _isBusy, value)) UpdateOperationState(); } }
+        public bool IsStopping { get { return _isStopping; } private set { if (Set(ref _isStopping, value)) Raise(nameof(StopButtonText)); } }
+        public bool CanEdit => !IsBusy && !IsRunning;
+
+        private void UpdateOperationState()
+        {
+            Queue.Locked = !CanEdit;
+            LodPlan.IsLocked = !CanEdit;
+            Raise(nameof(CanEdit));
+            Raise(nameof(ShowStartButton));
+            Raise(nameof(ShowStopButton));
+            Raise(nameof(StopButtonText));
+            UpdateActions();
+        }
 
         public string StatusTitle { get { return _statusTitle; } private set { Set(ref _statusTitle, value); } }
         public string StatusSub { get { return _statusSub; } private set { Set(ref _statusSub, value); } }
-        public string StatusTone { get { return _statusTone; } private set { Set(ref _statusTone, value); } }
-        public double ReadoutMain { get { return _readoutMain; } private set { Set(ref _readoutMain, value); } }
+        public string StatusTone { get { return _statusTone; } private set { if (Set(ref _statusTone, value)) Raise(nameof(ShowResultLog)); } }
         public string ReadoutMainText { get { return _readoutMainText; } private set { Set(ref _readoutMainText, value); } }
         public string ReadoutSub { get { return _readoutSub; } private set { Set(ref _readoutSub, value); } }
 
@@ -140,18 +150,8 @@ namespace LodStudio.ViewModels
         public bool ProgressIndeterminate { get { return _progressIndeterminate; } private set { Set(ref _progressIndeterminate, value); } }
         public bool ProgressFailed { get { return _progressFailed; } private set { Set(ref _progressFailed, value); } }
 
-        public string BlenderText { get { return _blenderText; } private set { Set(ref _blenderText, value); } }
-        public string BlenderTone { get { return _blenderTone; } private set { Set(ref _blenderTone, value); } }
-        public string BlenderTip
-        {
-            get
-            {
-                if (!string.IsNullOrEmpty(_blenderVersion)) return "Blender " + _blenderVersion + "（只读状态；要改成 菜单 → 打开设置 → 引擎）";
-                if (Settings != null && Settings.ReduceBackend == (int)ReduceBackend.Gltfpack)
-                    return "减面后端：内置 gltfpack（无需 Blender）。Blender 未安装，仅作回退时可不装（只读状态）";
-                return "未找到 Blender。菜单 → 打开设置 → 引擎页指定 blender.exe（只读状态）";
-            }
-        }
+        public string ReductionText { get { return _reductionText; } private set { Set(ref _reductionText, value); } }
+        public string ReductionTone { get { return _reductionTone; } private set { Set(ref _reductionTone, value); } }
         public string CompilerText { get { return _compilerText; } private set { Set(ref _compilerText, value); } }
         public string CompilerTone { get { return _compilerTone; } private set { Set(ref _compilerTone, value); } }
         public string CompilerTip { get { return "编译器（nekomdl.exe）可选：只有开启「生成后试编译」才用（只读状态；设置 → 引擎页）"; } }
@@ -167,7 +167,7 @@ namespace LodStudio.ViewModels
             }
         }
 
-        /// <summary>顶栏只显示一个环境状态：绿点=全部正常，红点=任意一项异常（Blender 不可用 / 低完整性 / 编译器已配置但不可用）。</summary>
+        /// <summary>顶栏只显示一个环境状态：绿点=全部正常，红点=任意一项异常（减面后端不可用 / 低完整性 / 编译器已配置但不可用）。</summary>
         public string EnvText { get { return _envText; } private set { Set(ref _envText, value); } }
         public string EnvTone { get { return _envTone; } private set { Set(ref _envTone, value); } }
         public string EnvTip { get { return _envTip; } private set { Set(ref _envTip, value); } }
@@ -195,58 +195,49 @@ namespace LodStudio.ViewModels
             }
         }
         public bool CanOpenLastReport { get { return !string.IsNullOrEmpty(_lastReportPath) && File.Exists(_lastReportPath); } }
+        public bool CanOpenOutputFolder => !string.IsNullOrEmpty(_lastOutputDir) && Directory.Exists(_lastOutputDir);
+        public bool ShowResultLog => StatusTone == "Err";
 
-        /// <summary>「开始生成」的悬停提示：参数不合法时说明原因（红字提示已按反馈移除）。</summary>
         public string StartHint
         {
             get
             {
                 if (LodPlan != null && !LodPlan.IsValid && !string.IsNullOrEmpty(LodPlan.ValidationError))
                     return LodPlan.ValidationError;
-                if (Queue != null && Queue.Items.Count == 0) return "先导入工程文件夹或 QC / 模型文件";
-                return "开始生成（F5）";
+                if (Queue.Items.Count == 0) return "先导入工程文件夹、QC 或模型";
+                if (IsPlanVisible && PlanPreview != null)
+                {
+                    if (PlanPreview.IsStale) return "请重新扫描后再生成";
+                    if (!PlanPreview.CanStartFromPlan) return "没有可执行的作业，可查看预览中的原因";
+                }
+                return StartButtonText + "（F5）";
             }
         }
 
-        public bool CanStart
+        public bool CanStart => CanPreview && (!IsPlanVisible || PlanPreview?.CanStartFromPlan == true);
+        public bool CanPreview => CanEdit && Queue.HasItems && LodPlan.IsValid;
+        public bool ShowStartButton => CanEdit;
+        public bool ShowStopButton => !CanEdit;
+        public string PreviewButtonText => IsPlanVisible ? "重新扫描" : "扫描预览";
+        public string StartButtonText => !IsPlanVisible ? "开始生成" : PlanPreview?.CleanupOnly == true ? "按计划清理" : "按计划生成";
+        public string StopButtonText => IsStopping ? "正在停止" : IsRunning ? "停止生成" : "取消";
+
+        private void UpdateActions()
         {
-            get
-            {
-                if (IsRunning || IsBusy) return false;
-                if (Queue.Items.Count == 0) return false;
-                if (!LodPlan.IsValid) return false;
-                return HasReadyTasks;
-            }
+            Raise(nameof(CanStart));
+            Raise(nameof(CanPreview));
+            Raise(nameof(PreviewButtonText));
+            Raise(nameof(StartButtonText));
+            Raise(nameof(StartHint));
         }
-
-        public bool CanPreview
-        {
-            get { return !IsRunning && !IsBusy && Queue.Items.Count > 0 && LodPlan.IsValid && !IsPlanVisible; }
-        }
-
-        public bool ShowStartButton { get { return !IsRunning; } }
-        public bool ShowStopButton { get { return IsRunning; } }
-
-        public bool HasReadyTasks
-        {
-            get
-            {
-                foreach (var t in Queue.Items) if (!t.Skip) return true;
-                return false;
-            }
-        }
-
-        public string ImportSummary { get { return Queue.SummaryText; } }
-        public string ImportHint { get { return HasLastRun ? LastRunText : "导入工程文件夹 / QC / 模型（GLB、SMD）"; } }
 
         // ─────────────────────────── 设置装载 ───────────────────────────
 
         private void LoadFromSettings()
         {
             var plan = Settings.GetPlan();
-            LodPlan.LoadFrom(plan, Settings.PresetName);
+            LodPlan.LoadFrom(plan, Settings.PresetName, Settings.GetCustomPlan());
             LodPlan.WriteMode = Settings.OutputMode;
-            LodPlan.SetUserPresets(Settings.UserPresets);
             IsLogExpanded = Settings.LogExpanded;
 
             if (Settings.RestoreTasks)
@@ -259,7 +250,7 @@ namespace LodStudio.ViewModels
             }
             RefreshAdvancedSummary();
             UpdateReadiness();
-            UpdateReadoutIdle();
+            UpdateQueueStatus();
         }
 
         private void AppendInitialLog()
@@ -275,11 +266,11 @@ namespace LodStudio.ViewModels
             try
             {
                 Settings.SetPlan(LodPlan.Plan);
-                Settings.PresetName = LodPlan.IsModified ? "" : (LodPlan.SelectedPreset != null ? LodPlan.SelectedPreset.Name : "");
+                Settings.PresetName = LodPlan.PresetDisplay;
+                Settings.SetCustomPlan(LodPlan.CloneCustomPlan());
                 Settings.OutputMode = LodPlan.WriteMode;
                 Settings.LogExpanded = IsLogExpanded;
                 Settings.Tasks = Queue.Items.Select(x => x.ToRef()).ToList();
-                Settings.UserPresets = LodPlan.Presets.Where(p => p.IsUser).Select(p => p.Clone()).ToList();
                 SettingsStore.Save(Settings);
             }
             catch { }
@@ -288,11 +279,16 @@ namespace LodStudio.ViewModels
         public void RefreshAdvancedSummary()
         {
             var parts = new List<string>();
-            parts.Add(Settings.QualityFirst ? "质量优先" : "速度优先");
-            parts.Add("并行：" + (Settings.Workers <= 0 ? "自动" : Settings.Workers.ToString(CultureInfo.InvariantCulture)));
-            if (Settings.ForceOverwriteLod) parts.Add("覆盖手写");
-            if (Settings.CompileAfter) parts.Add("试编译");
-            if (!Settings.NoFacial) parts.Add("不写 nofacial");
+            parts.Add(Settings.QualityFirst ? "严格几何预算" : "标准几何预算");
+            if (Settings.AdaptiveTriangleBudget) parts.Add("均匀减面");
+            if (Settings.AllowVertexUpdates) parts.Add("顶点微调");
+            parts.Add(Settings.Workers <= 0 ? "自动并行" : Settings.Workers.ToString(CultureInfo.InvariantCulture) + " 路并行");
+            if (!LodPlan.IsAutomatic)
+            {
+                if (!LodPlan.IsCollectionOnly && Settings.ForceOverwriteLod) parts.Add("覆盖手写");
+                if (!LodPlan.IsCollectionOnly && Settings.CompileAfter) parts.Add("试编译");
+                if (Settings.NoFacial) parts.Add("写入 nofacial");
+            }
             if (Settings.SkipMainModel) parts.Add("跳过主模型");
             AdvancedSummary = string.Join(" · ", parts.ToArray());
         }
@@ -302,20 +298,12 @@ namespace LodStudio.ViewModels
         {
             RefreshAdvancedSummary();
             SaveSettings();
+            InvalidatePlan();
             UpdateReadiness();
             DebounceEnvironmentCheck();
         }
 
-        private void SettingsSet_Stale() { InvalidatePlan(); }
-
-        private void InvalidatePlan()
-        {
-            Raise("StartHint");
-
-            if (IsPlanVisible && IsRunning == false) { /* 计划视图保留，但开始按钮会重新构建 */ }
-        }
-
-        /// <summary>连续改设置时只做一次环境探测（300ms 防抖），避免反复启动 Blender --version。</summary>
+        /// <summary>连续改设置时只做一次环境探测（300ms 防抖）。</summary>
         private void DebounceEnvironmentCheck()
         {
             try
@@ -337,29 +325,15 @@ namespace LodStudio.ViewModels
 
         // ─────────────────────────── 环境检测 ───────────────────────────
 
-        /// <summary>把三项检测合并成一个顶栏状态：Blender 后端时 Blender 必须可用（内置 gltfpack 后端只要求内嵌组件在）；
-        /// 编译器可选但配了就必须能跑；低完整性算异常。</summary>
         private void RefreshEnvStatus()
         {
-            bool gpMode = Settings != null && Settings.ReduceBackend == (int)ReduceBackend.Gltfpack;
-            bool detecting = string.Equals(BlenderText, "检测中", StringComparison.Ordinal);
-            bool engineOk = gpMode ? GltfpackEmbeddedOk()
-                                     : string.Equals(BlenderTone, "Ok", StringComparison.Ordinal);
-            bool ok = !detecting &&
-                      engineOk &&
-                      !string.Equals(PermissionTone, "Err", StringComparison.Ordinal) &&
-                      !string.Equals(CompilerTone, "Err", StringComparison.Ordinal);
-
+            bool detecting = ReductionText == "检测中";
+            bool ok = ReductionTone == "Ok" && PermissionTone != "Err" && CompilerTone != "Err";
             EnvTone = detecting ? "Faint" : (ok ? "Ok" : "Err");
             EnvText = detecting ? "环境检测中" : (ok ? "环境正常" : "环境异常");
-            string engineLine = gpMode
-                ? "减面后端：内置 gltfpack（无需 Blender）" + (engineOk ? "" : "（内嵌组件缺失，异常）") + "\n" +
-                  "Blender：" + BlenderText + "（可选，仅回退用）"
-                : "Blender：" + BlenderText + (BlenderTone == "Ok" ? "" : "（异常，点这里去设置）");
-            EnvTip = engineLine + "\n" +
-                     "编译器：" + CompilerText + "（可选，仅试编译用）" + (CompilerTone == "Err" ? "（已配置但无法运行）" : "") + "\n" +
-                     "权限：" + PermissionText + (PermissionTone == "Err" ? "（低完整性，无法写文件）" : "") + "\n\n" +
-                     "点击打开「运行环境诊断」";
+            EnvTip = "减面后端：" + ReductionText + "\n" +
+                     "编译器：" + CompilerText + "（可选，仅试编译用）\n" +
+                     "权限：" + PermissionText + "\n\n点击打开「运行环境诊断」";
         }
 
         private static bool? _gltfpackEmbeddedOk;
@@ -379,40 +353,14 @@ namespace LodStudio.ViewModels
             return _gltfpackEmbeddedOk.Value;
         }
 
-        public async Task RunEnvironmentCheckAsync(bool silent = false)
+        public Task RunEnvironmentCheckAsync(bool silent = false)
         {
             PermissionText = RuntimeContext.IsLowIntegrity() ? "低完整性" : (RuntimeContext.IsAdmin ? "管理员" : "普通权限");
             PermissionTone = RuntimeContext.IsLowIntegrity() ? "Err" : (RuntimeContext.IsAdmin ? "Ok" : "Faint");
 
-            bool gpMode = Settings.ReduceBackend == (int)ReduceBackend.Gltfpack;
-            string blender = Settings.BlenderPath;
-            if (string.IsNullOrEmpty(blender) || !File.Exists(blender))
-                blender = BlenderLocator.Find(Settings.BlenderPath);
-            if (!string.IsNullOrEmpty(blender) && File.Exists(blender))
-            {
-                Settings.BlenderPath = blender;
-                BlenderText = "检测中";
-                BlenderTone = "Faint";
-                RefreshEnvStatus();
-                string ver = await Task.Run(() => BlenderLocator.ProbeVersion(blender, 15000));
-                if (!string.IsNullOrEmpty(ver))
-                {
-                    _blenderVersion = ver.Replace("Blender ", "");
-                    BlenderText = _blenderVersion;
-                    BlenderTone = "Ok";
-                }
-                else
-                {
-                    BlenderText = gpMode ? "无法运行（可选）" : "无法运行";
-                    BlenderTone = gpMode ? "Faint" : "Err";
-                }
-            }
-            else
-            {
-                _blenderVersion = "";
-                BlenderText = gpMode ? "未安装（可选）" : "未找到";
-                BlenderTone = gpMode ? "Faint" : "Err";
-            }
+            bool backendOk = GltfpackEmbeddedOk();
+            ReductionText = backendOk ? "内置 meshoptimizer" : "内嵌减面组件缺失";
+            ReductionTone = backendOk ? "Ok" : "Err";
 
             string compiler = Settings.NekomdlPath;
             if (string.IsNullOrEmpty(compiler) || !File.Exists(compiler))
@@ -432,179 +380,176 @@ namespace LodStudio.ViewModels
             UpdateReadiness();
             if (!silent)
             {
-                Log.Append(LogLevel.Info, "引擎检测：减面后端 " + (gpMode ? "内置 gltfpack（无需 Blender）" : "Blender") +
-                                          "；Blender " + (BlenderTone == "Ok" ? _blenderVersion : (gpMode ? "未安装（可选）" : "未找到")) +
-                                          "；编译器 " + CompilerText + "；权限 " + PermissionText);
+                Log.Append(LogLevel.Info, "引擎检测：减面后端 " + ReductionText +
+                                          "，编译器 " + CompilerText + "，权限 " + PermissionText);
             }
+            return Task.CompletedTask;
         }
 
         private void UpdateReadiness()
         {
-            Raise("CanStart"); Raise("CanPreview"); Raise("StartHint");
+            UpdateActions();
             if (!HasLastRun) UpdateReadoutIdle();
         }
 
         private void UpdateReadoutIdle()
         {
-            int ready = Queue.Items.Count(t => !t.Skip);
-            ReadoutMainText = ready.ToString(CultureInfo.InvariantCulture);
-            ReadoutSub = ready > 0 ? "项就绪" : "项就绪";
+            SetReadout(Queue.Count, "项在队列");
         }
 
         // ─────────────────────────── 队列操作 ───────────────────────────
 
-        public async Task AddPathsAsync(IEnumerable<string> paths)
+        public Task AddPathsAsync(IEnumerable<string> paths)
         {
-            if (IsRunning) { _ui.ShowToast("正在运行，不能添加任务", "停止后才能修改队列", ToastTone.Warn); return; }
-            int added = 0, dup = 0, ignored = 0;
-            var list = new List<string>();
-            foreach (var raw in paths ?? Enumerable.Empty<string>())
+            if (!CanEdit)
             {
-                string p = (raw ?? "").Trim().Trim('"');
-                if (p.Length == 0) { ignored++; continue; }
-                TaskKind kind;
+                _ui.ShowToast("当前操作尚未结束", "结束后可继续导入", ToastTone.Warn);
+                return Task.CompletedTask;
+            }
+
+            var inputs = paths?.ToArray();
+            if (inputs == null || inputs.Length == 0) return Task.CompletedTask;
+            return PerformOperationAsync("导入失败", async token =>
+            {
+                SetStatus("正在导入", "检查文件路径与格式", "Signal", true);
+                var candidates = await Task.Run(() =>
+                {
+                    var found = new List<TaskRef>();
+                    foreach (string path in inputs)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        var task = TaskRef.FromPath(path?.Trim().Trim('"'));
+                        if (task != null) found.Add(task);
+                    }
+                    return found;
+                }, token);
+                token.ThrowIfCancellationRequested();
+
+                var added = new List<TaskItemVm>();
+                foreach (var candidate in candidates)
+                {
+                    var item = Queue.Add(candidate, out _);
+                    if (item != null) added.Add(item);
+                }
+                int duplicates = candidates.Count - added.Count;
+                int ignored = inputs.Length - candidates.Count;
+                var summary = new List<string>();
+                if (duplicates > 0) summary.Add("重复 " + duplicates + " 项");
+                if (ignored > 0) summary.Add("路径或格式无法识别 " + ignored + " 项");
+
+                if (added.Count == 0)
+                {
+                    FinishActivity("没有导入新任务", string.Join(" · ", summary), "Warn");
+                    return;
+                }
+
+                Settings.LastAddKind = (int)added[0].Kind;
+                SaveSettings();
+                SetStatus("正在扫描导入项", "读取 " + added.Count + " 项的工程规模", "Signal", true);
+                SetReadout(Queue.Count, "项在队列");
+                foreach (var item in added) item.Status = TaskStatus.Scanning;
                 try
                 {
-                    if (Directory.Exists(p)) kind = TaskKind.Folder;
-                    else if (File.Exists(p))
+                    var tasks = added.Select(item => item.ToRef()).ToList();
+                    bool automatic = LodPlan.IsAutomatic;
+                    var results = await Task.Run(() => tasks.Select(t => ScanOne(t, automatic, token)).ToList(), token);
+                    token.ThrowIfCancellationRequested();
+                    for (int i = 0; i < results.Count; i++)
                     {
-                        string ext = Path.GetExtension(p).ToLowerInvariant();
-                        if (ext == ".qc") kind = TaskKind.Qc;
-                        else if (ext == ".glb") kind = TaskKind.Glb;
-                        else if (ext == ".smd") kind = TaskKind.Smd;
-                        else { ignored++; continue; }
+                        var item = added[i];
+                        var result = results[i];
+                        item.Scanned = true;
+                        item.QcCount = result.Qc;
+                        item.ModelCount = result.Models;
+                        item.Skip = result.Skip;
+                        item.Note = result.Note;
+                        item.Hint = result.Hint;
+                        item.Status = result.Skip ? TaskStatus.Skipped : TaskStatus.Pending;
+                        Log.Append(result.Skip ? LogLevel.Warn : LogLevel.Info,
+                            item.Name + " · " + item.ScaleText + (result.Hint.Length > 0 ? " · " + result.Hint : ""));
+                        foreach (var line in result.Lines) Log.Append(LogLevel.Detail, line);
                     }
-                    else { ignored++; continue; }
+                    int skipped = results.Count(r => r.Skip);
+                    if (skipped > 0) summary.Add(skipped + " 项未找到可处理模型");
+                    summary.Add(IsPlanVisible ? "重新扫描作业计划" : "可扫描预览或开始生成");
+                    FinishActivity("已导入 " + added.Count + " 项", string.Join(" · ", summary), skipped > 0 ? "Warn" : "Ok");
                 }
-                catch { ignored++; continue; }
-
-                bool d;
-                Queue.Add(new TaskRef(kind, FileUtil.Normalize(p)), out d);
-                if (d) dup++; else { added++; list.Add(p); }
-            }
-            Queue.Renumber();
-            Queue.UpdateCounts();
-            Settings.LastAddKind = (int)GuessKind(paths);
-            InvalidatePlan();
-            Raise("ImportHint"); Raise("CanStart"); Raise("CanPreview"); Raise("StartHint");
-
-            if (added > 0)
-            {
-                _ui.ShowToast("已加入 " + added + " 项", dup > 0 || ignored > 0
-                    ? (dup > 0 ? "重复 " + dup : "") + (ignored > 0 ? (dup > 0 ? " · " : "") + "无法识别 " + ignored : "") : "正在扫描规模…",
-                    ToastTone.Ok);
-                await ScanAsync(false);
-            }
-            else
-            {
-                _ui.ShowToast("没有加入任何任务", dup > 0 ? "全部重复（" + dup + " 项）" : "拖入工程文件夹、.qc、.glb 或 .smd", ToastTone.Warn);
-            }
-            SaveSettings();
+                finally
+                {
+                    foreach (var item in added.Where(t => t.Status == TaskStatus.Scanning)) item.Status = TaskStatus.Pending;
+                    Queue.UpdateCounts();
+                    Queue.RefreshView();
+                }
+            });
         }
 
         public void RemoveSelected()
         {
-            if (IsRunning) { _ui.ShowToast("正在运行", "停止后才能移除任务", ToastTone.Warn); return; }
-            var sel = Queue.Selected;
-            if (sel.Count == 0) return;
-            Queue.Remove(sel);
-            Queue.Selected = new List<TaskItemVm>();
-            Queue.UpdateCounts();
-            InvalidatePlan();
-            Raise("CanStart"); Raise("CanPreview"); Raise("StartHint"); Raise("ImportHint");
+            RemoveTasks(Queue.Selected);
+        }
+
+        public void RemoveTask(TaskItemVm item) => RemoveTasks(new[] { item });
+
+        private void RemoveTasks(IReadOnlyCollection<TaskItemVm> tasks)
+        {
+            if (!CanEdit || tasks.Count == 0) return;
+            Queue.Remove(tasks);
+            RefreshQueueCollections();
             SaveSettings();
+            if (Queue.IsEmpty && IsPlanVisible) ClosePlan();
         }
 
         public async Task ClearQueueAsync()
         {
-            if (IsRunning) { _ui.ShowToast("正在运行", "停止后才能清空队列", ToastTone.Warn); return; }
-            if (Queue.Items.Count == 0) return;
+            if (!CanEdit || Queue.IsEmpty) return;
             bool ok = await _ui.ConfirmAsync("清空任务队列",
-                "只从列表里移除这 " + Queue.Items.Count + " 项，不会删除磁盘上的任何文件。", "清空", "取消", false, null);
-            if (!ok) return;
+                "将从列表移除 " + Queue.Count + " 项。", "清空", "取消", false, null);
+            if (!ok || !CanEdit) return;
             Queue.Clear();
             Queue.Selected = new List<TaskItemVm>();
-            Queue.UpdateCounts();
-            InvalidatePlan();
-            IsPlanVisible = false;
-            Raise("CanStart"); Raise("CanPreview"); Raise("StartHint"); Raise("ImportHint");
+            ClosePlan();
+            RefreshQueueCollections();
             SaveSettings();
         }
 
         public void MoveSelected(int delta)
         {
-            if (IsRunning) return;
-            foreach (var t in Queue.Selected.ToList()) Queue.MoveItem(t, delta);
-            Queue.UpdateCounts();
-            InvalidatePlan();
+            if (!CanEdit || Queue.Selected.Count == 0) return;
+            var selected = new HashSet<TaskItemVm>(Queue.Selected);
+            var ordered = Queue.Items.Where(selected.Contains);
+            var moving = (delta > 0 ? ordered.Reverse() : ordered).ToList();
+            bool moved = false;
+            foreach (var item in moving)
+            {
+                int target = Queue.Items.IndexOf(item) + delta;
+                if (target < 0 || target >= Queue.Count || selected.Contains(Queue.Items[target])) continue;
+                Queue.MoveItem(item, delta);
+                moved = true;
+            }
+            if (moved) SaveSettings();
         }
 
         public void RefreshQueueCollections()
         {
             Queue.Renumber();
             Queue.UpdateCounts();
-            UpdateReadoutIdle();
-            Raise("CanStart"); Raise("CanPreview"); Raise("StartHint"); Raise("ImportHint");
+            UpdateQueueStatus();
+            UpdateActions();
         }
 
-        // ─────────────────────────── 扫描 ───────────────────────────
-
-        public async Task ScanAsync(bool verbose)
+        private void UpdateQueueStatus()
         {
-            if (IsRunning || Queue.Items.Count == 0) return;
-            if (_scanCts != null) { try { _scanCts.Cancel(); } catch { } }
-            _scanCts = new CancellationTokenSource();
-            var token = _scanCts.Token;
-            var items = Queue.Snapshot();
-            foreach (var t in items) t.Status = TaskStatus.Scanning;
-            Queue.RefreshView();
-            if (verbose)
-            {
-                Log.Append(LogLevel.Stage, "═══ 扫描预览（只读，不会修改任何文件）═══");
-                SetStatus("正在扫描…", "只读：读取 QC / 统计模型，不会写入", "Signal", true);
-            }
-
-            var results = await Task.Run(() => items.Select(t => ScanOne(t, token)).ToList(), token);
-            if (token.IsCancellationRequested) return;
-
-            int willRun = 0, skipped = 0;
-            foreach (var r in results)
-            {
-                var t = r.Item;
-                t.Scanned = true;
-                t.QcCount = r.Qc;
-                t.ModelCount = r.Models;
-                t.Skip = r.Skip;
-                t.Note = r.Note;
-                t.Hint = r.Hint;
-                t.Status = r.Skip ? TaskStatus.Skipped : TaskStatus.Pending;
-                if (r.Skip) skipped++; else willRun++;
-                if (verbose)
-                {
-                    Log.Append(r.Skip ? LogLevel.Warn : LogLevel.Info,
-                        "[" + t.KindText + "] " + t.Name + " → " + (r.Skip ? "跳过：" + r.Note : t.ScaleText) +
-                        (string.IsNullOrEmpty(r.Hint) ? "" : "　⚠ " + r.Hint));
-                    foreach (var line in r.Lines) Log.Append(LogLevel.Detail, "    " + line);
-                }
-            }
-            Queue.UpdateCounts();
-            Queue.RefreshView();
-            InvalidatePlan();
-            Raise("CanStart"); Raise("CanPreview"); Raise("StartHint"); Raise("ImportHint");
             UpdateReadoutIdle();
-            if (verbose)
-            {
-                Log.Append(LogLevel.Stage, "扫描完成：可以处理 " + willRun + " / " + items.Count + " 项" +
-                                           (skipped > 0 ? "，" + skipped + " 项会跳过" : ""));
-                SetStatus("扫描完成", willRun + " 项可处理" + (skipped > 0 ? " · " + skipped + " 项会跳过" : ""), "Ok", false);
-                _ui.ShowToast("扫描完成", willRun + " 项可处理" + (skipped > 0 ? "，" + skipped + " 项会跳过" : ""), ToastTone.Ok);
-            }
-            SaveSettings();
+            if (IsPlanVisible && PlanPreview?.IsStale == true)
+                ShowStalePlanStatus();
+            else if (Queue.IsEmpty)
+                FinishActivity("准备就绪", "导入后可扫描预览或开始生成", "Normal");
+            else
+                FinishActivity("准备就绪", "可扫描预览或开始生成", "Normal");
         }
 
         private sealed class ScanOneResult
         {
-            public TaskItemVm Item;
             public int Qc, Models;
             public bool Skip;
             public string Note = "";
@@ -612,9 +557,9 @@ namespace LodStudio.ViewModels
             public List<string> Lines = new List<string>();
         }
 
-        private static ScanOneResult ScanOne(TaskItemVm t, CancellationToken token)
+        private static ScanOneResult ScanOne(TaskRef t, bool automatic, CancellationToken token)
         {
-            var r = new ScanOneResult { Item = t };
+            var r = new ScanOneResult();
             try
             {
                 if (token.IsCancellationRequested) return r;
@@ -626,9 +571,10 @@ namespace LodStudio.ViewModels
                     if (qcs.Count == 0)
                     {
                         var loose = ProjectScanner.FindLooseModels(t.Path, 3, null);
-                        if (loose.Count == 0) { r.Skip = true; r.Note = "没有 QC，也没有 .glb / .smd"; return r; }
+                        if (loose.Count == 0) { r.Skip = true; r.Note = "没有 QC，也没有 GLB、SMD 或 DMX 模型"; return r; }
                         r.Models = loose.Count;
-                        r.Lines.Add("没有 QC：将为 " + loose.Count + " 个模型各建一个包装 QC");
+                        r.Lines.Add(automatic ? "没有 QC：将为 " + loose.Count + " 个模型生成网格"
+                            : "没有 QC：将为 " + loose.Count + " 个模型各建一个包装 QC");
                         return r;
                     }
                     var uniq = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -644,259 +590,79 @@ namespace LodStudio.ViewModels
                             {
                                 if (!st.Exists || !string.IsNullOrEmpty(st.Innnode)) continue;
                                 string ext = Path.GetExtension(st.ResolvedPath).ToLowerInvariant();
-                                if (ext == ".glb" || ext == ".smd") uniq.Add(st.ResolvedPath);
+                                if (QcPathResolver.IsSupportedModelExtension(ext)) uniq.Add(st.ResolvedPath);
                             }
                         }
                         catch (Exception ex) { r.Lines.Add("解析失败 " + Path.GetFileName(q) + "：" + ex.Message); }
                     }
                     r.Models = uniq.Count;
-                    if (foreign > 0) r.Hint = foreign + " 个 QC 已有手写 $lod，将跳过（可在高级设置里选择覆盖）";
-                    if (uniq.Count == 0) { r.Skip = true; r.Note = "QC 里没有可处理的 glb/smd 模型"; }
+                    if (foreign > 0) r.Hint = foreign + " 个 QC 已有手写 $lod";
+                    if (uniq.Count == 0) { r.Skip = true; r.Note = "QC 里没有可处理的模型"; }
                 }
                 else if (t.Kind == TaskKind.Qc)
                 {
                     if (!File.Exists(t.Path)) { r.Skip = true; r.Note = "文件不存在"; return r; }
                     r.Qc = 1;
                     var info = QcParser.Parse(t.Path);
-                    r.Models = info.Studios.Count(x => x.Exists &&
-                        (Path.GetExtension(x.ResolvedPath).Equals(".glb", StringComparison.OrdinalIgnoreCase) ||
-                         Path.GetExtension(x.ResolvedPath).Equals(".smd", StringComparison.OrdinalIgnoreCase)));
+                    r.Models = info.Studios.Count(x => QcPathResolver.IneligibleReason(x) == null);
                     if (info.Studios.Count == 0) { r.Skip = true; r.Note = "QC 里没有 studio 条目"; }
-                    else if (r.Models == 0) { r.Skip = true; r.Note = "没有可处理的 glb/smd（当前只支持 glb 和 smd）"; }
-                    else if (info.HasForeignLod) r.Hint = "已有手写 $lod，将跳过（可在高级设置里选择覆盖）";
+                    else if (r.Models == 0) { r.Skip = true; r.Note = "没有可处理的 GLB、SMD 或 DMX 模型"; }
+                    else if (info.HasForeignLod) r.Hint = "已有手写 $lod";
                 }
                 else
                 {
                     if (!File.Exists(t.Path)) { r.Skip = true; r.Note = "文件不存在"; return r; }
-                    r.Qc = 1; r.Models = 1;
-                    string wrapper = ProjectScanner.WrapperQcPath(t.Path);
-                    if (File.Exists(wrapper)) r.Lines.Add("沿用已有的包装 QC：" + Path.GetFileName(wrapper));
+                    r.Models = 1;
                 }
             }
-            catch (Exception ex) { r.Skip = true; r.Note = "扫描失败：" + ex.Message; }
+            catch (Exception ex)
+            {
+                r.Skip = true;
+                r.Note = "读取失败";
+                r.Lines.Add(t.Path + " · " + ex.Message);
+            }
             return r;
         }
 
-        // ─────────────────────────── 计划预览 ───────────────────────────
-
-        public async Task PreviewPlanAsync()
-        {
-            if (IsRunning || IsBusy) return;
-            if (Queue.Items.Count == 0) { _ui.ShowToast("队列为空", "先导入工程文件夹或模型文件", ToastTone.Warn); return; }
-            string err = LodPlan.ValidateForRun();
-            if (err != null) { await _ui.ShowInfoAsync("LOD 参数有误", err, null); return; }
-
-            IsBusy = true;
-            SetStatus("正在生成作业计划…", "只读：统计 QC / 模型 / 减面任务，不会修改文件", "Signal", true);
-            var collector = new CollectingObserver();
-            try
-            {
-                var plan = await Task.Run(() => BuildPlan(collector), CancellationToken.None);
-                if (plan == null) return;
-                foreach (var line in collector.Lines) Log.Append(LogLevel.Detail, line);
-                if (plan.QcPlans.Count == 0)
-                {
-                    SetStatus("计划为空", "没有可处理的 QC；看日志里的跳过原因", "Warn", false);
-                    await _ui.ShowInfoAsync("没有可处理的 QC",
-                        "所有任务都被跳过了。展开日志可以看到每项的原因；常见原因是：没有 QC、模型文件缺失、已有手写 $lod、面数低于门槛。",
-                        string.Join("\n", collector.Lines.ToArray()));
-                    return;
-                }
-                PlanPreview = new PlanPreviewViewModel(plan);
-                PlanPreview.CloseRequested += delegate { IsPlanVisible = false; };
-                PlanPreview.StartRequested += async delegate
-                {
-                    IsPlanVisible = false;
-                    await StartRunAsync(plan);
-                };
-                IsPlanVisible = true;
-                SetStatus("计划已生成", PlanPreview.Headline + " · " + PlanPreview.Subline, "Ok", false);
-                Log.Append(LogLevel.Stage, "作业计划：" + PlanPreview.Headline);
-            }
-            catch (Exception ex)
-            {
-                Log.Append(LogLevel.Error, "生成计划失败：" + ex.Message);
-                await _ui.ShowInfoAsync("生成计划失败", ex.Message, ex.ToString());
-                SetStatus("生成计划失败", ex.Message, "Err", false);
-            }
-            finally
-            {
-                IsBusy = false;
-            }
-        }
-
-        private BatchPlan BuildPlan(IBatchObserver observer)
-        {
-            var tasks = Queue.Items.Where(t => !t.Skip).Select(t => t.ToRef()).ToList();
-            if (tasks.Count == 0) tasks = Queue.Items.Select(t => t.ToRef()).ToList();
-            string rootDir = ResolveRootDir(tasks);
-            var options = BuildRunOptions(rootDir);
-            return BatchPlanner.Build(tasks, rootDir, options, observer, CancellationToken.None);
-        }
-
-        private string ResolveRootDir(List<TaskRef> tasks)
-        {
-            foreach (var t in tasks)
-            {
-                if (t.Kind == TaskKind.Folder) return t.Path;
-            }
-            foreach (var t in tasks)
-            {
-                try { return Path.GetDirectoryName(FileUtil.Normalize(t.Path)); } catch { }
-            }
-            return AppInfo.ExeDir;
-        }
-
-        private BatchRunOptions BuildRunOptions(string rootDir)
-        {
-            var opt = new BatchRunOptions
-            {
-                Plan = LodPlan.ClonePlan(),
-                PresetName = LodPlan.PresetDisplay,
-                Backend = (ReduceBackend)Settings.ReduceBackend,
-                BlenderPath = Settings.BlenderPath,
-                Workers = Settings.Workers,
-                QualityFirst = Settings.QualityFirst,
-                Force = Settings.ForceOverwriteLod,
-                CompileAfter = Settings.CompileAfter,
-                NekomdlPath = Settings.NekomdlPath,
-                NoFacial = Settings.NoFacial,
-                SkipMainModel = Settings.SkipMainModel,
-                SkipMainQcPaths = new HashSet<string>(Settings.SkipMainQcs, StringComparer.OrdinalIgnoreCase),
-                MinTriangles = Settings.MinTriangles,
-                OutputMode = (OutputMode)LodPlan.WriteMode,
-                CollectionName = "_LOD合集.qc",
-                BackupEnabled = Settings.BackupEnabled,
-                BackupCentralBaseDir = Settings.BackupEnabled ? OutputLocations.ResolveBackupBaseDir(Settings) : null,
-                ProjectRoot = rootDir,
-                ReportDir = OutputLocations.ResolveReportDir(Settings, rootDir),
-                WriteReport = true
-            };
-            return opt;
-        }
-
-        /// <summary>关闭计划视图（返回队列）</summary>
-        public void ClosePlan() { IsPlanVisible = false; }
-
-        /// <summary>按当前计划开始生成</summary>
-        public async Task StartFromPlanAsync()
-        {
-            var p = PlanPreview;
-            IsPlanVisible = false;
-            if (p != null) await StartRunAsync(p.Plan);
-        }
         // ─────────────────────────── 运行 ───────────────────────────
 
-        public async Task StartRunAsync(BatchPlan existingPlan = null)
+        private async Task PerformOperationAsync(string errorTitle, Func<CancellationToken, Task> action)
         {
-            if (IsRunning || IsBusy) return;
-            if (Queue.Items.Count == 0) { _ui.ShowToast("队列为空", "先导入工程文件夹或模型文件", ToastTone.Warn); return; }
-
-            string err = LodPlan.ValidateForRun();
-            if (err != null) { await _ui.ShowInfoAsync("LOD 参数有误", err, null); return; }
-
-            // Blender：仅 Blender 后端强制；内置 gltfpack 后端无需 Blender（保留已找到的路径作回退）
-            if (Settings.ReduceBackend == (int)ReduceBackend.Blender)
+            using (var source = new CancellationTokenSource())
             {
-                string blender = Settings.BlenderPath;
-                if (string.IsNullOrEmpty(blender) || !File.Exists(blender)) blender = BlenderLocator.Find(Settings.BlenderPath);
-                if (string.IsNullOrEmpty(blender) || !File.Exists(blender))
+                _cts = source;
+                IsBusy = true;
+                ProgressFailed = false;
+                try
                 {
-                    bool go = await _ui.ConfirmAsync("还没有指定 Blender",
-                        "生成 LOD 必须用 Blender 减面。请到「设置 → 引擎」指定 blender.exe（通常会自动找到）；" +
-                        "没有 Blender 时可在「设置 → 引擎 → 减面后端」改用「内置 gltfpack」。",
-                        "打开设置", "取消", false, null);
-                    if (go) _ui.OpenSettings(0);
-                    return;
+                    await action(source.Token);
                 }
-                Settings.BlenderPath = blender;
-            }
-
-            if (Settings.CompileAfter && (string.IsNullOrEmpty(Settings.NekomdlPath) || !File.Exists(Settings.NekomdlPath)))
-            {
-                bool go = await _ui.ConfirmAsync("开启了「生成后试编译」，但没有指定编译器",
-                    "请到「设置 → 引擎」指定 nekomdl.exe，或关闭「生成后试编译」。", "打开设置", "取消", false, null);
-                if (go) _ui.OpenSettings(0);
-                return;
-            }
-
-            // 可写性
-            string bad = CheckWritableDirs();
-            if (bad != null)
-            {
-                bool go = await _ui.ConfirmAsync("有目录无法写入",
-                    "以下目录写不进去，相关项会失败。通常是安全软件拦截了普通权限程序（也可把工具加入信任区）。\n\n" + bad,
-                    "仍然开始", "取消", true, null);
-                if (!go) return;
-            }
-
-            // 修改 QC 前的确认
-            if (LodPlan.WriteMode != 2)
-            {
-                string what = LodPlan.WriteMode == 0
-                    ? "会在每个 QC 末尾写入 $lod 块。"
-                    : "会在每个 QC 旁生成 _LOD.qc，并在原 QC 里加一行 $include。";
-                if (Settings.ForceOverwriteLod) what += "\n已开启「覆盖手写 $lod」：原有手写块会被注释停用。";
-                what += Settings.BackupEnabled
-                    ? "\n\n每个被修改的 QC 会先备份到" + OutputLocations.DescribeBackup(Settings) + "，可随时还原。"
-                    : "\n\n⚠ 已关闭备份：本次不会生成 .lodbak，改完无法一键还原。";
-                bool ok = await _ui.ConfirmAsync("确认修改 QC", what, "开始生成", "取消", !Settings.BackupEnabled, null);
-                if (!ok) return;
-            }
-
-            BatchPlan plan = existingPlan;
-            IsBusy = true;
-            try
-            {
-                if (plan == null)
+                catch (OperationCanceledException) when (source.IsCancellationRequested)
                 {
-                    SetStatus("正在准备…", "展开任务、解析 QC、生成减面任务", "Signal", true);
-                    var collector = new CollectingObserver();
-                    plan = await Task.Run(() => BuildPlan(collector));
-                    foreach (var line in collector.Lines) Log.Append(LogLevel.Detail, line);
-                    if (plan == null || plan.QcPlans.Count == 0)
-                    {
-                        await _ui.ShowInfoAsync("没有可处理的内容", "所有任务都被跳过了。看日志里的原因。",
-                            string.Join("\n", collector.Lines.ToArray()));
-                        SetStatus("没有可处理的内容", "看日志里的跳过原因", "Warn", false);
-                        return;
-                    }
+                    UpdateReadoutIdle();
+                    FinishActivity("已取消", Queue.IsEmpty ? "可继续导入任务" : "可继续扫描或生成", "Warn");
+                }
+                catch (Exception ex)
+                {
+                    Log.Append(LogLevel.Error, errorTitle + "：" + ex);
+                    FinishActivity(errorTitle, "展开日志可查看详情", "Err");
+                }
+                finally
+                {
+                    _cts = null;
+                    IsStopping = false;
+                    IsBusy = false;
                 }
             }
-            catch (Exception ex)
-            {
-                await _ui.ShowInfoAsync("准备运行失败", ex.Message, ex.ToString());
-                return;
-            }
-            finally
-            {
-                IsBusy = false;
-            }
-
-            await RunAsync(plan);
         }
 
-        private string CheckWritableDirs()
+        private async Task RunAsync(BatchPlan plan, BatchRunOptions options, CancellationToken token)
         {
-            var bad = new List<string>();
-            foreach (var t in Queue.Items.Where(x => !x.Skip))
-            {
-                string dir;
-                try { dir = t.Kind == TaskKind.Folder ? t.Path : Path.GetDirectoryName(FileUtil.Normalize(t.Path)); }
-                catch { continue; }
-                if (string.IsNullOrEmpty(dir) || bad.Contains(dir, StringComparer.OrdinalIgnoreCase)) continue;
-                if (FileUtil.TestWritable(dir) != null) bad.Add(dir);
-            }
-            if (bad.Count == 0) return null;
-            return string.Join("\n", bad.Take(6).Select(x => "· " + x).ToArray()) + (bad.Count > 6 ? "\n…" : "");
-        }
-
-        private async Task RunAsync(BatchPlan plan)
-        {
-            _cts = new CancellationTokenSource();
-            var token = _cts.Token;
+            _runStage = BatchStage.None;
             IsRunning = true;
             IsPlanVisible = false;
+            PlanPreview = null;
+            _previewRequest = null;
             ProgressVisible = true;
             ProgressFailed = false;
             ProgressValue = 0;
@@ -904,11 +670,9 @@ namespace LodStudio.ViewModels
             SetStatus("正在生成…", "准备减面任务", "Signal", true);
             Log.Append(LogLevel.Stage, "═══ 开始生成：" + plan.PresetName + " · " + plan.QcPlans.Count + " 个 QC · " + plan.JobCount + " 个任务 ═══");
             Queue.ResetRunState();
-            var touched = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var exp in plan.Tasks) foreach (var q in exp.QcPaths) touched.Add(FileUtil.Normalize(q));
-            var runningItems = plan.Tasks.Select(x => x.Task).ToList();
+            var runningItems = new HashSet<string>(plan.Tasks.Select(x => x.Task.Serialize()), StringComparer.OrdinalIgnoreCase);
             foreach (var t in Queue.Items)
-                if (runningItems.Any(x => x.Kind == t.Kind && string.Equals(FileUtil.Normalize(x.Path), FileUtil.Normalize(t.Path), StringComparison.OrdinalIgnoreCase)))
+                if (runningItems.Contains(t.ToRef().Serialize()))
                     t.Status = TaskStatus.Running;
             Queue.RefreshView();
             _pump.Start();
@@ -917,16 +681,10 @@ namespace LodStudio.ViewModels
             BatchOutcome outcome = null;
             try
             {
-                var options = BuildRunOptions(plan.RootDir);
-                // 报告/日志位置按"QC 所在目录"解析（与设置里的文案一致），而不是工程根
-                options.ReportDir = OutputLocations.ResolveReportDir(Settings, FirstQcDir(plan));
-                // 以计划里的参数为准：用户在计划视图点"按此计划开始生成"时，参数就是预览时的那一份
-                options.Plan = plan.Plan ?? LodPlan.ClonePlan();
-                options.PresetName = plan.PresetName;
                 var observer = new UiObserver(this);
                 outcome = await Task.Run(() => BatchRunner.Run(plan, options, observer, token), token);
             }
-            catch (OperationCanceledException) { Log.Append(LogLevel.Warn, "已请求停止"); }
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { }
             catch (Exception ex)
             {
                 Log.Append(LogLevel.Error, "运行失败：" + ex.Message);
@@ -936,37 +694,45 @@ namespace LodStudio.ViewModels
             {
                 sw.Stop();
                 _pump.Stop();
-                DrainLog();
+                while (!_logQueue.IsEmpty)
+                {
+                    DrainLog();
+                    if (!_logQueue.IsEmpty) await Dispatcher.Yield(DispatcherPriority.Background);
+                }
+                lock (_progressGate)
+                {
+                    _pendingDone = _pendingTotal = -1;
+                    _pendingStage = BatchStage.None;
+                }
                 IsRunning = false;
             }
-            await FinishRunAsync(plan, outcome, sw.Elapsed, token.IsCancellationRequested);
+            await FinishRunAsync(plan, options, outcome, sw.Elapsed, outcome?.Cancelled ?? token.IsCancellationRequested);
         }
 
         /// <summary>关窗时强制取消（不弹确认）</summary>
-        public void ForceCancel()
-        {
-            try { if (_cts != null) _cts.Cancel(); } catch { }
-        }
+        public void ForceCancel() => RequestStopInternal();
 
         private void RequestStopInternal()
         {
-            try { if (_cts != null) _cts.Cancel(); } catch { }
-            try { BlenderScheduler.KillAll(); } catch { }
-            SetStatus("正在停止…", "结束所有 Blender 进程；已经生成的 LOD 保留，本次不再修改 QC", "Warn", true);
-            ProgressIndeterminate = true;
+            if (_cts == null || IsStopping) return;
+            IsStopping = true;
+            _cts.Cancel();
+            SetStatus("正在停止", IsRunning ? "等待当前步骤收尾" : "等待当前读取步骤结束", "Warn", true);
             Log.Append(LogLevel.Warn, "用户请求停止");
         }
 
         public async Task StopAsync()
         {
-            if (!IsRunning) return;
+            if (_cts == null || IsStopping) return;
+            if (!IsRunning) { RequestStopInternal(); return; }
+            var source = _cts;
             bool ok = await _ui.ConfirmAsync("停止处理",
-                "会立刻结束所有 Blender 进程。已经生成的 LOD 文件会保留，但本次不会再修改任何 QC。",
+                "程序将在当前步骤收尾后停止。已完成的写入和发布结果会保留。",
                 "停止", "继续处理", true, null);
-            if (ok) RequestStopInternal();
+            if (ok && IsRunning && ReferenceEquals(_cts, source)) RequestStopInternal();
         }
 
-        private async Task FinishRunAsync(BatchPlan plan, BatchOutcome outcome, TimeSpan elapsed, bool cancelled)
+        private async Task FinishRunAsync(BatchPlan plan, BatchRunOptions options, BatchOutcome outcome, TimeSpan elapsed, bool cancelled)
         {
             var stats = outcome != null ? outcome.Stats : new BatchStats();
             var ocByQc = new Dictionary<string, QcOutcome>(StringComparer.OrdinalIgnoreCase);
@@ -976,15 +742,17 @@ namespace LodStudio.ViewModels
             var skipped = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             if (outcome != null) foreach (var p in outcome.SkippedQcPaths) skipped.Add(FileUtil.Normalize(p));
 
-            int okCount = 0, partialCount = 0, failedCount = 0, skipCount = 0;
+            int okCount = 0, partialCount = 0, failedCount = 0, skipCount = 0, cancelledCount = 0;
+            bool collection = options.OutputMode == OutputMode.CollectionOnly;
+            var items = Queue.Items.ToDictionary(t => t.ToRef().Serialize(), StringComparer.OrdinalIgnoreCase);
             foreach (var exp in plan.Tasks)
             {
-                var item = Queue.Items.FirstOrDefault(x => x.Kind == exp.Task.Kind &&
-                    string.Equals(FileUtil.Normalize(x.Path), FileUtil.Normalize(exp.Task.Path), StringComparison.OrdinalIgnoreCase));
-                if (item == null) continue;
+                if (!items.TryGetValue(exp.Task.Serialize(), out var item)) continue;
                 int total = exp.QcPaths.Count;
                 int done = 0, esc = 0, errCount = 0;
+                bool writesModels = false;
                 var errs = new List<string>();
+                var reasons = new List<string>();
                 foreach (var q in exp.QcPaths)
                 {
                     string key = FileUtil.Normalize(q);
@@ -994,20 +762,25 @@ namespace LodStudio.ViewModels
                         // 以 QC 结果为唯一事实来源（否则 injected 集合与 QcOutcome 会重复计数，出现"已写入 2/1 个 QC"）
                         if (qo.Errors.Count > 0) errCount += qo.Errors.Count;
                         foreach (var e in qo.Errors) errs.Add(Path.GetFileName(q) + "：" + e);
-                        if (qo.Injected) done++;
-                        else if (qo.Skipped) esc++;
+                        writesModels |= qo.Standalone;
+                        if (qo.Injected || qo.Generated || (qo.Skipped && !string.IsNullOrEmpty(qo.LodBlockFile))) done++;
+                        else if (qo.Skipped)
+                        {
+                            esc++;
+                            if (!string.IsNullOrEmpty(qo.SkipReason)) reasons.Add(Path.GetFileName(q) + " · " + qo.SkipReason);
+                        }
                     }
                     else if (injected.Contains(key)) done++;
                     else if (skipped.Contains(key)) esc++;
                 }
                 if (!string.IsNullOrEmpty(exp.Error)) { errs.Add(exp.Error); errCount++; }
-                if (errs.Count == 0 && outcome != null && outcome.Errors.Count > 0)
+                if (errs.Count == 0 && outcome != null && done + esc < total && outcome.Errors.Count > 0)
                 {
                     foreach (var e in outcome.Errors.Take(3)) errs.Add(e);
                 }
 
                 TaskStatus state;
-                if (cancelled && done < total) state = TaskStatus.Cancelled;
+                if (cancelled && done + esc < total) state = TaskStatus.Cancelled;
                 else if (total == 0) state = TaskStatus.Failed;
                 else if (done == 0 && esc >= total && errCount == 0) state = TaskStatus.Skipped;
                 else if (done == 0) state = TaskStatus.Failed;
@@ -1015,13 +788,21 @@ namespace LodStudio.ViewModels
                 else state = TaskStatus.Ok;
 
                 item.Status = state;
-                string verb = LodPlan.WriteMode == 2 ? "已输出" : "已写入";
-                item.RunDetail = verb + " " + done + " / " + total + " 个 QC" + (esc > 0 ? "，跳过 " + esc : "");
+                item.Skip = state == TaskStatus.Skipped;
+                item.SkipReason = string.Join("\n", reasons.Take(20));
+                string verb = writesModels ? "已生成" : collection ? "已汇总" : "已处理";
+                if (total == 0)
+                    item.RunDetail = "未找到可处理内容";
+                else if (state == TaskStatus.Skipped)
+                    item.RunDetail = reasons.Count == 1 && total == 1 ? reasons[0] : "跳过 " + esc + " 项";
+                else
+                    item.RunDetail = verb + " " + done + " / " + total + " 项" + (esc > 0 ? " · 跳过 " + esc : "");
                 item.RunErrors = errs.Count > 0 ? string.Join("\n", errs.Take(20).ToArray()) : "";
                 if (state == TaskStatus.Ok) okCount++;
                 else if (state == TaskStatus.Partial) partialCount++;
                 else if (state == TaskStatus.Failed) failedCount++;
                 else if (state == TaskStatus.Skipped) skipCount++;
+                else if (state == TaskStatus.Cancelled) cancelledCount++;
             }
             // 未被计划覆盖的项恢复为待处理
             foreach (var t in Queue.Items)
@@ -1035,95 +816,68 @@ namespace LodStudio.ViewModels
             _lastPartial = partialCount;
             _lastFailed = failedCount;
             _lastReportPath = outcome != null ? outcome.ReportPath : null;
-            _lastOutputDir = ResolveOutputDir(plan);
-            Raise("HasLastRun"); Raise("LastRunText"); Raise("CanOpenLastReport"); Raise("ImportHint");
+            _lastOutputDir = ResolveOutputDir(plan, options, outcome);
+            Raise(nameof(HasLastRun)); Raise(nameof(LastRunText)); Raise(nameof(CanOpenLastReport)); Raise(nameof(CanOpenOutputFolder));
 
+            int generatedModels = outcome?.GeneratedModels ?? 0;
+            int cleaned = outcome?.QcOutcomes.Count(q => q.Skipped && !string.IsNullOrEmpty(q.LodBlockFile)) ?? 0;
+            string summary = BuildSummaryLine(stats, elapsed, skipCount, generatedModels, cleaned, plan.Automatic, collection);
             ProgressIndeterminate = false;
+            ProgressFailed = !cancelled && (failedCount > 0 || partialCount > 0 || outcome?.Ok != true);
+            ProgressVisible = !cancelled;
+            ProgressValue = 1;
+            SetReadout(okCount, "项完成");
+            string title;
+            string tone;
             if (cancelled)
             {
-                ProgressVisible = false;
-                SetStatus("已停止", "已生成的 LOD 保留；本次未继续修改 QC", "Warn", false);
-                SetReadout(stats.InjectedQcCount, "QC 已写入");
-                Log.Append(LogLevel.Stage, "════ 已停止 ════");
+                title = "已停止";
+                tone = "Warn";
+                summary = cancelledCount + " 项未完成 · " + summary;
             }
-            else if (failedCount == 0 && partialCount == 0)
+            else if (ProgressFailed)
             {
-                ProgressValue = 1;
-                ProgressVisible = true;
-                ProgressFailed = false;
-                SetStatus("全部完成", BuildSummaryLine(stats, elapsed, skipCount), "Ok", false);
-                SetReadout(stats.InjectedQcCount, "QC 已写入");
-                Log.Append(LogLevel.Stage, "════ 全部完成 ════");
+                title = failedCount > 0 ? failedCount + " 项失败" : partialCount > 0 ? partialCount + " 项部分完成" : "生成遇到错误";
+                tone = "Err";
             }
             else
             {
-                ProgressFailed = failedCount > 0;
-                ProgressVisible = true;
-                SetStatus(failedCount > 0 ? "有失败项" : "部分完成", BuildSummaryLine(stats, elapsed, skipCount),
-                          failedCount > 0 ? "Err" : "Warn", false);
-                SetReadout(stats.InjectedQcCount, "QC 已写入");
-                Log.Append(LogLevel.Stage, "════ 结束（有 " + failedCount + " 项失败）════");
+                title = okCount == 0 && skipCount > 0 ? "没有发布新结果"
+                    : cleaned > 0 && plan.JobCount == 0 ? "清理完成" : "生成完成";
+                tone = okCount == 0 && skipCount > 0 ? "Warn" : "Ok";
             }
 
             if (outcome != null)
             {
                 foreach (var e in outcome.Errors.Take(30)) Log.Append(LogLevel.Error, e);
+                foreach (var qc in outcome.QcOutcomes.Where(q => q.Errors.Count > 0).Take(30))
+                    Log.Append(LogLevel.Error, Path.GetFileName(qc.QcPath) + " · " + string.Join(" · ", qc.Errors.Take(3)));
                 if (!string.IsNullOrEmpty(outcome.ReportPath)) Log.Append(LogLevel.Info, "总报告：" + outcome.ReportPath);
             }
-            Raise("CanStart"); Raise("CanPreview"); Raise("StartHint");
+            SetStatus(title, summary, tone, false);
+            Log.Append(LogLevel.Stage, "════ " + title + " · " + summary + " ════");
             SaveSettings();
 
-            // 结果提示
-            if (cancelled)
-            {
-                _ui.ShowToast("已停止", "已生成的 LOD 保留，QC 未继续修改", ToastTone.Warn);
-            }
-            else if (failedCount == 0 && partialCount == 0)
-            {
-                _ui.ShowToast("完成 · " + okCount + " 项", BuildSummaryLine(stats, elapsed, skipCount), ToastTone.Ok);
-                if (Settings.PopupOnSuccess)
-                    await _ui.ShowInfoAsync("全部完成", BuildSummaryLine(stats, elapsed, skipCount), CanOpenLastReport ? "报告：" + _lastReportPath : null);
-            }
-            else
-            {
-                _ui.ShowToast(failedCount > 0 ? "有 " + failedCount + " 项失败" : "有 " + partialCount + " 项部分完成",
-                    BuildSummaryLine(stats, elapsed, skipCount),
-                    failedCount > 0 ? ToastTone.Err : ToastTone.Warn);
-                await ShowFailureDialogAsync(plan, failedCount, partialCount);
-            }
             _ui.FlashWindow();
+            if (tone == "Ok" && Settings.PopupOnSuccess)
+                await _ui.ShowInfoAsync(title, summary, CanOpenLastReport ? _lastReportPath : null);
         }
 
-        private string BuildSummaryLine(BatchStats stats, TimeSpan elapsed, int skipTasks)
+        private string BuildSummaryLine(BatchStats stats, TimeSpan elapsed, int skipTasks, int generatedModels, int cleaned,
+            bool automatic, bool collection)
         {
             var parts = new List<string>();
-            parts.Add("写入 " + stats.InjectedQcCount + " 个 QC");
-            if (stats.UniqueModelCount > 0) parts.Add(stats.UniqueModelCount + " 个模型");
-            if (stats.JobOk + stats.JobFail > 0) parts.Add("减面 " + stats.JobOk + "/" + (stats.JobOk + stats.JobFail));
+            if (stats.InjectedQcCount > 0) parts.Add((collection ? "汇总 " : "写入 ") + stats.InjectedQcCount + " 个 QC");
+            if (generatedModels > 0) parts.Add("生成 " + generatedModels + " 个模型的 LOD");
+            if (stats.PublishedLods > 0) parts.Add(stats.PublishedLods + " 个 LOD 网格");
+            if (cleaned > 0) parts.Add("清理 " + cleaned + " 个旧工具块");
             if (stats.CompileOk + stats.CompileFail > 0) parts.Add("试编译 " + stats.CompileOk + "/" + (stats.CompileOk + stats.CompileFail));
-            if (stats.TotalSourceTriangles > 0)
+            if (!automatic && stats.TotalSourceTriangles > 0)
                 parts.Add("原始 " + stats.TotalSourceTriangles.ToString("N0", CultureInfo.InvariantCulture) + " 面 → 末级 " +
                           stats.TotalLastLodTriangles.ToString("N0", CultureInfo.InvariantCulture) + " 面");
             if (skipTasks > 0) parts.Add("跳过 " + skipTasks + " 项");
             parts.Add("用时 " + FormatSpan(elapsed));
             return string.Join(" · ", parts.ToArray());
-        }
-
-        private async Task ShowFailureDialogAsync(BatchPlan plan, int failed, int partial)
-        {
-            var sb = new StringBuilder();
-            foreach (var t in Queue.Items.Where(x => x.Status == TaskStatus.Failed || x.Status == TaskStatus.Partial).Take(8))
-            {
-                sb.AppendLine("· " + t.Name + "（" + t.RunDetail + "）");
-                if (!string.IsNullOrEmpty(t.RunErrors))
-                    foreach (var line in t.RunErrors.Split('\n').Take(3)) sb.AppendLine("    " + line);
-            }
-            if (Queue.Items.Count(x => x.Status == TaskStatus.Failed || x.Status == TaskStatus.Partial) > 8) sb.AppendLine("…");
-            bool open = await _ui.ConfirmAsync(
-                failed > 0 ? "有 " + failed + " 项失败" : "有 " + partial + " 项只完成了一部分",
-                "成功的项已经正常写入。下面是出问题的项（完整内容见报告）：",
-                CanOpenLastReport ? "打开报告" : "知道了", "关闭", false, sb.ToString());
-            if (open && CanOpenLastReport) OpenLastReport();
         }
 
         /// <summary>计划里第一个 QC 的目录（报告/日志落点用）。</summary>
@@ -1145,26 +899,17 @@ namespace LodStudio.ViewModels
             return AppInfo.ExeDir;
         }
 
-        private string ResolveOutputDir(BatchPlan plan)
+        private static string ResolveOutputDir(BatchPlan plan, BatchRunOptions options, BatchOutcome outcome)
         {
-            foreach (var exp in plan.Tasks)
+            if (outcome == null) return null;
+            if (options.OutputMode == OutputMode.CollectionOnly && outcome.Stats.InjectedQcCount > 0)
+                return plan.RootDir;
+            foreach (var qc in outcome.QcOutcomes)
             {
-                try
-                {
-                    if (exp.Task.Kind == TaskKind.Folder && Directory.Exists(exp.Task.Path)) return exp.Task.Path;
-                }
-                catch { }
+                string file = qc.LodBlockFile ?? qc.OutputFiles.FirstOrDefault();
+                if (!string.IsNullOrEmpty(file)) return Path.GetDirectoryName(file);
             }
-            foreach (var q in plan.QcPlans)
-            {
-                try
-                {
-                    string d = Path.GetDirectoryName(q.QcPath);
-                    if (!string.IsNullOrEmpty(d) && Directory.Exists(d)) return d;
-                }
-                catch { }
-            }
-            return plan.RootDir;
+            return null;
         }
 
         // ─────────────────────────── 报告 / 细节 / 诊断 ───────────────────────────
@@ -1177,26 +922,37 @@ namespace LodStudio.ViewModels
 
         public void OpenOutputFolder()
         {
-            if (!string.IsNullOrEmpty(_lastOutputDir) && Directory.Exists(_lastOutputDir)) _ui.RevealInExplorer(_lastOutputDir);
+            if (CanOpenOutputFolder) _ui.RevealInExplorer(_lastOutputDir);
             else _ui.ShowToast("还没有输出目录", "先导入任务并运行一次", ToastTone.Warn);
         }
 
         public async Task ShowTaskDetailsAsync(TaskItemVm item)
         {
-            if (item == null) return;
-            string body = await Task.Run(() => BuildTaskDetails(item));
-            bool reveal = await _ui.ConfirmAsync(item.KindText + "：" + item.Name, item.Path,
-                "在资源管理器中显示", "关闭", false, body);
-            if (reveal) _ui.RevealInExplorer(item.Path);
+            if (item == null || _loadingTaskDetails) return;
+            _loadingTaskDetails = true;
+            try
+            {
+                var task = item.ToRef();
+                string heading = item.KindText + " · " + item.Name;
+                var details = new List<string>();
+                if (item.RunDetail.Length > 0) details.Add(item.StatusText + " · " + item.RunDetail);
+                if (item.RunErrors.Length > 0) details.Add(item.RunErrors);
+                if (item.SkipReason.Length > 0 && item.RunDetail != item.SkipReason) details.Add(item.SkipReason);
+                var options = BuildRunOptions(null);
+                string body = await Task.Run(() => BuildTaskDetails(task, options, details));
+                bool reveal = await _ui.ConfirmAsync(heading, task.Path,
+                    "在资源管理器中显示", "关闭", false, body);
+                if (reveal) _ui.RevealInExplorer(task.Path);
+            }
+            finally { _loadingTaskDetails = false; }
         }
 
-        private string BuildTaskDetails(TaskItemVm t)
+        private static string BuildTaskDetails(TaskRef t, BatchRunOptions options, List<string> details)
         {
             var sb = new StringBuilder();
-            if (!string.IsNullOrEmpty(t.RunDetail))
+            if (details.Count > 0)
             {
-                sb.AppendLine("上次运行：" + t.StatusText + "　" + t.RunDetail);
-                if (!string.IsNullOrEmpty(t.RunErrors)) foreach (var line in t.RunErrors.Split('\n')) sb.AppendLine("  · " + line);
+                foreach (string line in details) sb.AppendLine(line);
                 sb.AppendLine();
             }
             try
@@ -1204,12 +960,12 @@ namespace LodStudio.ViewModels
                 List<string> qcs;
                 if (t.Kind == TaskKind.Folder)
                 {
-                    if (!Directory.Exists(t.Path)) return "文件夹不存在。";
+                    if (!Directory.Exists(t.Path)) return sb.AppendLine("文件夹不存在。").ToString();
                     qcs = ProjectScanner.FindRootQcs(t.Path, null);
                     if (qcs.Count == 0)
                     {
                         var loose = ProjectScanner.FindLooseModels(t.Path, 3, null);
-                        sb.AppendLine("没有 QC。运行时会为下面每个模型建立包装 QC：");
+                        sb.AppendLine(options.Automatic ? "没有 QC。可单独生成下列模型的 LOD 网格。" : "没有 QC。下列模型会各自使用包装 QC。");
                         foreach (var x in loose.Take(60)) sb.AppendLine("  " + x);
                         return sb.ToString();
                     }
@@ -1217,6 +973,7 @@ namespace LodStudio.ViewModels
                 else if (t.Kind == TaskKind.Qc) qcs = new List<string> { t.Path };
                 else
                 {
+                    if (options.Automatic) return sb.AppendLine("自动模式将为这个模型估算并生成 LOD 网格。").ToString();
                     string wrapper = ProjectScanner.WrapperQcPath(t.Path);
                     sb.AppendLine(File.Exists(wrapper) ? "会沿用已有的包装 QC：" + wrapper : "运行时会建立包装 QC：" + wrapper);
                     return sb.ToString();
@@ -1230,7 +987,8 @@ namespace LodStudio.ViewModels
                     try
                     {
                         var info = QcParser.Parse(q);
-                        if (info.HasForeignLod) sb.AppendLine(Settings.ForceOverwriteLod ? "  已有手写 $lod → 会被注释停用并替换" : "  已有手写 $lod → 这个 QC 会被跳过");
+                        if (info.HasForeignLod)
+                            sb.AppendLine(options.Force ? "  已有手写 $lod，生成时会注释停用" : "  已有手写 $lod，处理方式见扫描预览");
                         if (info.HasToolMarker)
                         {
                             // 模型声明在 include 文件里时，工具块写在那个文件，根 QC 不动
@@ -1254,7 +1012,7 @@ namespace LodStudio.ViewModels
                             else
                             {
                                 string ext = Path.GetExtension(st.ResolvedPath).ToLowerInvariant();
-                                if (ext != ".glb" && ext != ".smd") state = "· 不是 glb/smd，保持原样";
+                                if (!QcPathResolver.IsSupportedModelExtension(ext)) state = "· 格式暂未支持";
                                 else if (!string.IsNullOrEmpty(st.Innnode)) state = "· 带 innode，跳过";
                                 else state = "✓ 生成 LOD";
                             }
@@ -1285,7 +1043,7 @@ namespace LodStudio.ViewModels
                     }
                     catch { }
                 }
-                text = await Task.Run(() => EnvironmentDiagnostics.Build(Settings, probeDirs, _blenderVersion,
+                text = await Task.Run(() => EnvironmentDiagnostics.Build(Settings, probeDirs,
                     RuntimeContext.IsAdmin, RuntimeContext.IsLowIntegrity()));
             }
             catch (Exception ex) { text = "诊断失败：" + ex; }
@@ -1354,72 +1112,27 @@ namespace LodStudio.ViewModels
 
         public void RestorePreset()
         {
+            if (!CanEdit) return;
             LodPlan.RestorePreset();
-            InvalidatePlan();
         }
 
         public void AddLevel()
         {
+            if (!CanEdit) return;
             LodPlan.AddLevel();
-            InvalidatePlan();
         }
 
         public void RemoveLevel(int index)
         {
+            if (!CanEdit) return;
             LodPlan.RemoveLevel(index);
-            InvalidatePlan();
         }
 
         public void OnWriteModeChanged(int mode)
         {
+            if (!CanEdit) return;
             LodPlan.WriteMode = mode;
-            InvalidatePlan();
             SaveSettings();
-        }
-
-        public async Task SavePresetAsync()
-        {
-            string name = await _ui.PromptAsync("保存为我的预设", "预设名称（会显示在预设下拉里）",
-                LodPlan.PresetDisplay, v => string.IsNullOrWhiteSpace(v) ? "名称不能为空" : null);
-            if (string.IsNullOrEmpty(name)) return;
-            var existing = LodPlan.FindPresetByName(name);
-            if (existing != null && !existing.IsUser)
-            {
-                await _ui.ShowInfoAsync("名称已被占用", "「" + name + "」是内置预设名，请换一个。", null);
-                return;
-            }
-            var plan = LodPlan.ClonePlan();
-            var preset = new LodPreset
-            {
-                Name = name.Trim(),
-                Description = "我的预设",
-                Distances = plan.Distances,
-                Ratios = plan.Ratios,
-                IsUser = true
-            };
-            var users = LodPlan.Presets.Where(p => p.IsUser && !string.Equals(p.Name, preset.Name, StringComparison.Ordinal))
-                                       .Select(p => p.Clone()).ToList();
-            users.Add(preset);
-            var current = LodPlan.Plan.Clone();
-            LodPlan.SetUserPresets(users);
-            LodPlan.LoadFrom(current, preset.Name);
-            SaveSettings();
-            _ui.ShowToast("已保存预设", preset.Name + " · " + current.SummaryShort(), ToastTone.Ok);
-        }
-
-        public async Task DeletePresetAsync()
-        {
-            var p = LodPlan.SelectedPreset;
-            if (p == null || !p.IsUser) { _ui.ShowToast("请先选中一个「我的预设」", "内置预设不能删除", ToastTone.Warn); return; }
-            bool ok = await _ui.ConfirmAsync("删除预设", "删除「" + p.Name + "」？LOD 参数本身不会变。", "删除", "取消", false, null);
-            if (!ok) return;
-            var users = LodPlan.Presets.Where(x => x.IsUser && !string.Equals(x.Name, p.Name, StringComparison.Ordinal))
-                                       .Select(x => x.Clone()).ToList();
-            var current = LodPlan.Plan.Clone();
-            LodPlan.SetUserPresets(users);
-            LodPlan.LoadFrom(current, "");
-            SaveSettings();
-            _ui.ShowToast("已删除预设", p.Name, ToastTone.Ok);
         }
 
         // ─────────────────────────── 日志与状态 ───────────────────────────
@@ -1440,17 +1153,45 @@ namespace LodStudio.ViewModels
             }
         }
 
+        private void PostStage(BatchStage stage)
+        {
+            lock (_progressGate) _pendingStage = stage;
+        }
+
         private void OnPump(object sender, EventArgs e)
         {
             DrainLog();
             int done, total;
             TimeSpan elapsed;
-            lock (_progressGate) { done = _pendingDone; total = _pendingTotal; elapsed = _pendingElapsed; _pendingDone = -1; _pendingTotal = -1; }
-            if (total > 0 && done >= 0)
+            BatchStage stage;
+            lock (_progressGate)
+            {
+                done = _pendingDone;
+                total = _pendingTotal;
+                elapsed = _pendingElapsed;
+                stage = _pendingStage;
+                _pendingDone = _pendingTotal = -1;
+                _pendingStage = BatchStage.None;
+            }
+            if (IsStopping) return;
+            if (stage != BatchStage.None)
+            {
+                _runStage = stage;
+                switch (stage)
+                {
+                    case BatchStage.Planning: SetStatus("正在准备生成", "创建所需的包装 QC", "Signal", true); break;
+                    case BatchStage.Reducing: SetStatus("正在减面", "等待减面任务完成", "Signal", true); break;
+                    case BatchStage.ConvertingSmd: SetStatus("正在整理网格", "检查实际面数和可用档位", "Signal", true); break;
+                    case BatchStage.Injecting: SetStatus("正在发布结果", "保存有效档位并写入所选位置", "Signal", true); break;
+                    case BatchStage.Compiling: SetStatus("正在试编译", "使用已配置的编译器检查 QC", "Signal", true); break;
+                    case BatchStage.Reporting: SetStatus("正在保存报告", "汇总实际档位和错误记录", "Signal", true); break;
+                }
+            }
+            if (_runStage == BatchStage.Reducing && total > 0 && done >= 0)
             {
                 ProgressIndeterminate = false;
                 ProgressValue = done / (double)total;
-                SetStatus("正在生成 " + done + " / " + total, "已用 " + FormatSpan(elapsed) + EstimateEta(done, total, elapsed), "Signal", true);
+                SetStatus("正在减面 " + done + " / " + total, "已用 " + FormatSpan(elapsed) + EstimateEta(done, total, elapsed), "Signal", false);
                 SetReadout(done, "个减面任务");
             }
         }
@@ -1487,6 +1228,14 @@ namespace LodStudio.ViewModels
             }
         }
 
+        private void FinishActivity(string title, string sub, string tone)
+        {
+            ProgressVisible = false;
+            ProgressIndeterminate = false;
+            ProgressFailed = false;
+            SetStatus(title, sub, tone, false);
+        }
+
         private void SetReadout(int value, string sub)
         {
             ReadoutMainText = value.ToString(CultureInfo.InvariantCulture);
@@ -1519,6 +1268,7 @@ namespace LodStudio.ViewModels
                 string ext = Path.GetExtension(first).ToLowerInvariant();
                 if (ext == ".qc") return TaskKind.Qc;
                 if (ext == ".smd") return TaskKind.Smd;
+                if (ext == ".dmx") return TaskKind.Dmx;
             }
             catch { }
             return TaskKind.Glb;
@@ -1547,8 +1297,6 @@ namespace LodStudio.ViewModels
                 Diagnostics = new RelayCommand(async () => await _vm.RunDiagnosticsAsync());
                 RestorePreset = new RelayCommand(() => _vm.RestorePreset());
                 AddLevel = new RelayCommand(() => _vm.AddLevel());
-                SavePreset = new RelayCommand(async () => await _vm.SavePresetAsync());
-                DeletePreset = new RelayCommand(async () => await _vm.DeletePresetAsync());
                 ToggleTheme = new RelayCommand(() => _vm.ToggleTheme());
                 ToggleLog = new RelayCommand(() => _vm.IsLogExpanded = !_vm.IsLogExpanded);
                 CopyLog = new RelayCommand(() => _vm.CopyLog());
@@ -1574,8 +1322,6 @@ namespace LodStudio.ViewModels
             public RelayCommand Diagnostics { get; private set; }
             public RelayCommand RestorePreset { get; private set; }
             public RelayCommand AddLevel { get; private set; }
-            public RelayCommand SavePreset { get; private set; }
-            public RelayCommand DeletePreset { get; private set; }
             public RelayCommand ToggleTheme { get; private set; }
             public RelayCommand ToggleLog { get; private set; }
             public RelayCommand CopyLog { get; private set; }
@@ -1590,12 +1336,14 @@ namespace LodStudio.ViewModels
 
         private async Task AddFolderAsync()
         {
+            if (!CanEdit) return;
             string dir = await _ui.PickFolderAsync();
             if (!string.IsNullOrEmpty(dir)) await AddPathsAsync(new[] { dir });
         }
 
         private async Task AddFilesAsync()
         {
+            if (!CanEdit) return;
             var files = await _ui.PickFilesAsync();
             if (files != null && files.Count > 0) await AddPathsAsync(files);
         }
@@ -1615,9 +1363,9 @@ namespace LodStudio.ViewModels
         public async Task ShowShortcutHelpAsync()
         {
             const string text =
-                "F5            开始生成\n" +
-                "Esc           停止运行 / 清筛选 / 关对话框\n" +
-                "Ctrl+O        导入文件（QC / GLB / SMD）\n" +
+                "F5            开始生成或按当前预览生成\n" +
+                "Esc           关闭对话框、返回队列、取消当前操作或清筛选\n" +
+                "Ctrl+O        导入文件（QC / GLB / SMD / DMX）\n" +
                 "Ctrl+Shift+O  导入工程文件夹\n" +
                 "Ctrl+F        搜索任务（Esc 清空）\n" +
                 "Ctrl+L        展开 / 折叠运行日志\n" +
@@ -1625,7 +1373,7 @@ namespace LodStudio.ViewModels
                 "Ctrl+A        全选任务\n" +
                 "Delete        移除选中任务\n" +
                 "Ctrl+↑ / ↓    调整任务顺序\n" +
-                "Enter         查看选中任务详情\n" +
+                "Enter         查看选中的队列或计划项\n" +
                 "↑↓ / Home / End / PgUp / PgDn   在任务列表里移动\n" +
                 "F1            本快捷键列表";
             await _ui.ShowInfoAsync("快捷键", "这些键在主窗口里随时可用。", text);
@@ -1634,12 +1382,11 @@ namespace LodStudio.ViewModels
         public async Task ShowAboutAsync()
         {
             string text = AppInfo.TitleText + "\n" +
-                          "给 L4D2 模型工程自动生成多级 LOD（Blender 减面 + $lod 写回 QC）。\n\n" +
+                          "给 L4D2 模型工程自动生成多级 LOD（内置 meshoptimizer 减面 + $lod 写回 QC）。\n\n" +
                           "版本：" + AppInfo.FileVersionText + "（" + AppInfo.Bitness + "）\n" +
                           "运行时：.NET Framework " + Environment.Version + "\n" +
                           "设置文件：" + AppInfo.SettingsFile + "\n" +
                           "临时目录：" + AppInfo.TempRoot + "\n" +
-                          "Blender：" + (string.IsNullOrEmpty(_blenderVersion) ? "未检测" : _blenderVersion) + "\n" +
                           "编译器：" + CompilerText;
             await _ui.ShowInfoAsync("关于 远景工坊", AppInfo.Subtitle, text);
         }
@@ -1663,11 +1410,8 @@ namespace LodStudio.ViewModels
             _ui.ShowToast("没有找到使用说明", "部署目录里应带上 README.md", ToastTone.Warn);
         }
 
-        /// <summary>LOD 参数在运行前的额外校验（含 Blender 等）</summary>
+        /// <summary>LOD 参数在运行前的额外校验（含减面后端等）</summary>
         public void RaiseReady() { UpdateReadiness(); Raise("ShowStartButton"); Raise("ShowStopButton"); }
-
-        // 让 SettingsViewModel 在保存时促使计划失效
-        public void InvalidatePlans() { InvalidatePlan(); }
 
         // ─────────────────────────── 引擎观察者 ───────────────────────────
 
@@ -1677,7 +1421,11 @@ namespace LodStudio.ViewModels
             public UiObserver(ShellViewModel vm) { _vm = vm; }
             public void Log(LogLevel level, string text) { _vm.PostLog(level, text); }
             public void Progress(int done, int total, TimeSpan elapsed) { _vm.PostProgress(done, total, elapsed); }
-            public void Stage(BatchStage stage, string detail) { if (detail != null) _vm.PostLog(LogLevel.Stage, detail); }
+            public void Stage(BatchStage stage, string detail)
+            {
+                if (detail != null) _vm.PostLog(LogLevel.Stage, detail);
+                if (stage != BatchStage.Done) _vm.PostStage(stage);
+            }
         }
     }
 }

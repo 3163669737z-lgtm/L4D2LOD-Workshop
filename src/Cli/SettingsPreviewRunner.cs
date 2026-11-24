@@ -76,7 +76,6 @@ namespace LodStudio.Cli
                 Log.Add(AppInfo.TitleText + "  —  settings-preview");
                 Log.Add("out           : " + _outDir);
                 Log.Add("设置目录      : " + AppInfo.SettingsDir);
-                Log.Add("Blender(seed) : " + (string.IsNullOrEmpty(settings.BlenderPath) ? "(未找到，将在引擎页显示未指定状态)" : settings.BlenderPath));
                 Log.Add("动画开关      : ClientAreaAnimation=" + SafeAnimationFlag());
                 Log.Add("");
 
@@ -96,10 +95,9 @@ namespace LodStudio.Cli
                 // ═══════════ 引擎页（浅 / 暗） ═══════════
                 SetTheme(settings, 2, ThemeKind.Light);
                 win.SelectPage(0);
-                WaitEngineProbe(win, 15000);
                 NoteLayout(win, "settings_engine_light");
                 Capture(win, "settings_engine_light",
-                    "引擎页 · 浅色（跟随系统）；Blender 状态行显示探测结果，编译器未设置");
+                    "引擎页 · 浅色，内置减面后端和编译器设置");
                 SetTheme(settings, 1, ThemeKind.Dark);
                 win.SelectPage(0);
                 Pump(120);
@@ -138,7 +136,7 @@ namespace LodStudio.Cli
                 win.SelectPage(2);
                 Pump(160);
                 NoteLayout(win, "settings_advanced_light");
-                Capture(win, "settings_advanced_light", "LOD 高级页 · 浅色：5 个开关 + 跳过清单（已选 2）+ 并行进程");
+                Capture(win, "settings_advanced_light", "LOD 高级页 · 浅色：生成开关、保留清单和跳过清单");
 
                 // ═══════════ 外观页（浅 / 暗） ═══════════
                 SetTheme(settings, 0, ThemeKind.Light);
@@ -259,7 +257,6 @@ namespace LodStudio.Cli
                 Workers = 0
             };
             if (demoQcs != null && demoQcs.Count > 0) s.SkipMainQcs = new List<string>(demoQcs);
-            try { s.BlenderPath = BlenderLocator.Find(null) ?? ""; } catch { s.BlenderPath = ""; }
             return s;
         }
 
@@ -307,15 +304,6 @@ namespace LodStudio.Cli
             catch (Exception ex) { Log.Add("  [theme] " + ex.Message); }
         }
 
-        private static void WaitEngineProbe(SettingsWindow win, int timeoutMs)
-        {
-            var sw = Stopwatch.StartNew();
-            while (win.EngineProbeBusy && sw.ElapsedMilliseconds < timeoutMs)
-            {
-                Pump(40);
-            }
-            Pump(140);
-        }
 
         private static void WaitTask(Task task, int timeoutMs)
         {
@@ -396,11 +384,6 @@ namespace LodStudio.Cli
             public Task ShowInfoAsync(string title, string message, string detail)
             {
                 return Task.FromResult(0);
-            }
-
-            public Task<string> PromptAsync(string title, string label, string initial, Func<string, string> validate)
-            {
-                return Task.FromResult<string>(null);
             }
 
             public void ShowToast(string title, string subtitle, ToastTone tone) { }

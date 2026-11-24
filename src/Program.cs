@@ -26,6 +26,10 @@ namespace LodStudio
             try { Engine.TempCleaner.CleanStale(); } catch { }
             Engine.PerfTrace.Mark("temp-clean");
             var cli = CommandLine.Parse(args);
+#if CONSOLE_BUILD
+            Console.OutputEncoding = new System.Text.UTF8Encoding(false);
+            if (args.Length == 0) cli.Mode = CliMode.Help;
+#endif
             try
             {
                 switch (cli.Mode)

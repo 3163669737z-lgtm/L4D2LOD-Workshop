@@ -49,14 +49,22 @@ namespace LodStudio.ViewModels
 
         public int Index { get { return _index; } set { Set(ref _index, value); } }
         public bool Scanned { get { return _scanned; } set { Set(ref _scanned, value); RaiseAll(); } }
-        public int QcCount { get { return _qcCount; } set { Set(ref _qcCount, value); Raise("ScaleText"); } }
-        public int ModelCount { get { return _modelCount; } set { Set(ref _modelCount, value); Raise("ScaleText"); } }
-        public bool Skip { get { return _skip; } set { Set(ref _skip, value); Raise("ScaleText"); } }
-        public string Note { get { return _note; } set { Set(ref _note, value); Raise("ScaleText"); } }
+        public int QcCount { get { return _qcCount; } set { if (Set(ref _qcCount, value)) RaiseRowDetails(); } }
+        public int ModelCount { get { return _modelCount; } set { if (Set(ref _modelCount, value)) RaiseRowDetails(); } }
+        public bool Skip { get { return _skip; } set { if (Set(ref _skip, value)) RaiseRowDetails(); } }
+        public string Note { get { return _note; } set { if (Set(ref _note, value)) RaiseRowDetails(); } }
         public string Hint { get { return _hint; } set { Set(ref _hint, value); Raise("HintVisible"); } }
         public bool HintVisible { get { return !string.IsNullOrEmpty(_hint); } }
-        public string RunDetail { get { return _runDetail; } set { Set(ref _runDetail, value); Raise("Tooltip"); } }
+        public string RunDetail { get { return _runDetail; } set { if (Set(ref _runDetail, value)) { Raise(nameof(Tooltip)); Raise(nameof(RowDetail)); } } }
         public string RunErrors { get { return _runErrors; } set { Set(ref _runErrors, value); Raise("Tooltip"); } }
+        public string SkipReason { get; set; } = "";
+
+        private void RaiseRowDetails()
+        {
+            Raise(nameof(ScaleText));
+            Raise(nameof(RowDetail));
+            Raise(nameof(Tooltip));
+        }
 
         public TaskStatus Status
         {
@@ -87,6 +95,7 @@ namespace LodStudio.ViewModels
                     case TaskKind.Folder: return "工程";
                     case TaskKind.Qc: return "QC";
                     case TaskKind.Smd: return "SMD";
+                    case TaskKind.Dmx: return "DMX";
                     default: return "GLB";
                 }
             }
@@ -118,21 +127,39 @@ namespace LodStudio.ViewModels
             }
         }
 
+        public string DisplayPath
+        {
+            get
+            {
+                string path = ParentPath;
+                if (path.Length <= 70) return path;
+                int cut = path.Length;
+                for (int i = 0; i < 4 && cut > 1; i++)
+                {
+                    int separator = Math.Max(path.LastIndexOf('\\', cut - 1), path.LastIndexOf('/', cut - 1));
+                    if (separator < 0) break;
+                    cut = separator;
+                }
+                return cut > 3 && cut < path.Length ? "…" + path.Substring(cut) : path;
+            }
+        }
+
         public string ScaleText
         {
             get
             {
-                if (!Scanned) return Status == TaskStatus.Scanning ? "扫描中…" : "…";
+                if (!Scanned) return "";
                 if (Skip) return Note;
                 if (Kind == TaskKind.Folder)
                 {
                     if (QcCount == 0 && ModelCount > 0) return "无 QC · " + ModelCount + " 个模型";
                     return QcCount + " QC · " + ModelCount + " 模型";
                 }
-                if (Kind == TaskKind.Qc) return ModelCount + " 模型";
-                return "包装 QC";
+                return ModelCount + " 个模型";
             }
         }
+
+        public string RowDetail => string.IsNullOrEmpty(RunDetail) ? ScaleText : RunDetail;
 
         public string StatusText
         {
@@ -159,18 +186,17 @@ namespace LodStudio.ViewModels
             {
                 switch (Status)
                 {
+                    case TaskStatus.Scanning: return "Signal";
                     case TaskStatus.Running: return "Signal";
                     case TaskStatus.Ok: return "Ok";
                     case TaskStatus.Partial: return "Warn";
                     case TaskStatus.Failed: return "Err";
-                    case TaskStatus.Skipped: return "Faint";
+                    case TaskStatus.Skipped: return "Normal";
                     case TaskStatus.Cancelled: return "Warn";
-                    default: return "Faint";
+                    default: return "Normal";
                 }
             }
         }
-
-        public bool ShowActions { get { return true; } }
 
         public string Tooltip
         {
@@ -185,8 +211,9 @@ namespace LodStudio.ViewModels
                     if (!string.IsNullOrEmpty(Hint)) sb.AppendLine("提示：" + Hint);
                 }
                 if (!string.IsNullOrEmpty(RunDetail)) sb.AppendLine("上次运行：" + RunDetail);
-                if (!string.IsNullOrEmpty(RunErrors)) sb.AppendLine(RunErrors.Replace("\n", "\n    "));
-                sb.Append("双击查看详情；右键更多操作");
+                if (!string.IsNullOrEmpty(SkipReason)) sb.AppendLine(SkipReason);
+                if (!string.IsNullOrEmpty(RunErrors)) sb.AppendLine(RunErrors.Split('\n')[0]);
+                sb.Append("双击或按 Enter 查看详情");
                 return sb.ToString();
             }
         }
@@ -274,7 +301,7 @@ namespace LodStudio.ViewModels
         }
 
         public int CountAll { get { return _items.Count; } }
-        public int CountUnfinished { get { return _items.Count(x => !x.IsDone && !x.IsIssue && x.Status != TaskStatus.Skipped); } }
+        public int CountUnfinished { get { return _items.Count(x => !x.IsDone && !x.IsIssue && !x.Skip); } }
         public int CountDone { get { return _items.Count(x => x.Status == TaskStatus.Ok); } }
         public int CountIssue { get { return _items.Count(x => x.Status == TaskStatus.Failed || x.Status == TaskStatus.Partial); } }
         public int CountSkipped { get { return _items.Count(x => x.Status == TaskStatus.Skipped || x.Skip); } }
@@ -356,19 +383,21 @@ namespace LodStudio.ViewModels
             for (int i = 0; i < _items.Count; i++) _items[i].Index = i + 1;
         }
 
-        public void Add(TaskRef r, out bool duplicate)
+        public TaskItemVm Add(TaskRef r, out bool duplicate)
         {
             duplicate = false;
-            if (r == null || string.IsNullOrEmpty(r.Path)) return;
+            if (r == null || string.IsNullOrEmpty(r.Path)) return null;
             foreach (var t in _items)
             {
                 if (t.Kind == r.Kind && string.Equals(t.Path, r.Path, StringComparison.OrdinalIgnoreCase))
                 {
                     duplicate = true;
-                    return;
+                    return null;
                 }
             }
-            _items.Add(new TaskItemVm(r.Kind, r.Path));
+            var item = new TaskItemVm(r.Kind, r.Path);
+            _items.Add(item);
+            return item;
         }
 
         public List<TaskItemVm> Snapshot()
@@ -401,6 +430,7 @@ namespace LodStudio.ViewModels
                 t.Status = t.Skip ? TaskStatus.Skipped : TaskStatus.Pending;
                 t.RunDetail = "";
                 t.RunErrors = "";
+                t.SkipReason = "";
             }
             UpdateCounts();
             RefreshView();

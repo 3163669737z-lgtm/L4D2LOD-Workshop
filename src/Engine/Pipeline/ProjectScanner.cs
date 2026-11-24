@@ -201,7 +201,7 @@ namespace LodStudio.Engine
             return false;
         }
 
-        /// <summary>递归找散落的 .glb/.smd（跳过 *_lodN 与 _LOD* 目录），用于"文件夹里没有 QC"的情况。</summary>
+        /// <summary>递归找散落的 GLB、SMD、DMX，跳过 LOD 产物，用于没有 QC 的文件夹。</summary>
         public static List<string> FindLooseModels(string dir, int maxDepth, Action<string> log)
         {
             var found = new List<string>();
@@ -213,7 +213,7 @@ namespace LodStudio.Engine
 
             CollectLooseModels(root, 0, maxDepth, found, log, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
             found.Sort(StringComparer.OrdinalIgnoreCase);
-            if (found.Count > 0) L(log, "  找到 " + found.Count + " 个散落模型（.glb/.smd）");
+            if (found.Count > 0) L(log, "  找到 " + found.Count + " 个散落模型（GLB、SMD、DMX）");
             return found;
         }
 
@@ -251,9 +251,8 @@ namespace LodStudio.Engine
             catch (Exception ex) { throw new IOException("建立包装 QC 失败：无法访问模型文件 —— " + ex.Message, ex); }
 
             string ext = Path.GetExtension(modelFull);
-            if (!string.Equals(ext, ".glb", StringComparison.OrdinalIgnoreCase) &&
-                !string.Equals(ext, ".smd", StringComparison.OrdinalIgnoreCase))
-                throw new IOException("建立包装 QC 失败：只支持 .glb / .smd 模型 —— " + Path.GetFileName(modelFull));
+            if (!QcPathResolver.IsSupportedModelExtension(ext))
+                throw new IOException("建立包装 QC 失败：只支持 GLB、SMD、DMX 模型 —— " + Path.GetFileName(modelFull));
 
             string qc;
             try { qc = WrapperQcPath(modelFull); }
@@ -370,6 +369,8 @@ namespace LodStudio.Engine
                     AddLoose(f, found);
                 foreach (string f in Directory.GetFiles(dir, "*.smd"))
                     AddLoose(f, found);
+                foreach (string f in Directory.GetFiles(dir, "*.dmx"))
+                    AddLoose(f, found);
             }
             catch (Exception ex)
             {
@@ -406,7 +407,7 @@ namespace LodStudio.Engine
         }
 
         private static readonly Regex LodProductRegex =
-            new Regex("_lod\\d+\\.(glb|smd)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            new Regex("_lod\\d+(?:_[0-9a-f]{16})?\\.(glb|smd|dmx)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
         private static void AddLoose(string file, List<string> found)
         {

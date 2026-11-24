@@ -48,5 +48,6 @@ namespace LodStudio.Engine
         public List<string> LogLines = new List<string>();
         public string BatchDetailReportPath = "";
         public bool CompileAfter;
+        public bool Automatic;
     }
 }

@@ -721,7 +721,6 @@ namespace LodStudio.Engine
             string dir = ctx.NewDir("diagnostics");
             var settings = new AppSettings
             {
-                BlenderPath = @"C:\Program Files\Blender Foundation\Blender 4.1\blender.exe",
                 NekomdlPath = @"E:\SteamLibrary\steamapps\common\Left 4 Dead 2\bin\nekomdl.exe",
                 PresetName = "角色·标准（5级）"
             };
@@ -729,7 +728,7 @@ namespace LodStudio.Engine
             try
             {
                 text = EnvironmentDiagnostics.Build(settings, new List<string> { dir, Path.Combine(dir, "不存在") },
-                                                    "Blender 4.1.1", false, false);
+                                                    false, false);
             }
             catch (Exception ex) { ctx.Assert(false, "EnvironmentDiagnostics.Build 不应抛异常：" + ex.Message); }
 
@@ -737,8 +736,7 @@ namespace LodStudio.Engine
             ctx.AssertContains(text, "远景工坊", "诊断含工具名");
             ctx.AssertContains(text, "管理员", "诊断含管理员状态");
             ctx.AssertContains(text, "低完整性", "诊断含低完整性状态");
-            ctx.AssertContains(text, "Blender", "诊断含 Blender");
-            ctx.AssertContains(text, "Blender 4.1.1", "诊断含 Blender 版本");
+            ctx.AssertContains(text, "meshoptimizer", "诊断含内置减面后端");
             ctx.AssertContains(text, "编译器", "诊断含编译器");
             ctx.AssertContains(text, "设置文件", "诊断含设置文件路径");
             ctx.AssertContains(text, "临时目录", "诊断含临时目录");
@@ -750,7 +748,7 @@ namespace LodStudio.Engine
 
             // null 参数 / 异常参数也不能崩
             string nullText = null;
-            try { nullText = EnvironmentDiagnostics.Build(null, null, null, true, true); }
+            try { nullText = EnvironmentDiagnostics.Build(null, null, true, true); }
             catch (Exception ex) { ctx.Assert(false, "Build(null,...) 不应抛异常：" + ex.Message); }
             ctx.AssertContains(nullText, "管理员", "null 设置也能输出管理员状态");
             ctx.AssertContains(nullText, "低完整性", "null 设置也能输出低完整性状态");

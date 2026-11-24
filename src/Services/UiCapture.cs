@@ -31,14 +31,11 @@ namespace LodStudio.Services
         }
 
         /// <summary>
-        /// 把窗口内容渲染到 PNG（1:1 逻辑像素，96 DPI）。
-        /// 需要"高 DPI 视觉压力"截图时：先把窗口尺寸设成 目标逻辑尺寸 × scale，再用本方法截图；
-        /// 旧实现内部还会再乘一次 scale（LayoutTransform + dpi 双算，导致实际 scale²、画面被裁），已删除。
+        /// 以指定的目标 DPI 渲染 PNG，保持窗口的逻辑布局尺寸。
         /// </summary>
         public static void CaptureWindow(Window window, string path, double scale = 1.0)
         {
             if (window == null) throw new ArgumentNullException("window");
-            // scale 参数仅保留兼容：内部不再做二次缩放（需要放大截图请先把窗口尺寸乘 scale）
             DoEvents();
             FrameworkElement root = window;
             root.UpdateLayout();
@@ -46,9 +43,9 @@ namespace LodStudio.Services
             double h = root.ActualHeight;
             if (w < 2 || h < 2) throw new InvalidOperationException("窗口内容尺寸非法: " + w + "x" + h);
 
-            int pw = (int)Math.Ceiling(w);
-            int ph = (int)Math.Ceiling(h);
-            var rtb = new RenderTargetBitmap(pw, ph, 96.0, 96.0, PixelFormats.Pbgra32);
+            int pw = (int)Math.Round(w * scale);
+            int ph = (int)Math.Round(h * scale);
+            var rtb = new RenderTargetBitmap(pw, ph, 96.0 * scale, 96.0 * scale, PixelFormats.Pbgra32);
             rtb.Render(root);
 
             var encoder = new PngBitmapEncoder();

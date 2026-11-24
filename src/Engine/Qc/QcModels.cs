@@ -26,6 +26,8 @@ namespace LodStudio.Engine
         public string Innnode;
         /// <summary>$model 块里有 flexfile/flexcontroller/localvar → 加 nofacial 会丢表情</summary>
         public bool HasFacial;
+        internal double Scale = 1;
+        internal int? FixedTriangleCount;
         /// <summary>声明这个条目的文件（绝对路径，可能是 include 文件）</summary>
         public string DeclaredInQc;
         /// <summary>声明所在行（1 起）</summary>

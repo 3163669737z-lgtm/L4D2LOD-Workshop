@@ -33,7 +33,7 @@ namespace LodStudio.Cli.UiAudit
     ///  - 只看可见（Visibility=Visible 且尺寸 &gt;0）的 FrameworkElement；
     ///  - 同一父级下两个子元素矩形相交面积 &gt; 1px² → 记"重叠"；
     ///  - 子元素包围盒超出父元素包围盒 &gt; 1px → 记"越界"；
-    ///  - 排除（整棵子树）：覆盖层与自绘装饰（EmptyState/NoMatchState/PlanOverlay/LogBody/
+    ///  - 排除（整棵子树）：覆盖层与自绘装饰（EmptyState/NoMatchState/LogBody/
     ///    DropOverlay/DialogHost/ToastHost/Progress/TickStrip/CornerBrackets/Rule/SegmentedProgress）、
     ///    1px 分隔 Border、Canvas 子级、滚动区内容的越界（滚动区只查重叠不查越界）。
     ///
@@ -164,7 +164,6 @@ namespace LodStudio.Cli.UiAudit
             if (name == "DropOverlay") return true;
             if (name == "EmptyState") return true;
             if (name == "NoMatchState") return true;
-            if (name == "PlanOverlay") return true;
             if (name == "LogBody") return true;
             if (name == "Progress") return true;
 

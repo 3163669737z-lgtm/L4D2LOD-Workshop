@@ -4,8 +4,7 @@ using LodStudio.Services;
 namespace LodStudio.Cli.UiAudit
 {
     /// <summary>
-    /// 布局审计阶段：6 状态 × 浅/暗 × 3 窗口尺寸 = 36 组，逐组要求"重叠 0 处 / 越界 0 处"。
-    /// 覆盖 docs/02 §8：主窗口 1280×840 / 1600×900 / 最小 1120×720。
+    /// 布局审计覆盖默认、宽屏、最小和紧凑工作区。
     /// </summary>
     internal static class LayoutAuditPhase
     {
@@ -21,13 +20,13 @@ namespace LodStudio.Cli.UiAudit
 
         public static void Run(ShellAuditSession s, AuditReport report, string outDir = null)
         {
-            report.Section("3. 布局审计（6 状态 × 浅/暗 × 3 尺寸 = 36 组）");
+            var sizes = new[] { new Size(1320, 860), new Size(1600, 900), new Size(1120, 720), new Size(960, 550) };
+            report.Section("3. 布局审计（" + ScreenshotMatrix.LayoutStates.Length + " 状态 × 浅/暗 × " + sizes.Length + " 尺寸）");
             report.Info("判定：兄弟控件重叠 0 处 / 子元素越界 0 处（滚动区内容只查重叠；" +
-                        "EmptyState/NoMatchState/PlanOverlay/LogBody/DropOverlay/DialogHost/ToastHost/Progress/" +
+                        "EmptyState/NoMatchState/LogBody/DropOverlay/DialogHost/ToastHost/Progress/" +
                         "TickStrip/CornerBrackets/Rule/SegmentedProgress 及 1px 分隔线、Canvas 子级不参与；" +
                         "内置控件模板内部（TextBox/ComboBox/ScrollBar/AdornerLayer）与非交互覆盖层不参与）。");
 
-            var sizes = new[] { new Size(1280, 840), new Size(1600, 900), new Size(1120, 720) };
             int groups = 0, failed = 0;
             int totalOverlaps = 0, totalOutOfBounds = 0;
 

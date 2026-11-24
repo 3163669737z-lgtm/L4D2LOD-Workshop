@@ -116,17 +116,23 @@ namespace LodStudio.Cli
                 sb.AppendLine("  L4D2LOD远景工坊.exe <文件或文件夹>...   打开界面并加入队列");
                 sb.AppendLine("  L4D2LOD远景工坊.exe --selftest [--out 目录]   引擎自测");
                 sb.AppendLine("  L4D2LOD远景工坊.exe --ui-audit --out 目录     界面审计（截图/布局/对比度）");
-                sb.AppendLine("  L4D2LOD远景工坊.exe --plan <工程目录>         只读计划（不写任何文件）");
-                sb.AppendLine("  L4D2LOD远景工坊.exe --batch <工程目录> [选项] 无界面执行一次批量");
+                sb.AppendLine("  L4D2LOD-cli.exe --plan <路径>... [--out 目录]  只读预览，输出 plan.json");
+                sb.AppendLine("  L4D2LOD-cli.exe --batch <路径>... [--out 目录] 按自动计划生成 LOD");
+                sb.AppendLine("  路径支持工程目录、QC、GLB、SMD、DMX。独立模型只写模型 LOD。");
                 sb.AppendLine("  L4D2LOD远景工坊.exe --version          打印版本");
                 sb.AppendLine();
-                sb.AppendLine("--batch 选项: --preset N | --levels N --dist 10,15,25 --ratio 99.7,65.3,34");
-                sb.AppendLine("              --backend blender|gltfpack（后者=无 Blender 模式）");
+                sb.AppendLine("预设: --preset 0|1|2|3|4（保守 / 平衡 / 激进 / 自定义 / 自动）");
+                sb.AppendLine("手动兼容模式:");
+                sb.AppendLine("              --levels N --dist 10,15,25 --ratio 85,65,45");
+                sb.AppendLine("              --backend gltfpack（默认内置 meshoptimizer） --quality | --fast（选择几何预算）");
+                sb.AppendLine("              --density-budget | --legacy-budget（按源部件面数均匀分配，或沿用原策略）");
+                sb.AppendLine("              --vertex-update | --fixed-vertices（允许通过外观验收的顶点微调，或使用固定顶点）");
+                sb.AppendLine("              --keep-models <源 GLB/SMD/DMX 路径>（沿用原网格，多个路径用 | 分隔）");
+                sb.AppendLine("              --facial | --nofacial（保留或禁用远处表情） --skip-main（跳过各 QC 的主模型）");
                 sb.AppendLine("              --mode 0|1|2 --workers N --force --compile --facial --skip-main --no-backup");
-                sb.AppendLine("              --report-dir 目录 --blender 路径 --nekomdl 路径 --min-triangles N");
+                sb.AppendLine("              --report-dir 目录 --nekomdl 路径 --min-triangles N");
                 sb.AppendLine();
                 sb.AppendLine("  --icon-sheet / --widget-preview / --settings-preview   设计/验收用截图（需 --out）");
-                sb.AppendLine("              --blender 路径 --nekomdl 路径 --min-triangles N");
                 return sb.ToString();
             }
         }

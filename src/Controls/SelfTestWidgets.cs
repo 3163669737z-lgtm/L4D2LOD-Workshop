@@ -73,16 +73,16 @@ namespace LodStudio.Controls
         [SelfTest("Widget：比例把手严格小于上一级、严格大于下一级")]
         public static void ConstrainRatio(SelfTestContext ctx)
         {
-            LodPlan plan = LodPlan.FromPreset(PresetLibrary.Builtins()[0]);   // 0.997/0.653/0.34/0.161
+            LodPlan plan = LodPlan.CreateDefault();
             double v;
 
             ctx.Assert(RangeMath.TryConstrainRatio(plan, 0, 1.5, out v), "第 1 级可约束");
             ctx.AssertEqual(1.0, v, 1e-12, "向上拖过头 → 100%");
             ctx.Assert(RangeMath.TryConstrainRatio(plan, 0, 0.2, out v), "第 1 级可约束");
-            ctx.AssertEqual(0.654, v, 1e-12, "第 1 级不得压到第 2 级（0.653+0.001）");
+            ctx.AssertEqual(0.651, v, 1e-12, "第 1 级不得压到第 2 级（0.65 + 0.001）");
 
             ctx.Assert(RangeMath.TryConstrainRatio(plan, 3, 0.9, out v), "最后一级可约束");
-            ctx.AssertEqual(0.339, v, 1e-12, "最后一级不得超过上一级（0.34-0.001）");
+            ctx.AssertEqual(0.449, v, 1e-12, "最后一级不得超过上一级（0.45 - 0.001）");
             ctx.Assert(RangeMath.TryConstrainRatio(plan, 3, 0.0001, out v), "最后一级可约束");
             ctx.AssertEqual(0.01, v, 1e-12, "最后一级下限 1%");
 
@@ -101,7 +101,7 @@ namespace LodStudio.Controls
         [SelfTest("Widget：距离把手严格大于上一级、严格小于下一级（1 HU 步进）")]
         public static void ConstrainDistance(SelfTestContext ctx)
         {
-            LodPlan plan = LodPlan.FromPreset(PresetLibrary.Builtins()[0]);   // 10/15/25/50
+            LodPlan plan = LodPlan.CreateDefault();
             double v;
 
             ctx.Assert(RangeMath.TryConstrainDistance(plan, 0, 100, out v), "第 1 级可约束");
@@ -140,7 +140,9 @@ namespace LodStudio.Controls
         [SelfTest("Widget：拖动提交后方案仍然是严格合法的 LOD 方案")]
         public static void DragResultStaysValid(SelfTestContext ctx)
         {
-            LodPlan plan = LodPlan.FromPreset(PresetLibrary.Builtins()[6]);   // 8 级
+            var plan = new LodPlan();
+            for (int i = 0; i < LodPlan.MaxLevels; i++)
+                plan.Levels.Add(new LodLevel(10 + i * 10, (95 - i * 10) / 100.0));
             var work = plan.Clone();
             double v;
             // 把第 5 级的比例往上顶到极限、距离往下顶到极限，结果都必须通过引擎校验

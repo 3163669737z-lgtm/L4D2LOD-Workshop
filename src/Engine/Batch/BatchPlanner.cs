@@ -10,7 +10,7 @@ namespace LodStudio.Engine
 {
     /// <summary>
     /// 批量计划器：把用户任务展开为 QC 清单，解析 QC，全局去重，统计面数，生成减面任务。
-    /// **只读**：不写任何文件、不启动 Blender、不修改 QC。
+    /// **只读**：不写任何文件、不启动减面进程、不修改 QC。
     /// </summary>
     public static class BatchPlanner
     {
@@ -24,7 +24,8 @@ namespace LodStudio.Engine
                 RootDir = FileUtil.Normalize(rootDir),
                 BuiltAt = DateTime.Now,
                 Plan = options.Plan ?? LodPlan.CreateDefault(),
-                PresetName = string.IsNullOrEmpty(options.PresetName) ? "自定义" : options.PresetName
+                Automatic = options.Automatic,
+                PresetName = options.Automatic ? PresetLibrary.AutomaticName : string.IsNullOrEmpty(options.PresetName) ? PresetLibrary.CustomName : options.PresetName
             };
 
             var logs = new List<string>();
@@ -55,7 +56,7 @@ namespace LodStudio.Engine
                                     Action<LogLevel, string> log)
         {
             var planLevels = plan.Plan;
-            string perf = planLevels.Validate();
+            string perf = options.Automatic ? null : planLevels.Validate();
             if (perf != null) log(LogLevel.Error, "LOD 参数有误：" + perf);
 
             // ── 1. 展开任务 ──
@@ -88,13 +89,14 @@ namespace LodStudio.Engine
                             var loose = ProjectScanner.FindLooseModels(path, 3, s => log(LogLevel.Detail, s));
                             if (loose.Count == 0)
                             {
-                                exp.Error = "没有 QC，也没有 .glb / .smd";
+                                exp.Error = "没有 QC，也没有 GLB、SMD 或 DMX 模型";
                                 log(LogLevel.Warn, string.Format("[{0}] {1} → {2}", "工程", Path.GetFileName(path.TrimEnd('\\')), exp.Error));
                                 continue;
                             }
-                            log(LogLevel.Info, "没有 QC：为 " + loose.Count + " 个模型各建一个包装 QC");
+                            log(LogLevel.Info, options.Automatic ? "没有 QC：仅生成模型 LOD" : "没有 QC：为 " + loose.Count + " 个模型各建一个包装 QC");
                             foreach (var m in loose)
                             {
+                                if (options.Automatic) { AddQc(exp, qcOrder, qcSeen, m, log); continue; }
                                 string qc = ProjectScanner.WrapperQcPath(m);
                                 if (File.Exists(qc)) AddQc(exp, qcOrder, qcSeen, qc, log);
                                 else
@@ -118,6 +120,7 @@ namespace LodStudio.Engine
                     else
                     {
                         if (!File.Exists(path)) { exp.Error = "文件不存在"; log(LogLevel.Error, "模型不存在：" + path); continue; }
+                        if (options.Automatic) { AddQc(exp, qcOrder, qcSeen, path, log); continue; }
                         string qc = ProjectScanner.WrapperQcPath(path);
                         if (!File.Exists(qc) && !wrapperModels.ContainsKey(qc))
                         {
@@ -148,7 +151,13 @@ namespace LodStudio.Engine
                 var qp = new BatchQcPlan { QcPath = qc };
                 bool synthetic = false;
                 string modelForWrapper;
-                if (wrapperModels.TryGetValue(qc, out modelForWrapper) && !File.Exists(qc))
+                if (options.Automatic && QcPathResolver.IsSupportedModelExtension(Path.GetExtension(qc)))
+                {
+                    qp.IsStandalone = true;
+                    qp.Info = MakeWrapperInfo(qc, qc);
+                    synthetic = true;
+                }
+                else if (wrapperModels.TryGetValue(qc, out modelForWrapper) && !File.Exists(qc))
                 {
                     qp.Info = MakeWrapperInfo(qc, modelForWrapper);
                     qp.IsWrapperQc = true;
@@ -166,10 +175,10 @@ namespace LodStudio.Engine
 
                 if (qp.Info == null) continue;
                 var info = qp.Info;
-                if (info.ReadFailed)
+                if (info.ReadFailed || (options.Automatic && info.Warnings.Any(w => !w.StartsWith("没有找到 $modelname", StringComparison.Ordinal))))
                 {
                     qp.Action = BatchQcAction.Error;
-                    qp.Reason = "读取 QC 失败";
+                    qp.Reason = info.Warnings.FirstOrDefault() ?? "读取 QC 失败";
                     foreach (var w in info.Warnings) log(LogLevel.Warn, Path.GetFileName(qc) + "：" + w);
                 }
                 else if (info.ToolBlockBroken)
@@ -178,10 +187,10 @@ namespace LodStudio.Engine
                     qp.Reason = "工具标记块不完整（缺结束标记），请手动检查：" +
                                 string.Join(", ", info.ToolBlockBrokenFiles.Select(Path.GetFileName).ToArray());
                 }
-                else if (info.HasForeignLod && !options.Force && options.OutputMode != OutputMode.CollectionOnly)
+                else if (info.HasForeignLod && (options.Automatic || !options.Force && options.OutputMode != OutputMode.CollectionOnly))
                 {
                     qp.Action = BatchQcAction.Skip;
-                    qp.Reason = "已有手写 $lod（在 " + string.Join(", ", info.ForeignLodFiles.Select(Path.GetFileName).ToArray()) +
+                    qp.Reason = options.Automatic ? "已有手写 $lod 或 $shadowlod，自动模式保留该工程" : "已有手写 $lod（在 " + string.Join(", ", info.ForeignLodFiles.Select(Path.GetFileName).ToArray()) +
                                 "）；要覆盖请在高级设置里勾选「覆盖手写 $lod」";
                 }
                 else
@@ -208,14 +217,21 @@ namespace LodStudio.Engine
             foreach (var qp in qcPlans)
             {
                 if (qp.Action != BatchQcAction.Process || qp.Info == null) continue;
-                bool skipMainForThisQc = options.SkipMainModel && options.SkipMainQcPaths != null &&
-                                         options.SkipMainQcPaths.Any(x => PathsEqual(x, qp.QcPath));
+                bool skipMainForThisQc = options.SkipMainModel &&
+                                         (options.SkipMainQcPaths == null || options.SkipMainQcPaths.Any(x => PathsEqual(x, qp.QcPath)));
                 foreach (var s in qp.Info.Studios)
                 {
                     if (skipMainForThisQc && s.IsMainModel) { skipMain++; continue; }
-                    string why = Ineligible(s);
-                    if (why != null)
+                    string why = QcPathResolver.IneligibleReason(s);
+                    bool retainedNode = options.Automatic && why == "innode";
+                    if (retainedNode) skipInnode++;
+                    if (why != null && !retainedNode)
                     {
+                        if (options.Automatic && (why == "missing" || why == "fallback" || why == "nonglb"))
+                        {
+                            qp.Action = BatchQcAction.Error;
+                            qp.Reason = "无法安全解析参考模型 " + s.RawFile + "（" + why + "）";
+                        }
                         switch (why)
                         {
                             case "fallback": skipFallback++; break;
@@ -247,30 +263,74 @@ namespace LodStudio.Engine
             log(LogLevel.Info, "唯一模型文件：" + modelOrder.Count + " 个");
             if (skipMissing > 0) log(LogLevel.Warn, skipMissing + " 个 studio 指向的文件不存在（跳过）");
             if (skipFallback > 0) log(LogLevel.Warn, skipFallback + " 个 studio 只按文件名在别处找到同名文件，为安全起见未处理");
-            if (skipNonModel > 0) log(LogLevel.Warn, skipNonModel + " 个 studio 既不是 .glb 也不是 .smd（跳过）");
-            if (skipInnode > 0) log(LogLevel.Info, "含 innode 的条目跳过 " + skipInnode + " 个（需要拆分，批量不做）");
+            if (skipNonModel > 0) log(LogLevel.Warn, skipNonModel + " 个 studio 格式不受支持（支持 GLB、SMD、DMX）");
+            if (skipInnode > 0) log(LogLevel.Info, options.Automatic
+                ? "含 innode 的条目沿用原模型并计入自动估算：" + skipInnode + " 个"
+                : "含 innode 的条目跳过 " + skipInnode + " 个（需要拆分，批量不做）");
             if (skipMain > 0) log(LogLevel.Info, "已按设置跳过主模型条目 " + skipMain + " 个");
 
             // ── 4. 面数统计 + 生成任务 ──
             observer.Stage(BatchStage.Planning, "── 4/5 统计面数并生成任务 ──");
             var dstSeen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var keepOriginalPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var entry in (options.KeepOriginalModels ?? "").Split('|'))
+            {
+                string path = entry.Trim();
+                if (path.Length == 0 || path.IndexOfAny(Path.GetInvalidPathChars()) >= 0) continue;
+                keepOriginalPaths.Add(FileUtil.Normalize(Path.Combine(plan.RootDir ?? "", path)));
+            }
             long totalSource = 0;
+            int keptForFacial = 0;
             int jobCount = 0;
             foreach (var pm in modelOrder)
             {
                 if (cancel.IsCancellationRequested) return;
                 try
                 {
+                    if (options.Automatic) pm.SourceWriteTimeUtc = File.GetLastWriteTimeUtc(pm.Path);
                     if (IsSmd(pm.Path))
                     {
                         pm.IsSmd = true;
                         var smd = SmdCodec.Parse(pm.Path);
                         pm.Triangles = smd.TriangleCount;
                         pm.SmdSource = smd;
+                        if (options.Automatic)
+                        {
+                            if (smd.Warnings.Count > 0) throw new InvalidDataException(smd.Warnings[0]);
+                            pm.Extent = AutomaticLod.Extent(smd);
+                        }
+                    }
+                    else if (string.Equals(Path.GetExtension(pm.Path), ".dmx", StringComparison.OrdinalIgnoreCase))
+                    {
+                        try
+                        {
+                            pm.DmxSource = DmxLodSource.Read(pm.Path);
+                            pm.Triangles = pm.DmxSource.TriangleCount;
+                            if (options.Automatic) pm.Extent = pm.DmxSource.Extent;
+                        }
+                        catch (NotSupportedException ex)
+                        {
+                            pm.SkipReason = ex.Message;
+                            if (options.Automatic)
+                            {
+                                pm.Triangles = DmxLodSource.CountReferenceTriangles(pm.Path);
+                                foreach (string q in pm.RootQcs)
+                                    if (byPath[q].IsStandalone) { byPath[q].Action = BatchQcAction.Error; byPath[q].Reason = ex.Message; }
+                            }
+                            log(LogLevel.Info, pm.BaseName + "：" + pm.SkipReason + "，沿用源网格");
+                            continue;
+                        }
                     }
                     else
                     {
                         pm.Triangles = GlbCodec.CountTriangles(pm.Path);
+                        if (options.Automatic)
+                        {
+                            var glb = GlbCodec.Read(pm.Path);
+                            pm.Extent = AutomaticLod.GlbExtent(glb);
+                            foreach (var entry in pm.Entries.Where(e => !string.IsNullOrEmpty(e.Innnode)))
+                                entry.FixedTriangleCount = AutomaticLod.NodeTriangles(glb, entry.Innnode);
+                        }
                     }
                 }
                 catch (Exception ex)
@@ -285,53 +345,91 @@ namespace LodStudio.Engine
                     continue;
                 }
 
+                if (options.Automatic && pm.Entries.Any(e => !string.IsNullOrEmpty(e.Innnode)))
+                {
+                    pm.SkipReason = "保留带 innode 子节点的模型";
+                    continue;
+                }
+                if (keepOriginalPaths.Contains(pm.Path))
+                {
+                    pm.SkipReason = "保留指定的原网格";
+                    continue;
+                }
+                if ((options.Automatic || !options.NoFacial) && pm.Entries.Any(e => e.HasFacial))
+                {
+                    pm.SkipReason = "保留 QC 表情模型的原始顶点";
+                    keptForFacial++;
+                    continue;
+                }
                 if (pm.Triangles < options.MinTriangles)
                 {
                     pm.SkipReason = "面数 " + pm.Triangles + " 低于门槛 " + options.MinTriangles + "，不需要 LOD";
                     continue;
                 }
                 totalSource += pm.Triangles;
-                for (int li = 0; li < planLevels.Count; li++)
+            }
+
+            if (options.Automatic)
+            {
+                foreach (var q in qcPlans.Where(x => x.Action == BatchQcAction.Process))
+                {
+                    q.SourceTriangles = AutomaticLod.CountVisible(q, m => m.Triangles);
+                    q.Levels = AutomaticLod.Plan(q.SourceTriangles);
+                }
+                planLevels = qcPlans.Where(q => q.Levels != null).OrderByDescending(q => q.Levels.Count)
+                    .Select(q => q.Levels).FirstOrDefault() ?? new LodPlan();
+                plan.Plan = planLevels;
+                totalSource = modelOrder.Sum(m => (long)m.Triangles);
+            }
+
+            foreach (var pm in modelOrder.Where(m => m.SkipReason == null && m.ReadError == null))
+            {
+                if (cancel.IsCancellationRequested) return;
+                var modelLevels = options.Automatic
+                    ? pm.RootQcs.Select(q => byPath[q]).Where(q => q.Levels != null)
+                        .OrderByDescending(q => q.SourceTriangles).Select(q => q.Levels).FirstOrDefault()
+                    : planLevels;
+                if (modelLevels == null) continue;
+                for (int li = 0; li < modelLevels.Count; li++)
                 {
                     int level = li + 1;
-                    string ext = pm.IsSmd ? ".smd" : ".glb";
+                    string ext = Path.GetExtension(pm.Path).ToLowerInvariant();
                     string finalPath = Path.Combine(pm.Dir, pm.BaseName + "_lod" + level + ext);
-                    string srcPath = pm.Path;
-                    string dstPath = finalPath;
-                    if (pm.IsSmd)
+                    if (!dstSeen.Add(finalPath))
                     {
-                        // 临时文件名必须带路径哈希：不同目录下同名 SMD 不能互相覆盖（否则第二个模型会被静默跳过）
-                        string tempKey = pm.BaseName + "_" + FileUtil.ShortPathHash(pm.Path);
-                        srcPath = Path.Combine(AppInfo.TempSmdDir, tempKey + "_src.glb");
-                        dstPath = Path.Combine(AppInfo.TempSmdDir, tempKey + "_lod" + level + ".glb");
-                        finalPath = Path.Combine(pm.Dir, pm.BaseName + "_lod" + level + ".smd");
-                    }
-                    if (!dstSeen.Add(dstPath))
-                    {
-                        log(LogLevel.Warn, "输出路径重复，跳过：" + dstPath);
+                        log(LogLevel.Warn, "输出路径重复，跳过：" + finalPath);
                         continue;
                     }
-                    try { FileUtil.EnsureDir(Path.GetDirectoryName(dstPath)); } catch { }
-                    pm.Jobs.Add(new BlenderJobSpec
+                    pm.Jobs.Add(new ReductionJob
                     {
-                        Source = srcPath,
-                        Destination = dstPath,
-                        Ratio = planLevels.Levels[li].Ratio,
-                        ShrinkInner = 0.0009 * (1.0 + 0.15 * li),
-                        MinFaces = 12,
-                        GuardPercent = 35.0,
-                        QualityOverride = planLevels.Levels[li].Ratio >= 0.99 ? (bool?)false : null,
+                        Source = pm.Path,
+                        Destination = finalPath,
+                        Ratio = modelLevels.Levels[li].Ratio,
+                        Distance = modelLevels.Levels[li].Distance,
                         Weight = pm.Size
                     });
                     jobCount++;
                 }
             }
+            if (options.Automatic)
+                foreach (var q in qcPlans.Where(x => x.Levels != null && x.SourceTriangles > 0))
+                    for (int i = 0; i < q.Levels.Count; i++)
+                    {
+                        long target = AutomaticLod.CountVisible(q, m => i < m.Jobs.Count
+                            ? (int)Math.Ceiling(m.Triangles * m.Jobs[i].Ratio) : m.Triangles);
+                        q.Levels.Levels[i].Ratio = target / (double)q.SourceTriangles;
+                    }
             plan.Models = modelOrder;
             plan.JobCount = jobCount;
             plan.TotalSourceTriangles = totalSource;
             log(LogLevel.Info, "要做 LOD 的模型：" + modelOrder.Count(x => x.Jobs.Count > 0) + " 个（原始共 " + totalSource + " 面）");
             log(LogLevel.Info, "减面任务：" + jobCount + " 个（含 " + modelOrder.Count(x => x.Jobs.Count > 0) + " 个模型 × " + planLevels.Count + " 级）");
-            int smallSkip = modelOrder.Count(x => x.SkipReason != null);
+            int smallSkip = modelOrder.Count(x => x.SkipReason != null && x.Triangles < options.MinTriangles &&
+                                              !keepOriginalPaths.Contains(x.Path) &&
+                                              (options.NoFacial || !x.Entries.Any(e => e.HasFacial)));
+            int keepCount = modelOrder.Count(x => x.SkipReason != null && keepOriginalPaths.Contains(x.Path));
+            if (keepCount > 0) log(LogLevel.Info, "按保留清单沿用原网格：" + keepCount + " 个");
+            if (keptForFacial > 0) log(LogLevel.Info, "为保留 QC 表情沿用原网格：" + keptForFacial + " 个");
             if (smallSkip > 0) log(LogLevel.Info, "面数 < " + options.MinTriangles + " 的小部件跳过 LOD：" + smallSkip + " 个");
 
             // ── 5. 汇总每个 QC 的动作 ──
@@ -339,18 +437,20 @@ namespace LodStudio.Engine
             foreach (var qp in qcPlans)
             {
                 if (qp.Action != BatchQcAction.Process) continue;
-                var withJobs = qp.Models.Where(m => m.Jobs.Count > 0).ToList();
+                var withJobs = qp.Models.Where(m => m.Jobs.Count > 0 && (!options.Automatic || qp.Levels.Count > 0)).ToList();
                 if (qp.Models.Count == 0)
                 {
                     qp.Action = BatchQcAction.Skip;
                     qp.Reason = qp.Info != null && qp.Info.Studios.Count == 0
                         ? "没有找到任何 studio 条目（无可处理模型）"
-                        : "无可处理模型（文件缺失 / 非 glb 或 smd / 带 innode / 只按文件名在别处找到）";
+                        : "无可处理模型（文件缺失、格式不支持、带 innode 或只按文件名在别处找到）";
                 }
                 else if (withJobs.Count == 0)
                 {
                     qp.Action = BatchQcAction.Skip;
-                    qp.Reason = "模型面数都低于 " + options.MinTriangles + "，不需要 LOD";
+                    qp.Reason = options.Automatic && qp.Levels.Count == 0 ? "可见组合不超过 10,000 三角面，无需 LOD" : qp.Models.All(m => keepOriginalPaths.Contains(m.Path))
+                        ? "已选择保留原网格"
+                        : "模型均已保留原网格或低于面数门槛 " + options.MinTriangles;
                 }
             }
 
@@ -421,16 +521,6 @@ namespace LodStudio.Engine
                 }
             }
             foreach (var r in remove) qcPlans.Remove(r);
-        }
-
-        private static string Ineligible(StudioRef s)
-        {
-            if (s.Fallback) return "fallback";
-            if (!s.Exists || string.IsNullOrEmpty(s.ResolvedPath)) return "missing";
-            string ext = Path.GetExtension(s.ResolvedPath).ToLowerInvariant();
-            if (ext != ".glb" && ext != ".smd") return "nonglb";
-            if (!string.IsNullOrEmpty(s.Innnode)) return "innode";
-            return null;
         }
 
         private static bool IsSmd(string path) { return string.Equals(Path.GetExtension(path), ".smd", StringComparison.OrdinalIgnoreCase); }

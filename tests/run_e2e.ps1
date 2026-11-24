@@ -1,5 +1,5 @@
 ﻿# =====================================================================
-#  远景工坊 · 端到端回归（真实 Blender + 合成工程）
+#  远景工坊 · 端到端回归（内置减面；Blender 只用于构造测试工程）
 #  用法:
 #    powershell -ExecutionPolicy Bypass -File tests\run_e2e.ps1
 #    powershell -ExecutionPolicy Bypass -File tests\run_e2e.ps1 -Blender "D:\blender 4.1\blender.exe"
@@ -9,6 +9,7 @@
 # =====================================================================
 param(
     [string]$Blender = '',
+    [string]$ExePath = '',
     [switch]$SkipBuild,
     [switch]$KeepTemp,
     [switch]$IncludeCancel,
@@ -19,8 +20,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
-$Exe = Join-Path $Root 'dist\L4D2LOD远景工坊.exe'
-$T = Join-Path $env:TEMP 'lodstudio_e2e'
+$Exe = if ($ExePath) { $ExePath } else { Join-Path $Root 'dist\L4D2LOD远景工坊.exe' }
+$T = Join-Path ([System.IO.Path]::GetTempPath()) ('lodstudio_e2e_' + [Guid]::NewGuid().ToString('N'))
 $LogDir = Join-Path $T 'logs'
 $SettingsDir = Join-Path $T 'settings'
 $Results = New-Object System.Collections.Generic.List[object]
@@ -79,6 +80,21 @@ function Invoke-Tool([string]$tag, [string[]]$argv) {
 function Save-Json([string]$path, $obj) { $obj | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $path -Encoding UTF8 }
 function Read-Json([string]$path) { Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json }
 
+function Get-GlbTriangles([string]$path) {
+    $bytes = [System.IO.File]::ReadAllBytes($path)
+    $jsonLength = [BitConverter]::ToInt32($bytes, 12)
+    $model = [System.Text.Encoding]::UTF8.GetString($bytes, 20, $jsonLength) | ConvertFrom-Json
+    $count = 0
+    foreach ($mesh in $model.meshes) {
+        foreach ($primitive in $mesh.primitives) {
+            if ($null -ne $primitive.mode -and $primitive.mode -ne 4) { continue }
+            $index = if ($null -ne $primitive.indices) { $primitive.indices } else { $primitive.attributes.POSITION }
+            $count += $model.accessors[$index].count / 3
+        }
+    }
+    return $count
+}
+
 function Get-TreeHash([string]$dir) {
     $sb = New-Object System.Text.StringBuilder
     Get-ChildItem -LiteralPath $dir -Recurse -File | Sort-Object FullName | ForEach-Object {
@@ -109,14 +125,15 @@ function Read-TextAuto([string]$path) {
 
 function Copy-Project([string]$src, [string]$name) {
     $dst = Join-Path $T ('work\' + $name)
-    if (Test-Path $dst) { Remove-Item -LiteralPath $dst -Recurse -Force }
+    if (Test-Path -LiteralPath $dst) { throw "测试工程已存在: $dst" }
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dst) | Out-Null
     Copy-Item -LiteralPath $src -Destination $dst -Recurse -Force
     return $dst
 }
 
 function New-RunDir([string]$name) {
     $d = Join-Path $T ('runs\' + $name)
-    if (Test-Path $d) { Remove-Item -LiteralPath $d -Recurse -Force }
+    if (Test-Path -LiteralPath $d) { throw "测试报告目录已存在: $d" }
     New-Item -ItemType Directory -Force $d | Out-Null
     return $d
 }
@@ -126,7 +143,6 @@ function New-RunDir([string]$name) {
 Write-Host ""
 Write-Host "═══ 远景工坊 E2E ═══" -ForegroundColor Cyan
 Write-Host "root: $Root"
-if (Test-Path $T) { Remove-Item -LiteralPath $T -Recurse -Force }
 New-Item -ItemType Directory -Force $LogDir | Out-Null
 New-Item -ItemType Directory -Force $SettingsDir | Out-Null
 $env:L4D2LODSTUDIO_SETTINGS_DIR = $SettingsDir
@@ -173,7 +189,7 @@ $fx = Read-Json (Join-Path $genOut 'fixtures.json')
 $P = $fx.projects
 Write-Host ("工程: main={0}" -f $P.main)
 
-$common = @('--levels', "$Levels", '--dist', $Dist, '--ratio', $Ratio)
+$common = @('--levels', "$Levels", '--dist', $Dist, '--ratio', $Ratio, '--nofacial')
 
 # ───────────────────────────── 用例 ─────────────────────────────
 
@@ -211,14 +227,23 @@ Check 'batch 模式0：生成 LOD + 注入 $lod + 备份 + 幂等' {
     Assert ($b1.stats.injectedQc -eq 3) ("应注入 3 个 QC，实际 " + $b1.stats.injectedQc)
     Assert ($b1.stats.jobFail -eq 0) ("减面失败数 " + $b1.stats.jobFail)
 
-    # LOD 文件：char_body / armored / crate × 2 级
+    # 每个写出的模型必须比实际沿用的上一档更少面
+    $published = 0
     foreach ($m in @('char_body', 'armored', 'crate')) {
+        $previous = Get-GlbTriangles (Join-Path $work ("models\SMD\{0}.glb" -f $m))
+        $newLevels = 0
         foreach ($n in 1..$Levels) {
             $f = Join-Path $work ("models\SMD\{0}_lod{1}.glb" -f $m, $n)
-            Assert (Test-Path -LiteralPath $f) ("缺少 LOD 文件: " + $f)
-            Assert ((Get-Item -LiteralPath $f).Length -gt 200) ("LOD 文件过小: " + $f)
+            if (-not (Test-Path -LiteralPath $f)) { continue }
+            $triangles = Get-GlbTriangles $f
+            Assert ($triangles -gt 0 -and $triangles -lt $previous) ("LOD 面数没有下降: " + $f)
+            $previous = $triangles
+            $published++
+            $newLevels++
         }
+        if ($m -ne 'armored') { Assert ($newLevels -gt 0) ("应生成有实际减面的 LOD: " + $m) }
     }
+    Assert ($published -eq $b1.stats.publishedLods) '报告的新网格数量必须与落盘文件数量一致'
 
     # QC 注入内容：actor.qc 只 include，模型声明在 actor_main.qc → 工具块必须写 actor_main.qc，根 QC 不动
     $actorMain = Read-TextAuto (Join-Path $work 'qc\actor_main.qc')
@@ -337,7 +362,10 @@ Check '无 QC 的散落模型：自动建包装 QC 并注入' {
     Assert-Contains (Read-TextAuto $wrapper).Text '$lod 20' '包装 QC 应被注入'
     Assert (Test-Path -LiteralPath (Join-Path $work 'props\crate_lod1.glb')) '缺少 crate_lod1.glb'
     Assert (-not (Test-Path -LiteralPath (Join-Path $work 'props\crate_lod3.glb'))) '只配置了 2 级，不应有 lod3'
-    Assert (-not (Test-Path -LiteralPath (Join-Path $work 'props\crate_small_lod1.glb'))) '低于面数门槛的模型不应生成 LOD'
+    $small = Join-Path $work 'props\crate_small.glb'
+    $smallLod = Join-Path $work 'props\crate_small_lod1.glb'
+    Assert (Test-Path -LiteralPath $smallLod) '默认策略应尝试低面数模型'
+    Assert ((Get-GlbTriangles $smallLod) -lt (Get-GlbTriangles $small)) '低面数模型也应实际减少面数'
 }
 
 Check 'SMD 工程：SMD→GLB→减面→SMD，权重骨骼保留' {
@@ -346,9 +374,7 @@ Check 'SMD 工程：SMD→GLB→减面→SMD，权重骨骼保留' {
     $r = Invoke-Tool 'batch_smd' (@('--batch', $work, '--out', $out) + $common)
     Assert ($r.Code -eq 0) ("batch 退出码 " + $r.Code + "`n" + $r.Out)
     $lod1 = Join-Path $work 'smd\char_src_lod1.smd'
-    $lod2 = Join-Path $work 'smd\char_src_lod2.smd'
     Assert (Test-Path -LiteralPath $lod1) '缺少 char_src_lod1.smd'
-    Assert (Test-Path -LiteralPath $lod2) '缺少 char_src_lod2.smd'
     $text = (Read-TextAuto $lod1).Text
     Assert-Contains $text 'version 1' 'SMD 头'
     Assert-Contains $text 'triangles' 'SMD 三角形节'
@@ -365,7 +391,7 @@ Check 'SMD 工程：SMD→GLB→减面→SMD，权重骨骼保留' {
         }
     }
     Assert ($vertexLines -gt 30) ("SMD 顶点行过少: " + $vertexLines)
-    # 面数应减少
+    Assert ($vertexLines % 3 -eq 0 -and $vertexLines / 3 -lt $fx.expected.smdTris) 'SMD 输出必须实际减少面数'
     $qc = (Read-TextAuto (Join-Path $work 'smd\char.qc')).Text
     Assert-Contains $qc '$lod 20' 'SMD 工程 QC 注入'
     Assert-Contains $qc 'replacemodel "char_src.smd"' 'replacemodel 源名逐字'
@@ -391,23 +417,23 @@ Check '空工程：计划为空且不报错崩溃' {
 }
 
 if ($IncludeCancel) {
-    Check '取消：杀掉进程后无残留 Blender' {
-        $before = (Get-Process blender -ErrorAction SilentlyContinue | Measure-Object).Count
+    Check '取消：结束测试程序后无残留减面进程' {
+        $before = @((Get-Process 'gltfpack_*' -ErrorAction SilentlyContinue).Id)
         $work = Copy-Project $P.main 'cancel'
         $out = New-RunDir 'cancel'
         $psi = New-Object System.Diagnostics.ProcessStartInfo
         $psi.FileName = $Exe
-        $psi.Arguments = '--batch "' + $work + '" --out "' + $out + '" --levels 8 --dist 10,15,20,25,30,35,40,45 --ratio 99,90,80,70,60,50,40,30'
+        $psi.Arguments = '--batch "' + $work + '" --out "' + $out + '" --levels 7 --dist 10,15,20,25,30,35,40 --ratio 99,90,80,70,60,50,40'
         $psi.UseShellExecute = $false
         $psi.RedirectStandardOutput = $true
         $psi.CreateNoWindow = $true
         $p = [System.Diagnostics.Process]::Start($psi)
-        Start-Sleep -Milliseconds 2500
+        Start-Sleep -Milliseconds 250
         if (-not $p.HasExited) { $p.Kill() }
         $p.WaitForExit()
         Start-Sleep -Milliseconds 1500
-        $after = (Get-Process blender -ErrorAction SilentlyContinue | Measure-Object).Count
-        Assert ($after -le $before) ("杀掉主进程后残留 blender: " + $after)
+        $remaining = @(Get-Process 'gltfpack_*' -ErrorAction SilentlyContinue | Where-Object Id -NotIn $before)
+        Assert ($remaining.Count -eq 0) ("结束测试程序后残留减面进程: " + $remaining.Count)
     }
 }
 
@@ -418,7 +444,7 @@ $failed = ($Results | Where-Object { -not $_.Ok }).Count
 $report = New-Object System.Text.StringBuilder
 [void]$report.AppendLine('远景工坊 E2E 报告')
 [void]$report.AppendLine('时间: ' + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
-[void]$report.AppendLine('blender: ' + $blenderExe)
+[void]$report.AppendLine('fixture generator: ' + $blenderExe)
 [void]$report.AppendLine('exe: ' + $Exe)
 [void]$report.AppendLine(('结果: {0} passed, {1} failed' -f $passed, $failed))
 [void]$report.AppendLine('')

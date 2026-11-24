@@ -42,7 +42,7 @@
         <controls:Rule Margin="0,20,0,0" />
         <TextBlock Text="模型过滤" Style="{StaticResource Set.GroupTitle}" Margin="0,18,0,0" />
 
-        <settings:SettingRow Title="面数门槛" Hint="低于这个面数的模型不做 LOD（官方小道具常见 100–300 面）。填 0 = 不按面数过滤。">
+        <settings:SettingRow Title="旧策略面数门槛" Hint="使用旧分配策略时跳过低于此面数的模型。均匀减面会尝试所有符合条件的部件。">
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                 <TextBox x:Name="TxtMinTriangles" Style="{StaticResource Input.Num}" Width="104" />
                 <TextBlock Text="面" Style="{StaticResource Text.Small}" Margin="7,0,0,0" VerticalAlignment="Center" />

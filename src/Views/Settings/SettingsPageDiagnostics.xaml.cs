@@ -46,7 +46,7 @@ namespace LodStudio.Views.Settings
                 TxtTempDir.Text = AppInfo.TempRoot;
                 TxtTempDir.ToolTip = AppInfo.TempRoot;
                 TxtPermission.Text = DescribePermission();
-                TxtBlenderVersion.Text = string.IsNullOrEmpty(Win.BlenderVersion) ? "未探测到版本" : Win.BlenderVersion;
+                TxtReductionEngine.Text = "内置 meshoptimizer";
             }
             finally { Syncing = false; }
         }
@@ -54,7 +54,6 @@ namespace LodStudio.Views.Settings
         public override void OnPageShown()
         {
             base.OnPageShown();
-            Win.EnsureEngineProbe();
             if (!_hasReport) SetStatus("尚未运行", "Faint");
         }
 
@@ -73,7 +72,7 @@ namespace LodStudio.Views.Settings
             string tone;
             try
             {
-                text = await Task.Run(() => EnvironmentDiagnostics.Build(Settings, probeDirs, Win.BlenderVersion,
+                text = await Task.Run(() => EnvironmentDiagnostics.Build(Settings, probeDirs,
                     RuntimeContext.IsAdmin, RuntimeContext.IsLowIntegrity()));
                 status = "完成 · " + DateTime.Now.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
                 tone = "Ok";
@@ -150,7 +149,6 @@ namespace LodStudio.Views.Settings
             sb.AppendLine("程序        : " + AppInfo.TitleText + "（文件版本 " + AppInfo.FileVersionText + "，" + AppInfo.Bitness + "）");
             sb.AppendLine("系统        : " + Environment.OSVersion.VersionString);
             sb.AppendLine("运行权限    : " + DescribePermission());
-            sb.AppendLine("Blender     : " + (string.IsNullOrEmpty(Win.BlenderVersion) ? "未探测到版本" : Win.BlenderVersion));
             sb.AppendLine("设置文件    : " + AppInfo.SettingsFile);
             sb.AppendLine("设置目录存在: " + (SafeExists(AppInfo.SettingsDir) ? "是" : "否"));
             sb.AppendLine("临时目录    : " + AppInfo.TempRoot);

@@ -5,22 +5,22 @@ using System.Reflection;
 namespace LodStudio
 {
     /// <summary>
-    /// 程序级常量与路径：唯一版本号来源、设置目录、临时目录、资源名。
-    /// 版本号同时写进 AssemblyInfo（csproj）与这里，构建脚本会校验两者一致。
+    /// 程序版本与路径。显示版本来自项目生成的程序集元数据。
     /// </summary>
     public static class AppInfo
     {
         public const string ProductName = "远景工坊";
         public const string ProductLatin = "FARSIGHT";
         public const string Subtitle = "L4D2 自动 LOD 工具";
-        public const string Version = "0.2.0";
+        public static readonly string Version = typeof(AppInfo).Assembly.GetName().Version.ToString(3);
+        public static readonly string DisplayVersion = "v" + Version;
         public const string Build = "2026.11";
 
         /// <summary>窗口标题用</summary>
-        public static string TitleText { get { return "远景工坊 · L4D2 自动 LOD 工具  v" + Version; } }
+        public static string TitleText { get { return "远景工坊 · L4D2 自动 LOD 工具  " + DisplayVersion; } }
 
         /// <summary>用户可见的简短标识（顶栏/关于）</summary>
-        public static string ShortTitle { get { return "远景工坊 v" + Version; } }
+        public static string ShortTitle { get { return "远景工坊 " + DisplayVersion; } }
 
         /// <summary>--version 输出（ASCII，便于脚本解析）</summary>
         public static string VersionTextForCli
@@ -105,7 +105,7 @@ namespace LodStudio
         /// <summary>备份在 exe 旁的集中目录名</summary>
         public const string BackupFolderName = "LOD备份";
 
-        /// <summary>程序文件版本（读 AssemblyFileVersion，供诊断/关于显示）</summary>
+        /// <summary>完整程序集版本，供诊断和关于窗口显示。</summary>
         public static string FileVersionText
         {
             get

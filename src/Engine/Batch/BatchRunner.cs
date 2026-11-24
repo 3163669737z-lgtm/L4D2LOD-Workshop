@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 
@@ -11,7 +12,7 @@ namespace LodStudio.Engine
 {
     /// <summary>
     /// 批量执行器：按计划执行
-    ///   建包装 QC → Blender 减面（并行/可取消/逐任务进度）→ SMD 回转 → 注入 $lod → 可选试编译 → 报告。
+    ///   建立包装 QC → 原生减面（并行/可取消/逐任务进度）→ SMD 回转 → 注入 $lod → 可选试编译 → 报告。
     /// 不抛异常：任何未预期异常都记录在 outcome.Errors 并让 Ok=false。
     /// </summary>
     public static class BatchRunner
@@ -24,10 +25,11 @@ namespace LodStudio.Engine
             var outcome = new BatchOutcome();
             var sw = Stopwatch.StartNew();
             var recorder = new RecordingObserver(observer);
+            var temporaryModels = new List<string>();
 
             try
             {
-                RunCore(plan, options, recorder, cancel, outcome, sw);
+                RunCore(plan, options, recorder, cancel, outcome, sw, temporaryModels);
             }
             catch (Exception ex)
             {
@@ -37,6 +39,7 @@ namespace LodStudio.Engine
             }
             finally
             {
+                foreach (string path in temporaryModels) FileUtil.TryDelete(path);
                 sw.Stop();
                 outcome.Elapsed = sw.Elapsed;
                 outcome.FinishedAt = DateTime.Now;
@@ -53,7 +56,7 @@ namespace LodStudio.Engine
             if (outcome.Errors.Count > 0) return false;
             foreach (var q in outcome.QcOutcomes) if (q.Errors.Count > 0) return false;
             if (outcome.Stats.JobCount > 0 && outcome.Stats.JobOk == 0) return false;
-            if (outcome.Stats.InjectedQcCount == 0)
+            if (outcome.Stats.InjectedQcCount == 0 && outcome.GeneratedModels == 0)
             {
                 // 没有注入任何 QC：只有"全部合理跳过"才算成功
                 int considered = plan.QcPlans.Count;
@@ -64,12 +67,15 @@ namespace LodStudio.Engine
         }
 
         private static void RunCore(BatchPlan plan, BatchRunOptions options, RecordingObserver obs,
-                                    CancellationToken cancel, BatchOutcome outcome, Stopwatch sw)
+                                    CancellationToken cancel, BatchOutcome outcome, Stopwatch sw, List<string> temporaryModels)
         {
             var stats = outcome.Stats;
+            foreach (var task in plan.Tasks.Where(t => t.Error != null))
+                outcome.Errors.Add(task.Task.Path + "：" + task.Error);
             var qcOutcomes = new Dictionary<string, QcOutcome>(StringComparer.OrdinalIgnoreCase);
             foreach (var qp in plan.QcPlans)
-                qcOutcomes[FileUtil.Normalize(qp.QcPath)] = new QcOutcome { QcPath = qp.QcPath };
+                qcOutcomes[FileUtil.Normalize(qp.QcPath)] = new QcOutcome
+                { QcPath = qp.QcPath, Standalone = qp.IsStandalone, SourceTriangles = qp.SourceTriangles };
             void QcErr(string qc, string msg)
             {
                 QcOutcome qo;
@@ -104,15 +110,17 @@ namespace LodStudio.Engine
                 ProjectRoot = options.ProjectRoot
             };
 
-            // ── 1. Blender 减面 ──
+            // ── 1. 原生减面 ──
             var workModels = plan.Models.Where(m => m.Jobs.Count > 0 && m.ReadError == null).ToList();
             var jobOwners = new List<PlannedModel>();
             var jobLevels = new List<int>();
-            var jobs = new List<BlenderJobSpec>();
-            bool blenderNeeded = plan.JobCount > 0;
+            var jobs = new List<ReductionJob>();
+            string stageDir = AppInfo.TempRunDir;
+            string runKey = "reduce_" + Guid.NewGuid().ToString("N");
+            if (workModels.Count > 0) Directory.CreateDirectory(stageDir);
 
-            // SMD：先把源 SMD 转成临时 GLB（Blender 只吃 glTF）
-            var smdTempSources = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            // SMD 和 DMX 使用临时 GLB 参与减面。
+            var proxySources = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var pm in workModels.ToList())
             {
                 if (cancel.IsCancellationRequested)
@@ -122,19 +130,21 @@ namespace LodStudio.Engine
                     WriteReports(plan, options, outcome, obs, obs, sw.Elapsed);
                     return;
                 }
-                if (!pm.IsSmd) continue;
+                if (!pm.IsSmd && pm.DmxSource == null) continue;
                 try
                 {
-                    string temp = pm.Jobs[0].Source;
-                    byte[] glb = SmdGlbCodec.SmdToGlb(pm.SmdSource ?? SmdCodec.Parse(pm.Path));
+                    string temp = Path.Combine(stageDir, runKey + "_" + proxySources.Count + "_source.glb");
+                    temporaryModels.Add(temp);
+                    byte[] glb = pm.DmxSource != null ? pm.DmxSource.CreateProxy() :
+                        SmdGlbCodec.SmdToGlb(pm.SmdSource ?? SmdCodec.Parse(pm.Path));
                     string err = FileUtil.WriteBytesSafe(temp, glb);
                     if (err != null) throw new IOException(err);
-                    smdTempSources[pm.Path] = temp;
+                    proxySources[pm.Path] = temp;
                 }
                 catch (Exception ex)
                 {
-                    obs.Log(LogLevel.Error, "SMD 转换失败 " + pm.BaseName + "：" + ex.Message);
-                    foreach (var q in pm.RootQcs) QcErr(q, "SMD 转换失败 " + pm.BaseName + "：" + ex.Message);
+                    obs.Log(LogLevel.Error, "模型转换失败 " + pm.BaseName + "：" + ex.Message);
+                    foreach (var q in pm.RootQcs) QcErr(q, "模型转换失败 " + pm.BaseName + "：" + ex.Message);
                     pm.ReadError = ex.Message;
                 }
             }
@@ -144,7 +154,19 @@ namespace LodStudio.Engine
             {
                 for (int li = 0; li < pm.Jobs.Count; li++)
                 {
-                    jobs.Add(pm.Jobs[li]);
+                    var planned = pm.Jobs[li];
+                    string stagePath = Path.Combine(stageDir, runKey + "_" + jobs.Count + "_candidate.glb");
+                    temporaryModels.Add(stagePath);
+                    jobs.Add(new ReductionJob
+                    {
+                        Source = proxySources.TryGetValue(pm.Path, out string proxy) ? proxy : planned.Source,
+                        Destination = stagePath,
+                        DisplayDestination = planned.Destination,
+                        Ratio = planned.Ratio,
+                        Distance = planned.Distance,
+                        RequireFixedVertices = pm.DmxSource != null,
+                        Weight = planned.Weight
+                    });
                     jobOwners.Add(pm);
                     jobLevels.Add(li + 1);
                 }
@@ -152,83 +174,39 @@ namespace LodStudio.Engine
             stats.JobCount = jobs.Count;
             stats.UniqueModelCount = plan.Models.Count;
 
-            List<BlenderJobResult> results = new List<BlenderJobResult>();
+            List<ReductionResult> results = new List<ReductionResult>();
             if (jobs.Count > 0)
             {
-                if (options.Backend == ReduceBackend.Gltfpack)
+                obs.Stage(BatchStage.Reducing, "── 简化（内置 meshoptimizer）──");
+                var reduceOptions = new GltfpackRunner.RunOptions
                 {
-                    // 无 Blender 模式：内置 gltfpack 减面 + C# GlbInnerShrink 内缩；不需要也不寻找 Blender
-                    obs.Stage(BatchStage.Blender, "── 简化（gltfpack · 无 Blender）──");
-                    string gpError;
-                    string gpExe = GltfpackTool.EnsureExtracted(out gpError);
-                    if (gpExe == null)
-                    {
-                        obs.Log(LogLevel.Error, "无法释放内置 gltfpack：" + (gpError ?? "未知错误"));
-                        foreach (var q in plan.QcPlans.Where(x => x.Action == BatchQcAction.Process))
-                            QcErr(q.QcPath, "内置 gltfpack 不可用");
-                        outcome.Errors.Add("无 Blender 模式需要内置 gltfpack，但释放失败：" + (gpError ?? "未知错误"));
-                        WriteReports(plan, options, outcome, obs, obs, sw.Elapsed);
-                        return;
-                    }
-                    int workers = options.Workers > 0 ? options.Workers : 0;
-                    obs.Log(LogLevel.Info, "减面后端：内置 gltfpack（无 Blender；Body 内缩由 C# GlbInnerShrink 完成）");
-                    obs.Log(LogLevel.Info, "并行进程：" + (workers > 0 ? workers + "（手动指定）" : "自动（按核数/空闲内存）"));
-                    var ropt = new GltfpackRunner.RunOptions
-                    {
-                        Workers = workers,
-                        Log = s => obs.Log(LogLevel.Info, s)
-                    };
-                    var gpSw = Stopwatch.StartNew();
-                    results = GltfpackRunner.RunAll(jobs, ropt, cancel, (done, total) => obs.Progress(done, total, gpSw.Elapsed));
-                    gpSw.Stop();
-                    if (cancel.IsCancellationRequested)
-                    {
-                        outcome.Cancelled = true;
-                        obs.Log(LogLevel.Warn, "已停止：gltfpack 进程已全部结束。");
-                    }
-                    obs.Log(LogLevel.Info, "简化完成：用时 " + gpSw.Elapsed.TotalMinutes.ToString("F1", CultureInfo.InvariantCulture) + " 分钟");
-                }
-                else
-                {
-                string blenderPath = options.BlenderPath;
-                if (string.IsNullOrEmpty(blenderPath) || !File.Exists(blenderPath))
-                {
-                    obs.Log(LogLevel.Error, "找不到 Blender（批量模式必须用 Blender 减面）。");
-                    foreach (var q in plan.QcPlans.Where(x => x.Action == BatchQcAction.Process))
-                        QcErr(q.QcPath, "没有可用的 Blender");
-                    outcome.Errors.Add("批量模式必须用 Blender（内置简化器质量不够）。请到设置 → 引擎指定 blender.exe。");
-                    WriteReports(plan, options, outcome, obs, obs, sw.Elapsed);
-                    return;
-                }
-                obs.Stage(BatchStage.Blender, "── 简化（这一步最慢）──");
-                int workers = options.Workers > 0 ? options.Workers : 0;
-                obs.Log(LogLevel.Info, "Blender：" + blenderPath);
-                obs.Log(LogLevel.Info, "并行进程：" + (workers > 0 ? workers + "（手动指定）" : "自动（按核数/空闲内存）"));
-                obs.Log(LogLevel.Info, "质量模式：" + (options.QualityFirst ? "质量优先（按连通块保形）" : "速度优先（全局比例）"));
-
-                var bopt = new BlenderRunOptions
-                {
-                    BlenderPath = blenderPath,
-                    Workers = workers,
+                    Workers = options.Workers,
                     QualityFirst = options.QualityFirst,
-                    Log = s => obs.Log(LogLevel.Info, s)
+                    AdaptiveTriangleBudget = options.AdaptiveTriangleBudget,
+                    AllowVertexUpdates = options.AllowVertexUpdates,
+                    OmitUnchangedOutputs = true,
+                    Log = message => obs.Log(LogLevel.Info, message)
                 };
-                var blenderSw = Stopwatch.StartNew();
-                results = BlenderScheduler.RunAll(jobs, bopt, cancel, (done, total) => obs.Progress(done, total, blenderSw.Elapsed));
-                blenderSw.Stop();
+                var reduceWatch = Stopwatch.StartNew();
+                results = GltfpackRunner.RunAll(jobs, reduceOptions, cancel,
+                    (done, total) => obs.Progress(done, total, reduceWatch.Elapsed));
+                reduceWatch.Stop();
                 if (cancel.IsCancellationRequested)
                 {
                     outcome.Cancelled = true;
-                    obs.Log(LogLevel.Warn, "已停止：Blender 进程已全部结束。");
+                    obs.Log(LogLevel.Warn, "已停止：减面进程已全部结束。");
                 }
-                obs.Log(LogLevel.Info, "简化完成：用时 " + blenderSw.Elapsed.TotalMinutes.ToString("F1", CultureInfo.InvariantCulture) + " 分钟");
-                }
+                obs.Log(LogLevel.Info, "简化完成：用时 " + reduceWatch.Elapsed.TotalMinutes.ToString("F1", CultureInfo.InvariantCulture) + " 分钟");
             }
 
             // ── 2. 汇总减面结果（GLB 直接用；SMD 转回） ──
             obs.Stage(BatchStage.ConvertingSmd, "── 汇总减面结果 ──");
             var okDst = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var afterByDst = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            var previousLods = new Dictionary<PlannedModel, (string Path, int Triangles)>();
+            var candidates = new Dictionary<(string Source, int Level), (string Path, int Triangles)>();
+            var usedCandidates = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var newCandidates = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var triangleChangeByLevel = new long[plan.Plan.Count];
             int jobFail = 0;
             for (int i = 0; i < jobs.Count; i++)
             {
@@ -236,7 +214,7 @@ namespace LodStudio.Engine
                 var pm = jobOwners[i];
                 int level = jobLevels[i];
                 var r = (results != null && i < results.Count) ? results[i] : null;
-                if (r == null || !r.Ok || !File.Exists(job.Destination))
+                if (r == null || !r.Ok || (r.AfterTriangles < r.BeforeTriangles && !File.Exists(job.Destination)))
                 {
                     jobFail++;
                     string err = r == null ? "未产出结果" : (!r.Ok ? (r.Error ?? "未知原因") : "输出文件不存在");
@@ -250,60 +228,97 @@ namespace LodStudio.Engine
                     continue;
                 }
                 if (!string.IsNullOrEmpty(r.Warning))
-                    obs.Log(LogLevel.Warn, Path.GetFileName(job.Destination) + "：" + r.Warning);
-                if (pm.IsSmd)
+                    obs.Log(LogLevel.Warn, Path.GetFileName(job.DisplayDestination) + "：" + r.Warning);
+
+                string finalPath = job.DisplayDestination;
+                try
                 {
-                    try
+                    bool hasPrevious = previousLods.TryGetValue(pm, out var previous);
+                    int inheritedTriangles = hasPrevious ? previous.Triangles : pm.Triangles;
+                    int triangles = r.AfterTriangles;
+                    SmdModel converted = null;
+                    if (pm.IsSmd && triangles < inheritedTriangles)
                     {
-                        string finalPath = Path.Combine(pm.Dir, pm.BaseName + "_lod" + level + ".smd");
                         var glb = GlbCodec.Read(job.Destination);
-                        var smd = SmdGlbCodec.GlbToSmd(glb, pm.SmdSource);
-                        SmdCodec.Write(finalPath, smd);
-                        okDst.Add(finalPath);
-                        if (r.AfterTriangles > 0) afterByDst[finalPath] = r.AfterTriangles;
-                        stats.JobOk++;
+                        converted = SmdGlbCodec.GlbToSmd(glb, pm.SmdSource);
+                        triangles = converted.TriangleCount;
                     }
-                    catch (Exception ex)
+
+                    stats.RetriedComponents += r.RetriedComponents;
+                    stats.RetainedComponents += r.RetainedComponents;
+                    stats.ProtectedPrimitives += r.ProtectedPrimitives;
+                    stats.VertexUpdateTrials += r.VertexUpdateTrials;
+                    if (triangles >= inheritedTriangles)
                     {
-                        jobFail++;
-                        foreach (var q in pm.RootQcs) QcErr(q, "模型 " + pm.BaseName + " 的 LOD" + level + " 转回 SMD 失败：" + ex.Message);
-                        obs.Log(LogLevel.Error, pm.BaseName + " LOD" + level + " 转回 SMD 失败：" + ex.Message);
+                        if (hasPrevious)
+                        {
+                            stats.ReusedLevels++;
+                            obs.Log(LogLevel.Info, Path.GetFileName(finalPath) + "：QC 沿用 " +
+                                                   Path.GetFileName(previous.Path) + "，不写重复网格");
+                        }
+                        else
+                        {
+                            stats.UnreducedLevels++;
+                            obs.Log(LogLevel.Info, Path.GetFileName(finalPath) + "：沿用源模型，不生成相同网格");
+                        }
                     }
-                }
-                else
-                {
-                    okDst.Add(job.Destination);
-                    if (r.AfterTriangles > 0) afterByDst[job.Destination] = r.AfterTriangles;
+                    else
+                    {
+                        string output = finalPath;
+                        if (plan.Automatic && (pm.DmxSource != null || pm.IsSmd))
+                        {
+                            output = job.Destination + Path.GetExtension(finalPath);
+                            temporaryModels.Add(output);
+                        }
+                        if (pm.DmxSource != null) pm.DmxSource.WriteLod(job.Destination, output);
+                        else if (pm.IsSmd) SmdCodec.Write(output, converted);
+                        if (plan.Automatic)
+                        {
+                            finalPath = PublishCandidate(pm.Dir, pm.BaseName, Path.GetExtension(finalPath), level,
+                                pm.IsSmd || pm.DmxSource != null ? output : job.Destination, newCandidates);
+                            candidates[(pm.Path, level)] = (finalPath, triangles);
+                        }
+                        else if (!pm.IsSmd && pm.DmxSource == null) FileUtil.CopyAtomic(job.Destination, finalPath);
+                        previousLods[pm] = (finalPath, triangles);
+                        triangleChangeByLevel[level - 1] += triangles - (long)inheritedTriangles;
+                        okDst.Add(finalPath);
+                        stats.PublishedLods++;
+                        stats.VertexUpdateAccepted += r.VertexUpdateAccepted;
+                        stats.VertexUpdateTrianglesSaved += r.VertexUpdateTrianglesSaved;
+                        stats.BalancedRegions += r.BalancedRegions;
+                        stats.MaximumRegionalSpread = Math.Max(stats.MaximumRegionalSpread, r.MaximumRegionalSpread);
+                        stats.MaximumAdjacentRegionalSpread = Math.Max(stats.MaximumAdjacentRegionalSpread, r.MaximumAdjacentRegionalSpread);
+                    }
                     stats.JobOk++;
+                }
+                catch (Exception ex)
+                {
+                    jobFail++;
+                    foreach (var q in pm.RootQcs) QcErr(q, "模型 " + pm.BaseName + " 的 LOD" + level + " 写入失败：" + ex.Message);
+                    obs.Log(LogLevel.Error, pm.BaseName + " LOD" + level + " 写入失败：" + ex.Message);
                 }
             }
             stats.JobFail = jobFail;
+            stats.ModelsWithoutReduction = workModels.Count(pm => !previousLods.ContainsKey(pm));
             if (jobs.Count > 0)
-                obs.Log(LogLevel.Info, "简化结果：" + stats.JobOk + " 成功 / " + jobs.Count + " 个任务");
+                obs.Log(LogLevel.Info, "简化结果：发布 " + stats.PublishedLods + " 个新网格，沿用已减网格 " +
+                                       stats.ReusedLevels + " 档，沿用源网格 " + stats.UnreducedLevels + " 档");
+            foreach (var pm in workModels.Where(m => !previousLods.ContainsKey(m)))
+                obs.Log(LogLevel.Info, FileUtil.RelativeDisplay(plan.RootDir, pm.Path) + "：没有找到合格的减面档");
 
-            // 末级面数合计
-            long lastLodTris = 0;
-            foreach (var pm in plan.Models)
-            {
-                if (pm.Jobs.Count == 0) continue;
-                string ext = pm.IsSmd ? ".smd" : ".glb";
-                string last = Path.Combine(pm.Dir, pm.BaseName + "_lod" + pm.Jobs.Count + ext);
-                int aft;
-                if (afterByDst.TryGetValue(last, out aft)) lastLodTris += aft;
-            }
-            stats.TotalLastLodTriangles = lastLodTris;
             stats.TotalSourceTriangles = plan.TotalSourceTriangles;
-
-            // 清理临时 SMD 文件
-            foreach (var kv in smdTempSources)
+            stats.LodTriangles = new long[triangleChangeByLevel.Length];
+            long trianglesAtLevel = stats.TotalSourceTriangles;
+            for (int level = 0; level < triangleChangeByLevel.Length; level++)
             {
-                FileUtil.TryDelete(kv.Value);
-                foreach (var pm in plan.Models.Where(x => string.Equals(x.Path, kv.Key, StringComparison.OrdinalIgnoreCase)))
-                    foreach (var j in pm.Jobs) FileUtil.TryDelete(j.Destination);
+                trianglesAtLevel += triangleChangeByLevel[level];
+                stats.LodTriangles[level] = trianglesAtLevel;
             }
+            stats.TotalLastLodTriangles = trianglesAtLevel;
 
             if (outcome.Cancelled)
             {
+                foreach (string path in newCandidates) FileUtil.TryDelete(path);
                 obs.Log(LogLevel.Warn, "已停止：不注入任何 QC（已生成的 LOD 文件保留）。");
                 FinishQcOutcomes(plan, outcome, qcOutcomes, 0, 0);
                 WriteReports(plan, options, outcome, obs, obs, sw.Elapsed);
@@ -337,7 +352,8 @@ namespace LodStudio.Engine
                 if (qp.Action == BatchQcAction.Skip)
                 {
                     // 合理跳过：如果它带着上次的工具块（本次已无可写内容），把旧块移除（可能在根 QC，也可能在 include 文件里）
-                    if (qp.Info != null && qp.Info.HasToolMarker && !collectionMode)
+                    if (!plan.Automatic && qp.Info != null && qp.Info.HasToolMarker && !collectionMode &&
+                        !qp.Info.ToolMarkerFiles.Any(f => sharedHostBlocks.ContainsKey(FileUtil.Normalize(f))))
                     {
                         try
                         {
@@ -359,11 +375,29 @@ namespace LodStudio.Engine
                 }
 
                 if (qp.Info == null) { qo.Errors.Add("没有解析结果"); continue; }
+                if (plan.Automatic && (qo.Errors.Count > 0 || outcome.Errors.Count > 0)) continue;
+                if (plan.Automatic && qp.Models.Any(m => !File.Exists(m.Path) || File.GetLastWriteTimeUtc(m.Path) != m.SourceWriteTimeUtc))
+                {
+                    qo.Errors.Add("扫描后源模型已改变，请重新扫描");
+                    continue;
+                }
+                if (plan.Automatic && new[] { qp.QcPath }.Concat(qp.Info.IncludedFiles).Any(path =>
+                    !File.Exists(path) || File.GetLastWriteTimeUtc(path) > plan.BuiltAt.ToUniversalTime()))
+                {
+                    // A successful earlier root can have updated a shared include with the same tool block.
+                    if (!new[] { qp.QcPath }.Concat(qp.Info.IncludedFiles).Where(path =>
+                        !File.Exists(path) || File.GetLastWriteTimeUtc(path) > plan.BuiltAt.ToUniversalTime())
+                        .All(path => sharedHostBlocks.ContainsKey(FileUtil.Normalize(path))))
+                    {
+                        qo.Errors.Add("计划生成后工程文件已改变，请重新扫描");
+                        continue;
+                    }
+                }
                 // 计划生成后 QC 又被编辑过：按最新内容重解析（$lod 块引用的是当前 studio 列表，不能按旧快照写）
                 try
                 {
                     DateTime lastWrite = File.GetLastWriteTimeUtc(qp.QcPath);
-                    if (lastWrite > plan.BuiltAt.ToUniversalTime().AddSeconds(1))
+                    if (!plan.Automatic && lastWrite > plan.BuiltAt.ToUniversalTime().AddSeconds(1))
                     {
                         var fresh = QcParser.Parse(qp.QcPath);
                         if (fresh != null && !fresh.ReadFailed)
@@ -375,11 +409,25 @@ namespace LodStudio.Engine
                 }
                 catch { }
                 string block;
-                bool skipMain = options.SkipMainModel && options.SkipMainQcPaths != null &&
-                                options.SkipMainQcPaths.Any(x => PathsEqual(x, qp.QcPath));
+                var qcLevels = qp.Levels ?? plan.Plan;
+                Dictionary<int, AutomaticLodResult> accepted = null;
+                var referenced = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                bool skipMain = options.SkipMainModel &&
+                                (options.SkipMainQcPaths == null || options.SkipMainQcPaths.Any(x => PathsEqual(x, qp.QcPath)));
                 try
                 {
-                    block = QcWriter.BuildLodBlock(qp.Info, plan.Plan, okDst, skipMain, options.NoFacial);
+                    if (plan.Automatic)
+                    {
+                        accepted = SelectLevels(qp, qo, candidates);
+                        foreach (int level in accepted.Keys)
+                            foreach (var model in qp.Models)
+                                for (int prior = level; prior > 0; --prior)
+                                    if (candidates.TryGetValue((model.Path, prior), out var candidate))
+                                    { referenced.Add(candidate.Path); break; }
+                    }
+                    block = QcWriter.BuildLodBlock(qp.Info, qcLevels, okDst, skipMain, !plan.Automatic && options.NoFacial,
+                        reuseEarlierLods: true, publishedPath: !plan.Automatic ? null : (Func<string, int, string>)((source, level) =>
+                            candidates.TryGetValue((source, level), out var candidate) ? candidate.Path : null), automaticLevels: accepted);
                 }
                 catch (Exception ex)
                 {
@@ -390,7 +438,18 @@ namespace LodStudio.Engine
                 {
                     bool hadErrors = qo.Errors.Count > 0 || outcome.Errors.Count > 0;
                     qo.Skipped = true;
-                    qo.SkipReason = hadErrors ? "模型简化失败，没有可写的 $lod（保留原 QC 不动）" : "没有可替换的条目";
+                    qo.SkipReason = hadErrors ? "模型简化失败，没有可写的 $lod（保留原 QC 不动）" : "没有合格的减面替换";
+                    if (!plan.Automatic && !hadErrors && !collectionMode && qp.Info.HasToolMarker &&
+                        !qp.Info.ToolMarkerFiles.Any(f => sharedHostBlocks.ContainsKey(FileUtil.Normalize(f))))
+                    {
+                        var cleanup = QcWriter.Apply(qp.Info, null, false, backup);
+                        if (!cleanup.Success) qo.Errors.Add(cleanup.Error);
+                        else if (!cleanup.NoChange)
+                        {
+                            qo.LodBlockFile = cleanup.HostFile;
+                            obs.Log(LogLevel.Info, Path.GetFileName(qp.QcPath) + " → 移除已无有效替换的旧工具块");
+                        }
+                    }
                     skipped++;
                     outcome.SkippedQcPaths.Add(qp.QcPath);
                     continue;
@@ -398,6 +457,16 @@ namespace LodStudio.Engine
 
                 try
                 {
+                    if (qp.IsStandalone)
+                    {
+                        usedCandidates.UnionWith(referenced);
+                        qo.Generated = true;
+                        qo.OutputFiles.AddRange(referenced.OrderBy(p => p, StringComparer.OrdinalIgnoreCase));
+                        outcome.GeneratedModels++;
+                        outcome.GeneratedModelPaths.Add(qp.QcPath);
+                        obs.Log(LogLevel.Info, Path.GetFileName(qp.QcPath) + " → 生成 " + accepted.Count + " 级模型 LOD");
+                        continue;
+                    }
                     switch (options.OutputMode)
                     {
                         case OutputMode.CollectionOnly:
@@ -447,9 +516,15 @@ namespace LodStudio.Engine
                         default:
                             {
                                 string hadSep = OldSeparateQcToDelete(qp.Info);
-                                var body = QcWriter.WrapMarker(block, plan.PresetName, plan.Plan, false);
+                                var body = QcWriter.WrapMarker(block, plan.PresetName, qcLevels, false);
                                 // 模型声明在 include 文件里（如 main.qc）时，工具块写那个文件，根 QC 保持原样
                                 string host = QcWriter.ResolveHostFile(qp.Info, skipMain);
+                                if (plan.Automatic && (HasSharedConflict(plan, qp, host, qcOutcomes) ||
+                                    sharedHostBlocks.TryGetValue(FileUtil.Normalize(host), out string existingBody) && existingBody != body))
+                                {
+                                    qo.Errors.Add("共享 QC 的 LOD 计划发生冲突：" + host);
+                                    break;
+                                }
                                 var res = QcWriter.Apply(qp.Info, body, options.Force, backup, host);
                                 if (res.Success)
                                 {
@@ -466,12 +541,12 @@ namespace LodStudio.Engine
                                     }
                                     else if (sharedHost)
                                     {
-                                        obs.Log(LogLevel.Info, "  ✔ " + Path.GetFileName(qp.QcPath) + " → " + plan.Plan.Count +
+                                        obs.Log(LogLevel.Info, "  ✔ " + Path.GetFileName(qp.QcPath) + " → " + (accepted?.Count ?? qcLevels.Count) +
                                                 " 级 $lod 写入 " + hostName + "（共享 include，根 QC 未改动）");
                                     }
                                     else
                                     {
-                                        obs.Log(LogLevel.Info, "  ✔ " + Path.GetFileName(qp.QcPath) + " → 追加 " + plan.Plan.Count + " 级 $lod");
+                                        obs.Log(LogLevel.Info, "  ✔ " + Path.GetFileName(qp.QcPath) + " → 追加 " + (accepted?.Count ?? qcLevels.Count) + " 级 $lod");
                                     }
                                     // 多个 QC 共享同一 include 文件时，块内容必须一致；不一致只保留最后写入者，明确提示
                                     if (sharedHost && !string.IsNullOrEmpty(res.HostFile))
@@ -496,11 +571,22 @@ namespace LodStudio.Engine
                                 break;
                             }
                     }
+                    if (qo.Injected)
+                    {
+                        usedCandidates.UnionWith(referenced);
+                        qo.OutputFiles.AddRange(referenced.OrderBy(p => p, StringComparer.OrdinalIgnoreCase));
+                    }
                 }
                 catch (Exception ex)
                 {
                     qo.Errors.Add("写 QC 失败：" + ex.Message);
                 }
+            }
+
+            if (plan.Automatic)
+            {
+                foreach (string path in newCandidates.Except(usedCandidates, StringComparer.OrdinalIgnoreCase)) FileUtil.TryDelete(path);
+                stats.PublishedLods = usedCandidates.Count;
             }
 
             if (collectionMode && !outcome.Cancelled)
@@ -525,7 +611,7 @@ namespace LodStudio.Engine
             FinishQcOutcomes(plan, outcome, qcOutcomes, injected, skipped);
 
             // ── 4. 可选试编译 ──
-            if (!outcome.Cancelled && options.CompileAfter && !collectionMode &&
+            if (!plan.Automatic && !outcome.Cancelled && options.CompileAfter && !collectionMode &&
                 !string.IsNullOrEmpty(options.NekomdlPath) && File.Exists(options.NekomdlPath))
             {
                 obs.Stage(BatchStage.Compiling, "── 附加：逐个试编译（会写游戏目录，仅供校验）──");
@@ -581,6 +667,85 @@ namespace LodStudio.Engine
             }
 
             WriteReports(plan, options, outcome, obs, obs, sw.Elapsed);
+        }
+
+        private static string PublishCandidate(string directory, string model, string extension, int level, string source, HashSet<string> created)
+        {
+            using (var sha = SHA256.Create())
+            {
+                string Hash(string path)
+                {
+                    using (var input = File.OpenRead(path))
+                        return BitConverter.ToString(sha.ComputeHash(input)).Replace("-", "").ToLowerInvariant();
+                }
+                string hash = Hash(source);
+                string destination = Path.Combine(directory, model + "_lod" + level + "_" + hash.Substring(0, 16) + extension);
+                if (File.Exists(destination))
+                {
+                    if (Hash(destination) != hash) throw new IOException("现有 LOD 文件内容已改变：" + destination);
+                }
+                else
+                {
+                    FileUtil.CopyAtomic(source, destination);
+                    created.Add(destination);
+                }
+                return destination;
+            }
+        }
+
+        private static bool HasSharedConflict(BatchPlan plan, BatchQcPlan current, string host,
+            Dictionary<string, QcOutcome> outcomes)
+        {
+            var changes = new HashSet<string>(current.Info.ToolMarkerFiles.Select(FileUtil.Normalize), StringComparer.OrdinalIgnoreCase);
+            changes.Add(FileUtil.Normalize(host));
+            var currentRefs = current.Info.Studios.Select(s => (s.RawFile, s.ResolvedPath, s.BodygroupIndex, s.Scale));
+            foreach (var sibling in plan.QcPlans)
+            {
+                if (ReferenceEquals(current, sibling) || sibling.Info == null || sibling.IsStandalone ||
+                    !sibling.Info.IncludedFiles.Any(f => changes.Contains(FileUtil.Normalize(f)))) continue;
+                if (sibling.Action != BatchQcAction.Process || outcomes[FileUtil.Normalize(sibling.QcPath)].Errors.Count > 0 ||
+                    sibling.SourceTriangles != current.SourceTriangles || !PathsEqual(QcWriter.ResolveHostFile(sibling.Info, false), host) ||
+                    !currentRefs.SequenceEqual(sibling.Info.Studios.Select(s => (s.RawFile, s.ResolvedPath, s.BodygroupIndex, s.Scale))))
+                    return true;
+            }
+            return false;
+        }
+
+        private static Dictionary<int, AutomaticLodResult> SelectLevels(BatchQcPlan qc, QcOutcome outcome,
+            Dictionary<(string Source, int Level), (string Path, int Triangles)> candidates)
+        {
+            var accepted = new Dictionary<int, AutomaticLodResult>();
+            var activeCounts = qc.Models.ToDictionary(m => m, m => m.Triangles);
+            long previousTriangles = qc.SourceTriangles;
+            double previousSwitch = 0;
+            var modelExtents = qc.Models.ToDictionary(m => m.Path, m => m.Extent, StringComparer.OrdinalIgnoreCase);
+            double extent = qc.Info.Studios.Where(s => s.ResolvedPath != null && modelExtents.ContainsKey(s.ResolvedPath))
+                .Max(s => modelExtents[s.ResolvedPath] * s.Scale);
+            if (qc.IsStandalone && Path.GetExtension(qc.QcPath).Equals(".glb", StringComparison.OrdinalIgnoreCase))
+                extent /= 0.0254; // Standalone glTF units are metres. QC GLBs follow Source project units.
+            for (int i = 0; i < qc.Levels.Count; ++i)
+            {
+                int level = i + 1;
+                foreach (var model in qc.Models)
+                    if (candidates.TryGetValue((model.Path, level), out var candidate)) activeCounts[model] = candidate.Triangles;
+                var result = new AutomaticLodResult
+                {
+                    Candidate = level,
+                    Triangles = AutomaticLod.CountVisible(qc, m => activeCounts[m]),
+                    TargetRatio = qc.Levels.Levels[i].Ratio
+                };
+                outcome.Levels.Add(result);
+                if (result.Triangles > previousTriangles * (1 - AutomaticLod.MinimumSavings))
+                {
+                    result.SkipReason = "相对上一有效档减面不足 10%";
+                    continue;
+                }
+                AutomaticLod.Estimate(result, extent, qc.SourceTriangles, previousSwitch);
+                previousTriangles = result.Triangles;
+                previousSwitch = result.SwitchPoint;
+                accepted.Add(level, result);
+            }
+            return accepted;
         }
 
         private static void FinishQcOutcomes(BatchPlan plan, BatchOutcome outcome, Dictionary<string, QcOutcome> qcOutcomes, int injected, int skipped)
@@ -685,7 +850,8 @@ namespace LodStudio.Engine
                     Elapsed = elapsed,
                     Outcome = outcome,
                     LogLines = recorder != null ? recorder.AllLines : outcome.LogLines,
-                    CompileAfter = options.CompileAfter
+                    CompileAfter = options.CompileAfter,
+                    Automatic = plan.Automatic
                 };
                 string dir = !string.IsNullOrEmpty(options.ReportDir) ? options.ReportDir : plan.RootDir;
                 outcome.ReportPath = ReportWriter.WriteMarkdownReport(ctx, dir);

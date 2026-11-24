@@ -86,7 +86,14 @@ namespace LodStudio.ViewModels
         public int Filter
         {
             get { return _filter; }
-            set { if (Set(ref _filter, Math.Max(0, Math.Min(1, value)))) { try { _view.Refresh(); } catch { } Raise("CountText"); } }
+            set
+            {
+                if (!Set(ref _filter, Math.Max(0, Math.Min(1, value)))) return;
+                _view.Refresh();
+                Raise(nameof(CountText));
+                Raise(nameof(IsEmpty));
+                Raise(nameof(EmptyText));
+            }
         }
 
         public bool AutoFollow
@@ -113,7 +120,8 @@ namespace LodStudio.ViewModels
             }
         }
 
-        public bool IsEmpty { get { return _lines.Count == 0; } }
+        public bool IsEmpty => _filter == 1 ? _errorCount == 0 : _lines.Count == 0;
+        public string EmptyText => _filter == 1 ? "暂无错误日志" : "暂无日志";
 
         /// <summary>有日志时复制 / 清空才可用。</summary>
         public bool HasLines { get { return _lines.Count > 0; } }
@@ -128,7 +136,7 @@ namespace LodStudio.ViewModels
             if (level == LogLevel.Error) _errorCount++;
             else if (level == LogLevel.Warn) _warnCount++;
             if (_autoFollow) NewCount = 0;
-            else if (level != LogLevel.Detail) NewCount = _newCount + 1;
+            else if (level != LogLevel.Detail && (_filter == 0 || level == LogLevel.Error)) NewCount = _newCount + 1;
 
             if (_lines.Count > MaxLines)
             {
@@ -147,7 +155,7 @@ namespace LodStudio.ViewModels
         public void Clear()
         {
             _lines.Clear();
-            _seq = 0; _errorCount = 0; _warnCount = 0; NewCount = 0;
+            _seq = 0; _errorCount = 0; _warnCount = 0; AutoFollow = true; NewCount = 0;
             Raise("CountText"); Raise("IsEmpty"); Raise("HasLines");
         }
 

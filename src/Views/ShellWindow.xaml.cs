@@ -29,15 +29,19 @@ namespace LodStudio.Views
         private ShellViewModel _vm;
         private AppSettings _settings;
         private bool _forceClose;
+        private bool _closingRequested;
         private IDisposable _handoff;
         private ScrollViewer _logScroll;
+        private bool _logFollowQueued;
 
         private ContextMenu _openMenu;
         private string _lastFolderPickDir;
         private SettingsWindow _settingsWindow;
         private bool _syncingPreset;
 
-        public ShellWindow()
+        public ShellWindow() : this(true) { }
+
+        internal ShellWindow(bool fitWorkArea)
         {
             Engine.PerfTrace.Mark("shell-ctor-start");
             InitializeComponent();
@@ -64,6 +68,8 @@ namespace LodStudio.Views
             Engine.PerfTrace.Mark("shell-setup");
 
             Loaded += OnLoaded;
+            if (fitWorkArea) WindowWorkArea.Track(this);
+            RootBorder.SizeChanged += OnWorkspaceSizeChanged;
             Closing += OnClosing;
             StateChanged += OnStateChanged;
             PreviewKeyDown += OnWindowPreviewKeyDown;
@@ -99,8 +105,7 @@ namespace LodStudio.Views
                 CompositionTarget.Rendering += once;
             }
             catch { }
-            UpdateLogScroll();
-            AttachLogScrollEvents();
+            FollowLog();
             try { await _vm.RunEnvironmentCheckAsync(false); } catch { }
         }
 
@@ -108,35 +113,18 @@ namespace LodStudio.Views
         {
             _vm.PropertyChanged += (s, e) =>
             {
-                switch (e.PropertyName)
-                {
-                    case "IsLogExpanded":
-                        ApplyLogExpanded(_vm.IsLogExpanded, true);
-                        break;
-                    case "IsPlanVisible":
-                        break;
-                    case "StatusTitle":
-                        break;
-                }
+                if (e.PropertyName == nameof(_vm.IsLogExpanded))
+                    ApplyLogExpanded(_vm.IsLogExpanded, true);
             };
             _vm.Queue.PropertyChanged += (s, e) =>
             {
-                switch (e.PropertyName)
-                {
-                    case "CountAll":
-                    case "CountUnfinished":
-                    case "CountDone":
-                    case "CountIssue":
-                    case "CountSkipped":
-                        UpdateFilterItems();
-                        break;
-                }
+                if (e.PropertyName == nameof(_vm.Queue.CountAll)) UpdateFilterItems();
+                if (e.PropertyName == nameof(_vm.Queue.FilterIndex)) SegFilter.SelectedIndex = _vm.Queue.FilterIndex;
             };
-            _vm.Log.Lines.CollectionChanged += (s, e) =>
+            _vm.Log.Lines.CollectionChanged += (s, e) => FollowLog();
+            _vm.Log.PropertyChanged += (s, e) =>
             {
-                if (_vm.Log.AutoFollow) ScrollLogToEnd();
-                else if (!_vm.Log.HasNew) { }
-                UpdateLogScroll();
+                if (e.PropertyName == nameof(_vm.Log.Filter)) SegLogFilter.SelectedIndex = _vm.Log.Filter;
             };
         }
 
@@ -151,18 +139,35 @@ namespace LodStudio.Views
                 }
                 if (_settings.WinLeft != int.MinValue && _settings.WinTop != int.MinValue)
                 {
-                    var wa = SystemParameters.WorkArea;
                     double l = _settings.WinLeft, t = _settings.WinTop;
-                    if (l > wa.Left - Width + 140 && l < wa.Right - 140 && t > wa.Top - 60 && t < wa.Bottom - 160)
-                    {
-                        WindowStartupLocation = WindowStartupLocation.Manual;
-                        Left = l;
-                        Top = t;
-                    }
+                    WindowStartupLocation = WindowStartupLocation.Manual;
+                    Left = l;
+                    Top = t;
                 }
                 if (_settings.Maximized) WindowState = WindowState.Maximized;
             }
             catch { }
+        }
+
+        private void OnWorkspaceSizeChanged(object sender, SizeChangedEventArgs e)
+        {
+            if (e.WidthChanged)
+            {
+                double width = e.NewSize.Width;
+                double planWidth = Math.Max(318, Math.Min(400, width * 0.325));
+                PlanColumn.Width = new GridLength(planWidth);
+                Toasts.Width = Math.Min(360, planWidth - 8);
+                double queueWidth = width - planWidth - 56;
+                bool stackSearch = queueWidth < 610;
+                Grid.SetRow(SearchBox, stackSearch ? 1 : 0);
+                Grid.SetColumn(SearchBox, stackSearch ? 0 : 1);
+                Grid.SetColumnSpan(SearchBox, stackSearch ? 2 : 1);
+                SearchBox.HorizontalAlignment = stackSearch ? HorizontalAlignment.Stretch : HorizontalAlignment.Right;
+                SearchBox.Margin = stackSearch ? new Thickness(0, 0, 0, 8) : new Thickness(12, 0, 0, 0);
+                SearchBox.Width = stackSearch ? double.NaN : 204;
+                SearchBox.MaxWidth = double.PositiveInfinity;
+            }
+            if (e.HeightChanged && _vm.IsLogExpanded) ApplyLogExpanded(true, false);
         }
 
         private void SaveWindowGeometry()
@@ -184,36 +189,32 @@ namespace LodStudio.Views
         private async void OnClosing(object sender, System.ComponentModel.CancelEventArgs e)
         {
             if (_forceClose) return;
-            if (_vm.IsRunning)
+            if (_closingRequested || Dialogs.IsOpen)
             {
                 e.Cancel = true;
-                bool stop = await Dialogs.ConfirmAsync(new DialogOptions
+                if (Dialogs.IsOpen && !_closingRequested) Dialogs.Dismiss();
+                return;
+            }
+            if (!_vm.CanEdit)
+            {
+                e.Cancel = true;
+                _closingRequested = true;
+                try
                 {
-                    Title = "还在运行",
-                    Message = "现在生成任务还没结束。关闭窗口会结束所有 Blender 进程；已经生成的 LOD 文件会保留，但本次不会再修改 QC。",
-                    OkText = "停止并关闭",
-                    CancelText = "继续运行",
-                    Danger = true
-                });
-                if (stop)
-                {
-                    RequestCancelForClose();
-                    // 等到批处理真正退出运行状态（它会在安全点停止写 QC），最多 4 秒；超时也继续关闭
-                    for (int i = 0; i < 40 && _vm.IsRunning; i++) await Task.Delay(100);
+                    if (_vm.IsRunning && !_vm.IsStopping &&
+                        !await ConfirmAsync("停止并关闭", "当前步骤收尾后关闭窗口，已发布的结果会保留。",
+                            "停止并关闭", "继续生成", true, null))
+                        return;
+                    _vm.ForceCancel();
+                    while (!_vm.CanEdit) await Task.Delay(75);
+                    CleanupAndSave();
+                    _forceClose = true;
+                    await Dispatcher.InvokeAsync(Close);
                 }
-                else return;
-                CleanupAndSave();
-                _forceClose = true;
-                Close();
+                finally { _closingRequested = false; }
                 return;
             }
             CleanupAndSave();
-        }
-
-        private void RequestCancelForClose()
-        {
-            try { BlenderScheduler.KillAll(); } catch { }
-            try { _vm.ForceCancel(); } catch { }
         }
 
         private void CleanupAndSave()
@@ -266,7 +267,12 @@ namespace LodStudio.Views
             SegFilter.SelectedIndexChanged += (s, e) => _vm.Queue.FilterIndex = SegFilter.SelectedIndex;
 
             SegLogFilter.SetItems(new List<SegOption> { new SegOption("全部"), new SegOption("错误") }, _vm.Log.Filter);
-            SegLogFilter.SelectedIndexChanged += (s, e) => { _vm.Log.Filter = SegLogFilter.SelectedIndex; ScrollLogToEnd(); };
+            SegLogFilter.SelectedIndexChanged += (s, e) =>
+            {
+                _vm.Log.Filter = SegLogFilter.SelectedIndex;
+                _vm.Log.AutoFollow = true;
+                FollowLog();
+            };
 
             SegWriteMode.SetItems(new List<SegOption>
             {
@@ -274,12 +280,15 @@ namespace LodStudio.Views
                 new SegOption("独立 _LOD.qc"),
                 new SegOption("仅合集")
             }, _vm.LodPlan.WriteMode);
-            SegWriteMode.SelectedIndexChanged += (s, e) => _vm.OnWriteModeChanged(SegWriteMode.SelectedIndex);
+            SegWriteMode.SelectedIndexChanged += (s, e) =>
+            {
+                if (SegWriteMode.SelectedIndex != _vm.LodPlan.WriteMode)
+                    _vm.OnWriteModeChanged(SegWriteMode.SelectedIndex);
+            };
         }
 
         private void UpdateFilterItems()
         {
-            int sel = SegFilter.SelectedIndex;
             SegFilter.SetItems(new List<SegOption>
             {
                 new SegOption("全部", _vm.Queue.CountAll),
@@ -287,7 +296,7 @@ namespace LodStudio.Views
                 new SegOption("完成", _vm.Queue.CountDone),
                 new SegOption("异常", _vm.Queue.CountIssue),
                 new SegOption("跳过", _vm.Queue.CountSkipped)
-            }, sel < 0 ? 0 : sel);
+            }, _vm.Queue.FilterIndex);
         }
 
         // ═══════════════════ 预设下拉 ═══════════════════
@@ -296,12 +305,6 @@ namespace LodStudio.Views
         {
             CmbPreset.ItemsSource = _vm.LodPlan.PresetNames;
             SyncPresetCombo();
-            _vm.LodPlan.PresetListChanged += (s, e) => Dispatcher.BeginInvoke(new Action(() =>
-            {
-                CmbPreset.ItemsSource = null;
-                CmbPreset.ItemsSource = _vm.LodPlan.PresetNames;
-                SyncPresetCombo();
-            }));
         }
 
         /// <summary>把 ViewModel 的预设选择同步到 ComboBox（不触发生效逻辑）。</summary>
@@ -331,12 +334,13 @@ namespace LodStudio.Views
 
         private void HookLodPlan()
         {
-            _vm.LodPlan.PlanChanged += (s, e) => Dispatcher.BeginInvoke(new Action(() =>
+            _vm.LodPlan.PropertyChanged += (s, e) =>
             {
-                if (!_syncingPreset) SyncPresetCombo();
-            }));
-            // 新增一级后把焦点移到新行的距离框（不再依赖阶梯图双击）
-            _vm.LodPlan.EditRequested += (s, idx) => Dispatcher.BeginInvoke(new Action(() => FocusLodLevel(idx)));
+                if (string.IsNullOrEmpty(e.PropertyName) || e.PropertyName == nameof(_vm.LodPlan.SelectedPresetIndex))
+                    Dispatcher.BeginInvoke(new Action(SyncPresetCombo));
+                if (e.PropertyName == nameof(_vm.LodPlan.WriteMode))
+                    SegWriteMode.SelectedIndex = _vm.LodPlan.WriteMode;
+            };
         }
 
         // ═══════════════════ 日志展开/滚动 ═══════════════════
@@ -348,75 +352,81 @@ namespace LodStudio.Views
 
         private void ApplyLogExpanded(bool expanded, bool animate)
         {
-            double target = expanded ? Math.Min(240, Math.Max(140, ActualHeight - 420)) : 44;
-            if (target < 44) target = 44;
-            LogBody.Visibility = Visibility.Visible;
-            var rotate = (BtnToggleLog.Content as FrameworkElement);
-            var transform = new RotateTransform(expanded ? 180 : 0);
-            if (rotate != null) { rotate.RenderTransformOrigin = new Point(0.5, 0.5); rotate.RenderTransform = transform; }
-
-            if (!animate || !AnimationsEnabled)
-            {
-                LogCard.Height = target;
-                if (!expanded) LogBody.Visibility = Visibility.Collapsed;
-                return;
-            }
+            double target = expanded ? Math.Min(240, Math.Max(104, (RootBorder.ActualHeight - 200) * 0.34)) : 44;
+            double from = LogCard.ActualHeight > 0 ? LogCard.ActualHeight : 44;
+            LogCard.BeginAnimation(HeightProperty, null);
+            LogCard.Height = target;
+            LogChevron.RenderTransformOrigin = new Point(0.5, 0.5);
+            LogChevron.RenderTransform = new RotateTransform(expanded ? 180 : 0);
+            if (!expanded && LogBody.IsKeyboardFocusWithin) BtnToggleLog.Focus();
             if (expanded) LogBody.Visibility = Visibility.Visible;
 
-            var anim = new DoubleAnimation(LogCard.ActualHeight <= 0 ? 44 : LogCard.ActualHeight, target,
-                TimeSpan.FromMilliseconds(180))
+            if (!animate || !AnimationsEnabled || Math.Abs(from - target) < 1)
             {
-                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
-            };
-            anim.Completed += (s, e) =>
-            {
+                if (!expanded) LogBody.Visibility = Visibility.Collapsed;
+                FollowLog();
+                return;
+            }
 
-                LogCard.BeginAnimation(HeightProperty, null);
-                LogCard.Height = target;
-                if (! _vm.IsLogExpanded) LogBody.Visibility = Visibility.Collapsed;
-                ScrollLogToEnd();
+            var anim = new DoubleAnimation(from, target, TimeSpan.FromMilliseconds(180))
+            {
+                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+                FillBehavior = FillBehavior.Stop
             };
+            anim.Completed += (s, e) => { if (!_vm.IsLogExpanded) LogBody.Visibility = Visibility.Collapsed; };
             LogCard.BeginAnimation(HeightProperty, anim);
+            FollowLog();
         }
 
-        private void AttachLogScrollEvents()
+        private void FollowLog()
         {
-            _logScroll = FindChild<ScrollViewer>(LogList);
-            if (_logScroll != null)
+            if (_logFollowQueued || !_vm.IsLogExpanded) return;
+            _logFollowQueued = true;
+            Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
             {
-                _logScroll.ScrollChanged += (s, e) =>
+                _logFollowQueued = false;
+                if (!_vm.IsLogExpanded) return;
+                if (_logScroll == null)
                 {
-                    if (e.VerticalChange == 0 && e.ExtentHeightChange == 0) return;
-                    bool atBottom = _logScroll.VerticalOffset >= _logScroll.ScrollableHeight - 4;
-                    if (atBottom) { _vm.Log.AutoFollow = true; _vm.Log.ResetNewCount(); }
-                    else if (e.ExtentHeightChange != 0) _vm.Log.AutoFollow = false;
-                };
-            }
+                    _logScroll = FindChild<ScrollViewer>(LogList);
+                    if (_logScroll != null) _logScroll.ScrollChanged += OnLogScrollChanged;
+                }
+                if (_vm.Log.AutoFollow && LogList.Items.Count > 0)
+                    LogList.ScrollIntoView(LogList.Items[LogList.Items.Count - 1]);
+            }));
         }
 
-        private void UpdateLogScroll()
+        private void OnLogScrollChanged(object sender, ScrollChangedEventArgs e)
         {
-            if (_logScroll == null) _logScroll = FindChild<ScrollViewer>(LogList);
-        }
-
-        private void ScrollLogToEnd()
-        {
-            try
-            {
-                if (_vm.Log.Lines.Count > 0) LogList.ScrollIntoView(_vm.Log.Lines[_vm.Log.Lines.Count - 1]);
-            }
-            catch { }
+            if (e.VerticalChange == 0 || e.ExtentHeightChange != 0 || e.ViewportHeightChange != 0) return;
+            _vm.Log.AutoFollow = _logScroll.VerticalOffset >= _logScroll.ScrollableHeight - 0.5;
         }
 
         private void OnResumeFollowClick(object sender, RoutedEventArgs e)
         {
             _vm.Log.AutoFollow = true;
-            _vm.Log.ResetNewCount();
-            ScrollLogToEnd();
+            FollowLog();
+            LogList.Focus();
         }
 
         private void OnCopyLogClick(object sender, RoutedEventArgs e) { _vm.Commands.CopyLog.Execute(null); }
         private void OnClearLogClick(object sender, RoutedEventArgs e) { _vm.Log.Clear(); }
+
+        private void OnOpenErrorLogClick(object sender, RoutedEventArgs e)
+        {
+            SegLogFilter.SelectedIndex = 1;
+            _vm.IsLogExpanded = true;
+            _vm.Log.AutoFollow = true;
+            FollowLog();
+            LogList.Focus();
+        }
+
+        private async void OnLogKeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key != Key.Enter || !(LogList.SelectedItem is LogLineVm line)) return;
+            e.Handled = true;
+            await ShowInfoAsync("运行日志 · " + line.TimeText, "", line.Text);
+        }
 
         // ═══════════════════ 队列交互 ═══════════════════
 
@@ -427,34 +437,36 @@ namespace LodStudio.Views
 
         private async void OnQueueDoubleClick(object sender, MouseButtonEventArgs e)
         {
-            var item = (e.OriginalSource as DependencyObject) == null ? null : FindAncestorTaskItem(e.OriginalSource as DependencyObject);
-            if (item == null) item = QueueList.SelectedItem as TaskItemVm;
+            var item = FindAncestorTaskItem(e.OriginalSource as DependencyObject);
             if (item != null) await _vm.ShowTaskDetailsAsync(item);
         }
 
         private TaskItemVm FindAncestorTaskItem(DependencyObject d)
         {
-            while (d != null)
-            {
-                var lbi = d as ListBoxItem;
-                if (lbi != null) return lbi.DataContext as TaskItemVm;
-                d = VisualTreeHelper.GetParent(d);
-            }
-            return null;
+            return d == null ? null : (ItemsControl.ContainerFromElement(QueueList, d) as ListBoxItem)?.DataContext as TaskItemVm;
         }
 
         private void OnQueueRightButtonDown(object sender, MouseButtonEventArgs e)
         {
             var item = FindAncestorTaskItem(e.OriginalSource as DependencyObject);
-            if (item != null && !item.Equals(QueueList.SelectedItem)) QueueList.SelectedItem = item;
-            ShowQueueMenu();
+            if (item != null && !QueueList.SelectedItems.Contains(item)) QueueList.SelectedItem = item;
+            ShowQueueMenu(PlacementMode.MousePoint);
             e.Handled = true;
         }
 
         private void OnQueueKeyDown(object sender, KeyEventArgs e)
         {
-            if (e.Key == Key.Delete) { _vm.RemoveSelected(); e.Handled = true; }
-            else if (e.Key == Key.Enter) { var t = QueueList.SelectedItem as TaskItemVm; if (t != null) { _ = _vm.ShowTaskDetailsAsync(t); e.Handled = true; } }
+            if (e.Key == Key.Apps || (e.Key == Key.F10 && Keyboard.Modifiers == ModifierKeys.Shift))
+            {
+                ShowQueueMenu(PlacementMode.Bottom);
+                e.Handled = true;
+            }
+            else if (e.Key == Key.Delete) { _vm.RemoveSelected(); if (_vm.Queue.IsEmpty) FocusQueue(); e.Handled = true; }
+            else if (e.Key == Key.Enter && !(e.Source is Button) && QueueList.SelectedItem is TaskItemVm item)
+            {
+                _ = _vm.ShowTaskDetailsAsync(item);
+                e.Handled = true;
+            }
             else if (e.Key == Key.A && Keyboard.Modifiers == ModifierKeys.Control)
             {
                 QueueList.SelectAll();
@@ -475,38 +487,50 @@ namespace LodStudio.Views
         {
             var t = (sender as FrameworkElement)?.Tag as TaskItemVm;
             if (t == null) return;
-            if (QueueList.SelectedItems.Contains(t)) _vm.RemoveSelected();
-            else
-            {
-                _vm.Queue.Selected = new List<TaskItemVm> { t };
-                _vm.RemoveSelected();
-            }
+            _vm.RemoveTask(t);
+            FocusQueue();
             e.Handled = true;
         }
 
-        private void ShowQueueMenu()
+        private void ShowQueueMenu(PlacementMode placement)
         {
             var menu = NewMenu();
-            menu.Items.Add(NewMenuItem("导入文件夹", IconKind.Folder, "Ctrl+Shift+O", (s, e) => _vm.Commands.AddFolder.Execute(null)));
-            menu.Items.Add(NewMenuItem("导入文件（QC / GLB / SMD）", IconKind.File, "Ctrl+O", (s, e) => _vm.Commands.AddFiles.Execute(null)));
+            AddImportMenuItems(menu);
             menu.Items.Add(new Separator { Style = (Style)FindResource("Menu.Separator") });
             var sel = QueueList.SelectedItem as TaskItemVm;
-            menu.Items.Add(NewMenuItem("查看详情", IconKind.Info, "Enter", async (s, e) => { if (sel != null) await _vm.ShowTaskDetailsAsync(sel); }));
-            menu.Items.Add(NewMenuItem("在资源管理器中显示", IconKind.ExternalLink, null, (s, e) =>
-            {
-                if (sel != null) RevealInExplorer(sel.Path);
-            }));
-            menu.Items.Add(NewMenuItem("移到最前", IconKind.ArrowUp, "Ctrl+↑", (s, e) => { for (int i = 0; i < 50; i++) _vm.MoveSelected(-1); }));
-            menu.Items.Add(NewMenuItem("移到最后", IconKind.ArrowDown, "Ctrl+↓", (s, e) => { for (int i = 0; i < 50; i++) _vm.MoveSelected(1); }));
-            menu.Items.Add(NewMenuItem("移除选中项", IconKind.Trash, "Delete", (s, e) => _vm.RemoveSelected()));
+            menu.Items.Add(NewMenuItem("查看详情", IconKind.Info, "Enter", async (s, e) => await _vm.ShowTaskDetailsAsync(sel), sel != null));
+            menu.Items.Add(NewMenuItem("在资源管理器中显示", IconKind.ExternalLink, null, (s, e) => RevealInExplorer(sel?.Path), sel != null));
+            bool hasSelection = _vm.CanEdit && sel != null;
+            menu.Items.Add(NewMenuItem("上移", IconKind.ArrowUp, "Ctrl+↑", (s, e) => _vm.MoveSelected(-1), hasSelection));
+            menu.Items.Add(NewMenuItem("下移", IconKind.ArrowDown, "Ctrl+↓", (s, e) => _vm.MoveSelected(1), hasSelection));
+            menu.Items.Add(NewMenuItem("移除选中项", IconKind.Trash, "Delete", (s, e) => _vm.RemoveSelected(), hasSelection));
             menu.Items.Add(new Separator { Style = (Style)FindResource("Menu.Separator") });
-            menu.Items.Add(NewMenuItem("清空列表…", IconKind.Trash, null, async (s, e) => await _vm.ClearQueueAsync()));
+            menu.Items.Add(NewMenuItem("清空队列…", IconKind.Trash, null, async (s, e) =>
+            {
+                await _vm.ClearQueueAsync();
+                if (_vm.Queue.IsEmpty) FocusQueue();
+            }, _vm.CanEdit && _vm.Queue.HasItems));
             menu.PlacementTarget = QueueList;
-            menu.Placement = PlacementMode.MousePoint;
+            menu.Placement = placement;
             menu.IsOpen = true;
         }
 
         // ═══════════════════ 导入 / 计划 / LOD 面板 ═══════════════════
+
+        private void OnImportMenuClick(object sender, RoutedEventArgs e)
+        {
+            var menu = NewMenu();
+            AddImportMenuItems(menu);
+            menu.PlacementTarget = BtnImport;
+            menu.Placement = PlacementMode.Bottom;
+            menu.IsOpen = true;
+        }
+
+        private void AddImportMenuItems(ContextMenu menu)
+        {
+            menu.Items.Add(NewMenuItem("导入文件夹…", IconKind.Folder, "Ctrl+Shift+O", OnImportFolderClick, _vm.CanEdit));
+            menu.Items.Add(NewMenuItem("导入文件…", IconKind.File, "Ctrl+O", OnImportFilesClick, _vm.CanEdit));
+        }
 
         // 用 BeginInvoke 推迟到按钮完成"按下/抬起"状态处理之后再弹模态窗口，
         // 否则系统文件对话框的模态循环会让按钮的 IsPressed 卡住（关闭后仍显示内凹）。
@@ -519,18 +543,50 @@ namespace LodStudio.Views
         {
             Dispatcher.BeginInvoke(new Action(() => _vm.Commands.AddFiles.Execute(null)), System.Windows.Threading.DispatcherPriority.Input);
         }
-        private void OnClearSearchClick(object sender, RoutedEventArgs e) { TxtSearch.Text = ""; }
+        private void OnClearSearchClick(object sender, RoutedEventArgs e)
+        {
+            ClearSearch();
+            FocusSearch();
+        }
+
+        private void ClearSearch()
+        {
+            TxtSearch.Clear();
+            _vm.Queue.SearchText = "";
+        }
 
         private void OnResetFilterClick(object sender, RoutedEventArgs e)
         {
             SegFilter.SelectedIndex = 0;
-            TxtSearch.Text = "";
-            _vm.Queue.FilterIndex = 0;
-            _vm.Queue.SearchText = "";
+            ClearSearch();
+            FocusQueue();
         }
 
-        private void OnPreviewClick(object sender, RoutedEventArgs e) { _vm.Commands.Preview.Execute(null); }
-        private void OnStartClick(object sender, RoutedEventArgs e) { _vm.Commands.Start.Execute(null); }
+        private async void OnPreviewClick(object sender, RoutedEventArgs e)
+        {
+            await _vm.PreviewPlanAsync();
+            if (FocusWasOnOperation()) (BtnClosePlan.IsVisible ? BtnClosePlan : BtnPreview).Focus();
+        }
+
+        private async void OnStartClick(object sender, RoutedEventArgs e) => await StartFromShellAsync();
+
+        private async Task StartFromShellAsync()
+        {
+            if (!_vm.CanStart) return;
+            await _vm.StartRunAsync();
+            if (!FocusWasOnOperation()) return;
+            if (BtnStart.IsEnabled) BtnStart.Focus();
+            else if (BtnClosePlan.IsVisible) BtnClosePlan.Focus();
+            else FocusQueue();
+        }
+
+        private bool FocusWasOnOperation()
+        {
+            if (!IsActive || Dialogs.IsOpen) return false;
+            var focus = Keyboard.FocusedElement as UIElement;
+            return focus == null || ReferenceEquals(focus, this) || !focus.IsVisible || !focus.IsEnabled ||
+                   ReferenceEquals(focus, BtnStop);
+        }
         private void OnStopClick(object sender, RoutedEventArgs e) { _vm.Commands.Stop.Execute(null); }
         private void OnOpenReportClick(object sender, RoutedEventArgs e) { _vm.Commands.OpenReport.Execute(null); }
         private void OnOpenFolderClick(object sender, RoutedEventArgs e) { _vm.Commands.OpenFolder.Execute(null); }
@@ -555,7 +611,7 @@ namespace LodStudio.Views
         {
             if (e.Key == Key.Enter)
             {
-                NormalizeLevelText(sender as TextBox);
+                if (_vm.LodPlan.IsValid) NormalizeLevelText(sender as TextBox);
                 e.Handled = true;
             }
         }
@@ -567,14 +623,34 @@ namespace LodStudio.Views
             if (level == null) return;
             try { _vm.LodPlan.NormalizeLevelText(level.Number - 1); } catch { }
         }
-        private void OnClosePlanClick(object sender, RoutedEventArgs e) { _vm.ClosePlan(); }
-        private void OnStartFromPlanClick(object sender, RoutedEventArgs e) { _ = _vm.StartFromPlanAsync(); }
+        private void OnClosePlanClick(object sender, RoutedEventArgs e)
+        {
+            _vm.ClosePlan();
+            if (BtnPreview.IsEnabled) BtnPreview.Focus();
+            else FocusQueue();
+        }
+
+        private async void OnPlanDetailsClick(object sender, RoutedEventArgs e)
+        {
+            if ((sender as FrameworkElement)?.DataContext is PlanQcRowVm row) await ShowPlanDetailsAsync(row);
+        }
+
+        private async void OnPlanListKeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key != Key.Enter || e.Source is Button || !(PlanList.SelectedItem is PlanQcRowVm row)) return;
+            e.Handled = true;
+            await ShowPlanDetailsAsync(row);
+        }
+
+        private Task ShowPlanDetailsAsync(PlanQcRowVm row) =>
+            ShowInfoAsync(row.ActionText + " · " + row.QcName, row.QcPath, row.Detail);
 
         private void OnRemoveLevelClick(object sender, RoutedEventArgs e)
         {
             var lv = (sender as FrameworkElement)?.Tag as LodLevelVm;
             if (lv == null) return;
             _vm.RemoveLevel(lv.Number - 1);
+            FocusLodLevel(Math.Min(lv.Number - 1, _vm.LodPlan.Count - 1));
         }
 
         // ═══════════════════ 标题栏 / 菜单 / 主题 ═══════════════════
@@ -628,16 +704,13 @@ namespace LodStudio.Views
             catch { }
         }
 
-        /// <summary>点搜索框以外的任意位置 → 结束"待搜索"状态（收起插入符）；点队列外 → 取消队列选中。</summary>
+        /// <summary>点输入框外的空白区域时结束文本编辑。</summary>
         private void OnWindowPreviewMouseDownForSearch(object sender, MouseButtonEventArgs e)
         {
             try
             {
                 DependencyObject src = e.OriginalSource as DependencyObject;
-                if (QueueList != null && QueueList.SelectedItems.Count > 0 && !IsWithin(QueueList, src))
-                    QueueList.UnselectAll();
-
-                // 搜索框 / 距离 / 比例等输入框：点到它所在单元格以外就结束输入状态（收起插入符）
+                if (Dialogs.IsOpen) return;
                 var focusedBox = Keyboard.FocusedElement as TextBox;
                 if (TxtSearch.IsKeyboardFocusWithin && IsWithin(SearchBox, src)) return;
                 if (focusedBox == null) return;
@@ -693,11 +766,8 @@ namespace LodStudio.Views
         {
             if (_openMenu != null) { try { _openMenu.IsOpen = false; } catch { } _openMenu = null; }
             var menu = NewMenu();
-            menu.Items.Add(NewMenuItem("导入文件夹…", IconKind.Folder, "Ctrl+Shift+O", (s, e) => _vm.Commands.AddFolder.Execute(null)));
-            menu.Items.Add(NewMenuItem("导入文件…（QC / GLB / SMD）", IconKind.File, "Ctrl+O", (s, e) => _vm.Commands.AddFiles.Execute(null)));
+            AddImportMenuItems(menu);
             menu.Items.Add(new Separator { Style = (Style)FindResource("Menu.Separator") });
-            menu.Items.Add(NewMenuItem("保存当前参数为我的预设…", IconKind.File, null, (s, e) => _vm.Commands.SavePreset.Execute(null)));
-            menu.Items.Add(NewMenuItem("删除当前我的预设…", IconKind.Trash, null, (s, e) => _vm.Commands.DeletePreset.Execute(null)));
             menu.Items.Add(NewMenuItem("打开设置…", IconKind.Settings, "Ctrl+,", (s, e) => OpenSettings(0)));
             menu.Items.Add(NewMenuItem("运行环境诊断…", IconKind.Gauge, null, (s, e) => _vm.Commands.Diagnostics.Execute(null)));
             menu.Items.Add(new Separator { Style = (Style)FindResource("Menu.Separator") });
@@ -753,11 +823,12 @@ namespace LodStudio.Views
             return new ContextMenu { Style = (Style)FindResource("Menu.Base") };
         }
 
-        private MenuItem NewMenuItem(string header, IconKind icon, string shortcut, RoutedEventHandler onClick)
+        private MenuItem NewMenuItem(string header, IconKind icon, string shortcut, RoutedEventHandler onClick, bool enabled = true)
         {
             var item = new MenuItem
             {
                 Header = header,
+                IsEnabled = enabled,
                 Style = (Style)FindResource("Menu.Item"),
                 InputGestureText = shortcut,
                 Icon = new Icon { Kind = icon, Size = 16 }
@@ -785,13 +856,14 @@ namespace LodStudio.Views
         private void OnDragEnterWindow(object sender, DragEventArgs e)
         {
             if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return;
+            if (!_vm.CanEdit || Dialogs.IsOpen) { e.Effects = DragDropEffects.None; e.Handled = true; return; }
             DropOverlay.Visibility = Visibility.Visible;
             try
             {
                 var files = e.Data.GetData(DataFormats.FileDrop) as string[];
                 DropHint.Text = files != null && files.Length > 1
-                    ? "松开加入 " + files.Length + " 项（工程文件夹 / QC / GLB / SMD）"
-                    : "支持工程文件夹 / QC / GLB / SMD";
+                    ? "松开加入 " + files.Length + " 项（工程文件夹 / QC / GLB / SMD / DMX）"
+                    : "支持工程文件夹 / QC / GLB / SMD / DMX";
             }
             catch { }
             e.Handled = true;
@@ -800,7 +872,9 @@ namespace LodStudio.Views
         private void OnDragOverWindow(object sender, DragEventArgs e)
         {
             if (!e.Data.GetDataPresent(DataFormats.FileDrop)) { DropOverlay.Visibility = Visibility.Collapsed; return; }
-            e.Effects = DragDropEffects.Copy;
+            bool canDrop = _vm.CanEdit && !Dialogs.IsOpen;
+            e.Effects = canDrop ? DragDropEffects.Copy : DragDropEffects.None;
+            DropOverlay.Visibility = canDrop ? Visibility.Visible : Visibility.Collapsed;
             e.Handled = true;
         }
 
@@ -813,70 +887,98 @@ namespace LodStudio.Views
         {
             DropOverlay.Visibility = Visibility.Collapsed;
             if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return;
+            e.Handled = true;
+            if (!_vm.CanEdit || Dialogs.IsOpen) return;
             var paths = e.Data.GetData(DataFormats.FileDrop) as string[];
             if (paths != null && paths.Length > 0) await _vm.AddPathsAsync(paths);
-            e.Handled = true;
         }
 
         // ═══════════════════ 快捷键 ═══════════════════
 
         private async void OnWindowPreviewKeyDown(object sender, KeyEventArgs e)
         {
+            if (Dialogs.IsOpen)
+            {
+                if (!Dialogs.IsKeyboardFocusWithin)
+                {
+                    if (e.Key == Key.Escape) Dialogs.Dismiss();
+                    else Dialogs.FocusDialog();
+                    e.Handled = true;
+                }
+                return;
+            }
+            if (CmbPreset.IsDropDownOpen) return;
+
             bool ctrl = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
             bool shift = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
-            var focused = Keyboard.FocusedElement;
 
-            if (e.Key == Key.F5) { if (_vm.CanStart) _vm.Commands.Start.Execute(null); e.Handled = true; return; }
-            if (e.Key == Key.F1) { await _vm.ShowShortcutHelpAsync(); e.Handled = true; return; }
+            if (e.Key == Key.F5) { e.Handled = true; await StartFromShellAsync(); return; }
+            if (e.Key == Key.F1) { e.Handled = true; await _vm.ShowShortcutHelpAsync(); return; }
             if (e.Key == Key.Escape)
             {
                 if (_openMenu != null && _openMenu.IsOpen) { CloseMainMenu(); e.Handled = true; return; }
-                if (Dialogs.IsOpen) return;   // 交给对话框自己处理（PreviewKeyDown 是隧道事件）
-                if (_vm.IsRunning) { _ = _vm.StopAsync(); e.Handled = true; return; }
+                if (!_vm.CanEdit) { e.Handled = true; await _vm.StopAsync(); return; }
+                if (Keyboard.FocusedElement is TextBox number && number.Tag is LodLevelVm && !_vm.LodPlan.IsValid)
+                {
+                    NormalizeLevelText(number);
+                    e.Handled = true;
+                    return;
+                }
+                if (_vm.IsPlanVisible) { OnClosePlanClick(null, null); e.Handled = true; return; }
+                if (TxtSearch.IsKeyboardFocusWithin) { ClearSearch(); FocusQueue(); e.Handled = true; return; }
                 if (_vm.Queue.IsFiltered) { OnResetFilterClick(null, null); e.Handled = true; return; }
-                if (TxtSearch.IsKeyboardFocusWithin) { TxtSearch.Text = ""; QueueList.Focus(); e.Handled = true; return; }
                 return;
             }
             if (ctrl && e.Key == Key.O)
             {
-                if (shift) _vm.Commands.AddFolder.Execute(null);
-                else _vm.Commands.AddFiles.Execute(null);
+                if (shift) OnImportFolderClick(null, null);
+                else OnImportFilesClick(null, null);
                 e.Handled = true; return;
             }
             if (ctrl && e.Key == Key.F) { FocusSearch(); e.Handled = true; return; }
             if (ctrl && e.Key == Key.L) { _vm.IsLogExpanded = !_vm.IsLogExpanded; e.Handled = true; return; }
             if (ctrl && e.Key == Key.OemComma) { OpenSettings(0); e.Handled = true; return; }
-            if (e.Key == Key.Enter)
+            if (e.Key == Key.Enter && TxtSearch.IsKeyboardFocusWithin)
             {
-                var tb = focused as TextBox;
-                if (tb != null)
+                TxtSearch.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
+                if (QueueList.Items.Count > 0)
                 {
-                    var be = tb.GetBindingExpression(TextBox.TextProperty);
-                    if (be != null) be.UpdateSource();
-                    Keyboard.ClearFocus();
-                    QueueList.Focus();
-                    e.Handled = true;
+                    if (QueueList.SelectedIndex < 0) QueueList.SelectedIndex = 0;
+                    QueueList.ScrollIntoView(QueueList.SelectedItem);
+                    QueueList.UpdateLayout();
+                    var selected = QueueList.ItemContainerGenerator.ContainerFromItem(QueueList.SelectedItem) as ListBoxItem;
+                    if (selected != null) selected.Focus();
+                    else QueueList.Focus();
                 }
-                return;
+                e.Handled = true;
             }
         }
 
         public void FocusSearch()
         {
+            if (_vm.IsPlanVisible) _vm.ClosePlan();
+            if (!TxtSearch.IsVisible) { if (!_vm.IsPlanVisible) FocusQueue(); return; }
             TxtSearch.Focus();
             TxtSearch.SelectAll();
         }
 
+        private void FocusQueue()
+        {
+            if (QueueList.IsVisible) QueueList.Focus();
+            else if (BtnEmptyImportFolder.IsVisible) BtnEmptyImportFolder.Focus();
+        }
+
         public void FocusLodLevel(int levelIndex)
         {
-            try
+            Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
             {
                 var container = LevelList.ItemContainerGenerator.ContainerFromIndex(levelIndex) as DependencyObject;
-                if (container == null) return;
                 var tb = FindChild<TextBox>(container);
-                if (tb != null) { tb.Focus(); tb.SelectAll(); }
-            }
-            catch { }
+                if (tb?.IsVisible != true || !tb.IsEnabled || Dialogs.IsOpen) return;
+                tb.BringIntoView();
+                tb.Focus();
+                tb.SelectAll();
+            }));
         }
 
         // ═══════════════════ IShellInteraction ═══════════════════
@@ -899,11 +1001,6 @@ namespace LodStudio.Views
             return Dialogs.ShowInfoAsync(new DialogOptions { Title = title, Message = message, Detail = detail });
         }
 
-        public Task<string> PromptAsync(string title, string label, string initial, Func<string, string> validate)
-        {
-            return Dialogs.PromptAsync(new DialogOptions { Title = title, Message = "", InputLabel = label, InputInitial = initial, Validate = validate });
-        }
-
         public void ShowToast(string title, string subtitle, ToastTone tone)
         {
             Toasts.Show(title, subtitle, tone);
@@ -915,8 +1012,8 @@ namespace LodStudio.Views
             {
                 Multiselect = true,
                 CheckFileExists = true,
-                Title = "导入文件（QC / GLB / SMD，可多选）",
-                Filter = "支持的文件 (*.qc;*.glb;*.smd)|*.qc;*.glb;*.smd|QC 脚本 (*.qc)|*.qc|模型 (*.glb;*.smd)|*.glb;*.smd|所有文件 (*.*)|*.*"
+                Title = "导入文件（QC / GLB / SMD / DMX，可多选）",
+                Filter = "支持的文件 (*.qc;*.glb;*.smd;*.dmx)|*.qc;*.glb;*.smd;*.dmx|QC 脚本 (*.qc)|*.qc|模型 (*.glb;*.smd;*.dmx)|*.glb;*.smd;*.dmx|所有文件 (*.*)|*.*"
             };
             var result = new List<string>();
             if (dlg.ShowDialog(this) == true && dlg.FileNames != null) result.AddRange(dlg.FileNames);
@@ -963,6 +1060,7 @@ namespace LodStudio.Views
 
         public void OpenSettings(int page)
         {
+            if (Dialogs.IsOpen) return;
             try
             {
                 if (_settingsWindow == null)

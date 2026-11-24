@@ -99,7 +99,7 @@
             <!-- ═══════════════════ 底栏 ═══════════════════ -->
             <Grid Grid.Row="2" Background="{DynamicResource Brush.Canvas}">
                 <Border Height="1" VerticalAlignment="Top" Background="{DynamicResource Brush.Line}" />
-                <TextBlock Text="改动即时生效；窗口可以一直开着，边调边看主界面" Style="{StaticResource Text.Small}"
+                <TextBlock Text="设置会即时保存并应用" Style="{StaticResource Text.Small}"
                            Margin="20,0,240,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center"
                             Margin="0,0,20,0">

@@ -946,6 +946,13 @@ namespace LodStudio.Engine
             string normal = QcWriter.BuildLodBlock(info2, plan1, gen2, false, true);
             ctx.AssertContains(normal, "replacemodel \"face.glb\" \"face_lod1.glb\"", "普通 QC 写主模型");
 
+            var distinct = Generated(Path.Combine(dir2, "face_lod1.glb"), Path.Combine(dir2, "hair_lod2.glb"));
+            string reuse = QcWriter.BuildLodBlock(info2, plan, distinct, false, false, reuseEarlierLods: true);
+            string lod2 = reuse.Substring(reuse.IndexOf("$lod 15", StringComparison.Ordinal));
+            ctx.AssertContains(lod2, "replacemodel \"face.glb\" \"face_lod1.glb\"", "下一档只引用已发布的前档网格");
+            ctx.AssertContains(lod2, "replacemodel \"hair.glb\" \"hair_lod2.glb\"", "真正变粗的模型使用新网格");
+            ctx.AssertNotContains(reuse, "$lod 25", "所有替换都相同时省掉空档");
+
             // 没有生成的等级 → null
             string none = QcWriter.BuildLodBlock(info2, plan1, new HashSet<string>(StringComparer.OrdinalIgnoreCase), false, true);
             ctx.Assert(none == null, "没有生成任何 LOD 文件时返回 null");

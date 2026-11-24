@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using LodStudio.Controls;
 using LodStudio.Engine;
 using LodStudio.Views;
@@ -10,7 +11,7 @@ using LodStudio.Views;
 namespace LodStudio.Views.Settings
 {
     /// <summary>
-    /// LOD 高级页：5 个生成开关 + 跳过主模型清单 + 并行进程数。
+    /// LOD 高级页：生成开关、保留清单、跳过主模型和并行进程数。
     /// 跳过清单来自当前队列里能找到的根 QC（<see cref="LodStudio.ViewModels.ShellViewModel.CollectQcCandidatesAsync"/>）。
     /// </summary>
     public partial class SettingsPageAdvanced : SettingsPageBase
@@ -24,6 +25,12 @@ namespace LodStudio.Views.Settings
         {
             ChkQuality.Checked += OnQualityChanged;
             ChkQuality.Unchecked += OnQualityChanged;
+            ChkAdaptiveBudget.Checked += OnAdaptiveBudgetChanged;
+            ChkAdaptiveBudget.Unchecked += OnAdaptiveBudgetChanged;
+            ChkVertexUpdates.Checked += OnVertexUpdatesChanged;
+            ChkVertexUpdates.Unchecked += OnVertexUpdatesChanged;
+            TxtKeepOriginalModels.LostKeyboardFocus += delegate { SaveKeepOriginalModels(); };
+            TxtKeepOriginalModels.KeyDown += OnKeepOriginalModelsKeyDown;
             ChkForce.Checked += OnForceChanged;
             ChkForce.Unchecked += OnForceChanged;
             ChkCompile.Checked += OnCompileChanged;
@@ -47,6 +54,9 @@ namespace LodStudio.Views.Settings
             try
             {
                 ChkQuality.IsChecked = Settings.QualityFirst;
+                ChkAdaptiveBudget.IsChecked = Settings.AdaptiveTriangleBudget;
+                ChkVertexUpdates.IsChecked = Settings.AllowVertexUpdates;
+                TxtKeepOriginalModels.Text = Settings.KeepOriginalModels;
                 ChkForce.IsChecked = Settings.ForceOverwriteLod;
                 ChkCompile.IsChecked = Settings.CompileAfter;
                 ChkNofacial.IsChecked = Settings.NoFacial;
@@ -63,6 +73,36 @@ namespace LodStudio.Views.Settings
         {
             if (Syncing || Settings == null) return;
             Settings.QualityFirst = ChkQuality.IsChecked == true;
+            Apply(false);
+        }
+
+        private void OnAdaptiveBudgetChanged(object sender, RoutedEventArgs e)
+        {
+            if (Syncing || Settings == null) return;
+            Settings.AdaptiveTriangleBudget = ChkAdaptiveBudget.IsChecked == true;
+            Apply(false);
+        }
+
+        private void OnVertexUpdatesChanged(object sender, RoutedEventArgs e)
+        {
+            if (Syncing || Settings == null) return;
+            Settings.AllowVertexUpdates = ChkVertexUpdates.IsChecked == true;
+            Apply(false);
+        }
+
+        private void OnKeepOriginalModelsKeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key != Key.Enter) return;
+            e.Handled = true;
+            SaveKeepOriginalModels();
+        }
+
+        private void SaveKeepOriginalModels()
+        {
+            if (Syncing || Settings == null) return;
+            string paths = TxtKeepOriginalModels.Text.Trim();
+            if (paths == Settings.KeepOriginalModels) return;
+            Settings.KeepOriginalModels = paths;
             Apply(false);
         }
 

@@ -85,8 +85,8 @@
                 <ColumnDefinition Width="92" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
-            <TextBlock Text="Blender" Style="{StaticResource Set.Hint}" VerticalAlignment="Center" />
-            <TextBlock x:Name="TxtBlenderVersion" Grid.Column="1" Style="{StaticResource Set.Mono}"
+            <TextBlock Text="减面后端" Style="{StaticResource Set.Hint}" VerticalAlignment="Center" />
+            <TextBlock x:Name="TxtReductionEngine" Grid.Column="1" Style="{StaticResource Set.Mono}"
                        VerticalAlignment="Center" />
         </Grid>
 

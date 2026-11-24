@@ -1,110 +1,165 @@
-using System;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using LodStudio.Engine;
 
 namespace LodStudio.ViewModels
 {
-    /// <summary>计划视图的一行（一个根 QC 的动作）。</summary>
     public sealed class PlanQcRowVm
     {
-        // 必须是属性：WPF 的 {Binding X} 不能绑字段（绑字段会静默显示空白）
         public string QcName { get; set; }
         public string QcPath { get; set; }
         public string ActionText { get; set; }
-        public string ActionTone { get; set; }       // Ok/Skip/Err
-        public string Reason { get; set; }
-        public int ModelCount { get; set; }
-        public int JobCount { get; set; }
-        public string ModelsText { get; set; }
+        public string ActionTone { get; set; }
+        public string Summary { get; set; }
+        public string Counts { get; set; }
         public string Tooltip { get; set; }
-        public bool Actionable { get; set; }
+        public string Detail { get; set; }
     }
 
-    /// <summary>
-    /// 扫描预览 / 作业计划视图：只读阶段的产物。用户在这里看"会做什么、哪些跳过、为什么"，
-    /// 也可以直接按这个计划开始生成。
-    /// </summary>
+    /// <summary>只读预览同时描述会执行的作业和可能修改的文件。</summary>
     public sealed class PlanPreviewViewModel : VmBase
     {
-        private readonly BatchPlan _plan;
+        private bool _isStale;
 
-        public PlanPreviewViewModel(BatchPlan plan)
+        public PlanPreviewViewModel(BatchPlan plan, BatchRunOptions options)
         {
-            _plan = plan;
-            Rows = new ObservableCollection<PlanQcRowVm>();
-            foreach (var q in plan.QcPlans.OrderBy(x => x.Action == BatchQcAction.Skip ? 1 : x.Action == BatchQcAction.Error ? 2 : 0))
+            Plan = plan;
+            var rows = new List<PlanQcRowVm>();
+            foreach (var qc in plan.QcPlans.OrderBy(q => q.Action))
             {
-                string action = q.Action == BatchQcAction.Process ? "生成" : q.Action == BatchQcAction.Skip ? "跳过" : "错误";
-                string tone = q.Action == BatchQcAction.Process ? "Ok" : q.Action == BatchQcAction.Skip ? "Faint" : "Err";
-                int jobs = q.Models.Sum(m => m.Jobs.Count);
-                var modelsText = q.Models.Count == 0 ? "—"
-                    : string.Join("  ", q.Models.Take(3).Select(m => m.BaseName + " (" + m.Triangles.ToString("N0", CultureInfo.InvariantCulture) + ")")) +
-                      (q.Models.Count > 3 ? "  …+" + (q.Models.Count - 3) : "");
-                string tip = q.QcPath;
-                if (q.Info != null)
+                int maxJobs = plan.Automatic ? qc.Levels?.Count ?? 0 : int.MaxValue;
+                int jobs = qc.Models.Sum(m => System.Math.Min(m.Jobs.Count, maxJobs));
+                bool process = qc.Action == BatchQcAction.Process;
+                bool remove = RemovesOldBlock(plan, qc, options);
+                var action = process ? "生成" : remove ? "清理" : qc.Action == BatchQcAction.Skip ? "跳过" : "错误";
+                var tone = process ? "Ok" : remove ? "Warn" : qc.Action == BatchQcAction.Skip ? "Normal" : "Err";
+                string summary = qc.Reason;
+                var detail = new List<string>();
+                if (!string.IsNullOrEmpty(qc.Reason)) detail.Add(qc.Reason);
+                if (remove) detail.Add("将尝试移除已无有效档位的旧工具块。");
+                if (process)
                 {
-                    tip += "\n模型名: " + (string.IsNullOrEmpty(q.Info.ModelName) ? "(未声明)" : q.Info.ModelName);
-                    tip += "\nstudio 条目: " + q.Info.Studios.Count;
+                    summary = qc.IsStandalone ? "生成 LOD 网格" : qc.IsWrapperQc ? "新建包装 QC" : DescribeQcWrite(options.OutputMode);
+                    if (plan.Automatic && qc.Levels?.Count > 0)
+                    {
+                        summary = qc.SourceTriangles.ToString("N0", CultureInfo.InvariantCulture) + " 面 · " + qc.Levels.Count + " 个候选档";
+                        detail.Add(summary);
+                        detail.Add("目标保留比例 " + string.Join(" / ", qc.Levels.Levels.Select(level => LodPlan.Pct(level.Ratio) + "%")));
+                        detail.Add("有效档位、面数和切换距离以生成报告为准。");
+                    }
+                    if (qc.IsWrapperQc) detail.Add("将为源模型新建包装 QC。");
                 }
-                if (!string.IsNullOrEmpty(q.Reason)) tip += "\n原因: " + q.Reason;
-                Rows.Add(new PlanQcRowVm
+                foreach (var model in qc.Models)
                 {
-                    QcName = System.IO.Path.GetFileName(q.QcPath),
-                    QcPath = q.QcPath,
-                    ActionText = action,
-                    ActionTone = tone,
-                    Reason = q.Reason ?? "",
-                    ModelCount = q.Models.Count,
-                    JobCount = jobs,
-                    ModelsText = modelsText,
-                    Tooltip = tip,
-                    Actionable = q.Action == BatchQcAction.Process
-                });
+                    string reason = model.ReadError ?? model.SkipReason;
+                    detail.Add(model.BaseName + "  ·  " +
+                        (reason ?? model.Triangles.ToString("N0", CultureInfo.InvariantCulture) + " 面") + "\n" + model.Path);
+                }
+                rows.Add(CreateRow(qc.QcPath, action, tone, summary,
+                    process ? qc.Models.Count(m => m.Jobs.Count > 0) + " 个减面模型 · " + jobs + " 个任务" : "", string.Join("\n", detail)));
             }
-            CloseCommand = new RelayCommand(() => CloseRequested?.Invoke(this, EventArgs.Empty));
-            StartCommand = new RelayCommand(() => StartRequested?.Invoke(this, EventArgs.Empty));
+            var failedTasks = plan.Tasks.Where(t => !string.IsNullOrEmpty(t.Error)).ToList();
+            foreach (var task in failedTasks)
+                rows.Add(CreateRow(task.Task.Path, "错误", "Err", task.Error, "", task.Error));
+
+            Rows = rows;
+            ProcessCount = plan.ProcessCount;
+            SkipCount = plan.SkipCount - plan.QcPlans.Count(q => RemovesOldBlock(plan, q, options));
+            ErrorCount = plan.ErrorCount + failedTasks.Count;
+            CleanupCount = plan.SkipCount - SkipCount;
+            ModelCount = plan.Models.Count(m => m.Jobs.Count > 0);
+            JobCount = plan.JobCount;
+            HasWorkToStart = HasWork(plan, options);
+            Headline = CleanupOnly ? "可清理 " + CleanupCount + " 个旧 $lod 工具块" : HasWorkToStart
+                ? ProcessCount + " 项生成 · " + ModelCount + " 个模型参与减面 · " + JobCount + " 个减面任务"
+                : "暂无可生成的作业";
+            var breakdown = new List<string>();
+            if (CleanupCount > 0) breakdown.Add(CleanupCount + " 项清理");
+            if (SkipCount > 0) breakdown.Add(SkipCount + " 项跳过");
+            if (ErrorCount > 0) breakdown.Add(ErrorCount + " 项错误");
+            Subline = string.Join(" · ", breakdown);
+            LevelsText = DescribeLevels(plan);
+            WriteText = WriteSummary(plan, options);
         }
 
-        public BatchPlan Plan { get { return _plan; } }
-        public ObservableCollection<PlanQcRowVm> Rows { get; private set; }
-        public event EventHandler CloseRequested;
-        public event EventHandler StartRequested;
-        public RelayCommand CloseCommand { get; private set; }
-        public RelayCommand StartCommand { get; private set; }
+        public BatchPlan Plan { get; }
+        public IReadOnlyList<PlanQcRowVm> Rows { get; }
+        public int ProcessCount { get; }
+        public int SkipCount { get; }
+        public int ErrorCount { get; }
+        public int CleanupCount { get; }
+        public bool CleanupOnly => ProcessCount == 0 && CleanupCount > 0;
+        public int ModelCount { get; }
+        public int JobCount { get; }
+        public string Headline { get; }
+        public string Subline { get; }
+        public bool HasBreakdown => Subline.Length > 0;
+        public string LevelsText { get; }
+        public string WriteText { get; }
+        public bool IsEmpty => Rows.Count == 0;
+        public bool IsStale => _isStale;
+        public bool CanStartFromPlan => HasWorkToStart && !IsStale;
+        private bool HasWorkToStart { get; }
 
-        public int ProcessCount { get { return _plan.ProcessCount; } }
-        public int SkipCount { get { return _plan.SkipCount; } }
-        public int ErrorCount { get { return _plan.ErrorCount; } }
-        public int ModelCount { get { return _plan.Models.Count; } }
-        public int JobCount { get { return _plan.JobCount; } }
-
-        public string Headline
+        public void MarkStale()
         {
-            get
-            {
-                if (_plan.QcPlans.Count == 0) return "没有找到可处理的 QC";
-                return "将处理 " + ProcessCount + " 个 QC · " + ModelCount + " 个模型 · " + JobCount + " 个减面任务";
-            }
+            if (Set(ref _isStale, true, nameof(IsStale))) Raise(nameof(CanStartFromPlan));
         }
 
-        public string Subline
+        private static PlanQcRowVm CreateRow(string path, string action, string tone, string summary, string counts, string detail)
         {
-            get
+            return new PlanQcRowVm
             {
-                var parts = new List<string>();
-                if (SkipCount > 0) parts.Add("跳过 " + SkipCount);
-                if (ErrorCount > 0) parts.Add("错误 " + ErrorCount);
-                if (parts.Count == 0) parts.Add("没有跳过项");
-                parts.Add("计划生成于 " + _plan.BuiltAt.ToString("HH:mm:ss", CultureInfo.InvariantCulture));
-                return string.Join(" · ", parts.ToArray());
-            }
+                QcName = Path.GetFileName(path.TrimEnd('\\', '/')),
+                QcPath = path,
+                ActionText = action,
+                ActionTone = tone,
+                Summary = summary,
+                Counts = counts,
+                Tooltip = path + (string.IsNullOrEmpty(summary) ? "" : "\n" + summary),
+                Detail = detail
+            };
         }
 
-        public bool HasErrors { get { return ErrorCount > 0; } }
-        public bool CanStartFromPlan { get { return ProcessCount > 0; } }
-        public bool IsEmpty { get { return _plan.QcPlans.Count == 0; } }
+        internal static bool RemovesOldBlock(BatchPlan plan, BatchQcPlan qc, BatchRunOptions options) =>
+            !plan.Automatic && options.OutputMode != OutputMode.CollectionOnly && qc.Action == BatchQcAction.Skip &&
+            qc.Info?.HasToolMarker == true;
+
+        internal static bool ModifiesQc(BatchPlan plan, BatchRunOptions options) =>
+            options.OutputMode != OutputMode.CollectionOnly &&
+            plan.QcPlans.Any(q => !q.IsStandalone && (q.Action == BatchQcAction.Process || RemovesOldBlock(plan, q, options)));
+
+        internal static bool HasWork(BatchPlan plan, BatchRunOptions options) =>
+            plan.HasWork || plan.QcPlans.Any(q => RemovesOldBlock(plan, q, options));
+
+        internal static string DescribeLevels(BatchPlan plan) => plan.Automatic
+            ? "自动 · 预估候选档位和保留比例，切换距离以生成报告为准"
+            : plan.PresetName + " · " + string.Join("  /  ",
+                plan.Plan.Levels.Select(level => LodPlan.Fmt(level.Distance) + " HU → " + LodPlan.Pct(level.Ratio) + "%"));
+
+        internal static string WriteSummary(BatchPlan plan, BatchRunOptions options)
+        {
+            if (!HasWork(plan, options)) return "本次没有写入操作";
+            var parts = new List<string>();
+            int qcCount = plan.QcPlans.Count(q => q.Action == BatchQcAction.Process && !q.IsStandalone);
+            int standaloneCount = plan.QcPlans.Count(q => q.Action == BatchQcAction.Process && q.IsStandalone);
+            if (qcCount > 0) parts.Add(qcCount + " 个 QC · " + DescribeQcWrite(options.OutputMode));
+            if (standaloneCount > 0) parts.Add(standaloneCount + " 个独立模型 · 生成 LOD 网格");
+            int cleanupCount = plan.QcPlans.Count(q => RemovesOldBlock(plan, q, options));
+            if (cleanupCount > 0) parts.Add(cleanupCount + " 个 QC · 清理旧工具块");
+            return string.Join("，", parts);
+        }
+
+        private static string DescribeQcWrite(OutputMode mode)
+        {
+            switch (mode)
+            {
+                case OutputMode.SeparateQc: return "生成 _LOD.qc，并在原 QC 中添加 $include";
+                case OutputMode.CollectionOnly: return "输出 _LOD合集.qc";
+                default: return "将有效 $lod 写入 QC 或声明模型的包含文件";
+            }
+        }
     }
 }

@@ -155,8 +155,8 @@ def write(path, text, encoding="utf-8", bom=False):
         f.write(raw)
 
 
-def write_smd(path, tris, bones, name_prefix="char"):
-    """生成一个带骨骼权重的 SMD 文本（盒状网格，逐面细分）。"""
+def write_smd(path, tris):
+    """生成带两个骨骼和混合权重的 SMD。"""
     lines = ["version 1", "nodes", '0 "root" -1', '1 "spine" 0', "end", "skeleton", "time 0",
              "0 0 0 0 0 0 0", "1 0 10 0 0 0 0", "end", "triangles"]
     lines.extend(tris)
@@ -165,41 +165,20 @@ def write_smd(path, tris, bones, name_prefix="char"):
         f.write("\n".join(lines) + "\n")
 
 
-def box_triangles(nx, ny, nz, half=18.0):
-    """返回 SMD 三角形行列表：盒面每面细分 nx × ny（共 6*nx*ny*2 个三角形）。"""
+def plane_triangles(nx, ny):
+    """生成带线性 UV 和均匀权重的平面，内部网格可以无损简化。"""
     out = []
 
-    def face_point(face, u, v):
-        x0 = -half + 2.0 * half * u / nx
-        x1 = -half + 2.0 * half * (u + 1) / nx
-        y0 = -half + 2.0 * half * v / ny
-        y1 = -half + 2.0 * half * (v + 1) / ny
-        if face == 0: return (x0, y0, -half)
-        if face == 1: return (x0, y0, half)
-        if face == 2: return (x0, -half, y0)
-        if face == 3: return (x0, half, y0)
-        if face == 4: return (-half, y0, x0)
-        return (half, y0, x0)
-
-    def uv(u, v):
-        return (u / float(nx), v / float(ny))
-
-    def tri(p0, p1, p2, t0, t1, t2, weight_to_spine):
+    def tri(*points):
         out.append("body")
-        for (p, t) in ((p0, t0), (p1, t1), (p2, t2)):
-            out.append("0 %.6f %.6f %.6f 0 0 1 %.4f %.4f 2 0 %.2f 1 %.2f" % (
-                p[0], p[1], p[2], t[0], t[1], 1.0 - weight_to_spine, weight_to_spine))
+        for i, j in points:
+            out.append(f"0 {i} {j} 0 0 0 1 {i / nx:.6f} {j / ny:.6f} 2 0 0.65 1 0.35")
 
-    for face in range(6):
-        for i in range(nx):
-            for j in range(ny):
-                a = face_point(face, i, j)
-                b = face_point(face, i + 1, j)
-                c = face_point(face, i + 1, j + 1)
-                d = face_point(face, i, j + 1)
-                ua = uv(i, j); ub = uv(i + 1, j); uc = uv(i + 1, j + 1); ud = uv(i, j + 1)
-                tri(a, b, c, ua, ub, uc, 0.35)
-                tri(a, c, d, ua, uc, ud, 0.35)
+    for i in range(nx):
+        for j in range(ny):
+            a, b, c, d = (i, j), (i + 1, j), (i + 1, j + 1), (i, j + 1)
+            tri(a, b, c)
+            tri(a, c, d)
     return out
 
 def build_projects(out):
@@ -277,8 +256,8 @@ def build_projects(out):
     # ── proj_smd：SMD 工程 ──
     smd = os.path.join(proj, "proj_smd")
     os.makedirs(os.path.join(smd, "smd"), exist_ok=True)
-    tris = box_triangles(5, 5, 5)
-    write_smd(os.path.join(smd, "smd", "char_src.smd"), tris, ["root", "spine"])
+    tris = plane_triangles(16, 16)
+    write_smd(os.path.join(smd, "smd", "char_src.smd"), tris)
     write(os.path.join(smd, "smd", "char.qc"), textwrap.dedent('''\
         $modelname "models/smd_char.mdl"
         $cd "."

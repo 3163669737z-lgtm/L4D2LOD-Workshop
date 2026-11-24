@@ -7,7 +7,7 @@ namespace LodStudio.Engine
     // ══════════════════════════════════════════════════════════════════════════
     //  批量计划与执行契约。
     //  BatchPlanner：只读（不写任何文件）→ 产出可展示、可执行的计划。
-    //  BatchRunner ：按计划执行（建包装 QC → Blender → SMD 回转 → 注入 → 试编译 → 报告）。
+    //  BatchRunner ：按计划执行（建包装 QC → 原生减面 → SMD 回转 → 注入 → 试编译 → 报告）。
     // ══════════════════════════════════════════════════════════════════════════
 
     /// <summary>一个用户任务展开后的 QC 清单（顺序稳定）。</summary>
@@ -30,12 +30,6 @@ namespace LodStudio.Engine
         Error = 2
     }
 
-    /// <summary>
-    /// 减面后端。Blender = 现有完整链（gltfpack 减面 + Blender 往返 + Python 内缩，保留作回退/诊断）；
-    /// Gltfpack = 无 Blender 模式（内置 gltfpack 减面 + C# GlbInnerShrink 内缩）。
-    /// 只允许用户显式选择，禁止在任何一层静默切换。
-    /// </summary>
-    public enum ReduceBackend { Blender = 0, Gltfpack = 1 }
 
     /// <summary>计划里一个唯一模型（全局去重后）。</summary>
     public sealed class PlannedModel
@@ -45,15 +39,18 @@ namespace LodStudio.Engine
         public string Dir;
         public long Size;
         public int Triangles;
+        internal double Extent;
+        internal DateTime SourceWriteTimeUtc;
         public bool IsSmd;
         /// <summary>SMD 源解析结果（IsSmd 时非空，供后续转 GLB / 还原骨骼）</summary>
         public SmdModel SmdSource;
+        internal DmxLodSource DmxSource;
         public string ReadError;
         public List<StudioRef> Entries = new List<StudioRef>();
         public List<string> RootQcs = new List<string>();
-        /// <summary>每级一个 Blender 任务（顺序 = LOD1..LODN）</summary>
-        public List<BlenderJobSpec> Jobs = new List<BlenderJobSpec>();
-        /// <summary>该模型面数低于门槛而被跳过时，这里放原因</summary>
+        /// <summary>每级一个减面任务（顺序 = LOD1..LODN）</summary>
+        public List<ReductionJob> Jobs = new List<ReductionJob>();
+        /// <summary>该模型不生成替换网格时的原因</summary>
         public string SkipReason;
     }
 
@@ -68,6 +65,9 @@ namespace LodStudio.Engine
         public List<PlannedModel> Models = new List<PlannedModel>();
         /// <summary>该 QC 是否由计划新建包装 QC</summary>
         public bool IsWrapperQc;
+        public bool IsStandalone;
+        public LodPlan Levels;
+        public long SourceTriangles;
     }
 
     /// <summary>一次运行的完整计划（只读阶段的产物）。</summary>
@@ -77,6 +77,7 @@ namespace LodStudio.Engine
         public DateTime BuiltAt;
         public string PresetName;
         public LodPlan Plan;
+        public bool Automatic;
         public List<TaskExpansion> Tasks = new List<TaskExpansion>();
         public List<BatchQcPlan> QcPlans = new List<BatchQcPlan>();
         public List<PlannedModel> Models = new List<PlannedModel>();
@@ -96,21 +97,24 @@ namespace LodStudio.Engine
     {
         public LodPlan Plan;
         public string PresetName = "";
+        public bool Automatic;
 
-        /// <summary>减面后端（默认 Blender；显式选择，绝不静默切换）</summary>
-        public ReduceBackend Backend = ReduceBackend.Blender;
-        public string BlenderPath;
         public int Workers;
         public bool QualityFirst = true;
+        public bool AdaptiveTriangleBudget = true;
+        public bool AllowVertexUpdates;
+        /// <summary>以 | 分隔的源模型路径。相对路径以计划根目录为准。</summary>
+        public string KeepOriginalModels = "";
 
         /// <summary>覆盖已有手写 $lod（注释停用旧的）</summary>
         public bool Force;
         public bool CompileAfter;
         public string NekomdlPath;
-        public bool NoFacial = true;
+        public bool NoFacial;
         public bool SkipMainModel;
+        /// <summary>空引用表示所有 QC。界面传入明确选中的集合。</summary>
         public HashSet<string> SkipMainQcPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        public int MinTriangles = 200;
+        public int MinTriangles;
 
         public OutputMode OutputMode = OutputMode.InPlace;
         public string CollectionName = "_LOD合集.qc";
@@ -133,6 +137,19 @@ namespace LodStudio.Engine
         public int JobCount;
         public int JobOk;
         public int JobFail;
+        public int RetriedComponents;
+        public int RetainedComponents;
+        public int ProtectedPrimitives;
+        public int ReusedLevels;
+        public int UnreducedLevels;
+        public int PublishedLods;
+        public int ModelsWithoutReduction;
+        public int BalancedRegions;
+        public int MaximumRegionalSpread;
+        public int MaximumAdjacentRegionalSpread;
+        public int VertexUpdateTrials;
+        public int VertexUpdateAccepted;
+        public long VertexUpdateTrianglesSaved;
         public int InjectedQcCount;
         public int SkippedQcCount;
         public int ErrorQcCount;
@@ -140,12 +157,17 @@ namespace LodStudio.Engine
         public int CompileFail;
         public long TotalSourceTriangles;
         public long TotalLastLodTriangles;
+        public long[] LodTriangles = Array.Empty<long>();
     }
 
     public sealed class QcOutcome
     {
         public string QcPath;
         public bool Injected;
+        public bool Generated;
+        public bool Standalone;
+        public long SourceTriangles;
+        public List<string> OutputFiles = new List<string>();
         public bool Skipped;
         public string SkipReason;
         /// <summary>$lod 工具块实际写入（或已存在）的文件：通常等于根 QC，模型声明在 include 文件时为该文件。</summary>
@@ -154,12 +176,25 @@ namespace LodStudio.Engine
         public bool CompileTried;
         public bool CompileOk;
         public string CompileSummary;
+        public List<AutomaticLodResult> Levels = new List<AutomaticLodResult>();
+    }
+
+    public sealed class AutomaticLodResult
+    {
+        public int Candidate;
+        public long Triangles;
+        public double TargetRatio;
+        public double EstimatedDistanceHu;
+        public double SwitchPoint;
+        public string SkipReason;
     }
 
     public sealed class BatchOutcome
     {
         public bool Ok;
         public bool Cancelled;
+        public int GeneratedModels;
+        public List<string> GeneratedModelPaths = new List<string>();
         public BatchStats Stats = new BatchStats();
         public List<QcOutcome> QcOutcomes = new List<QcOutcome>();
         public List<string> Errors = new List<string>();

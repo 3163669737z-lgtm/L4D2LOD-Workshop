@@ -54,13 +54,13 @@ namespace LodStudio.Cli
 
                 // ═══════════ RangeCard ═══════════
                 ShotRange("range_4levels_light", ThemeKind.Light, DefaultPlan(), 420, 168,
-                          "默认预设 4 级（10/15/25/50 HU · 99.7/65.3/34.0/16.1%）");
+                          "平衡预设 4 级（10/15/25/50 HU · 85/65/45/30%）");
                 ShotRange("range_4levels_dark", ThemeKind.Dark, DefaultPlan(), 420, 168,
                           "暗色主题同一方案（令牌随主题切换）");
-                ShotRange("range_8levels_light", ThemeKind.Light, EightPlan(), 440, 168,
-                          "8 级上限：验证标签不重叠、把手不挤在一起");
-                ShotRange("range_8levels_dark", ThemeKind.Dark, EightPlan(), 440, 168,
-                          "8 级 · 暗色");
+                ShotRange("range_maxlevels_light", ThemeKind.Light, MaxLevelPlan(), 440, 168,
+                          LodPlan.MaxLevels + " 级上限");
+                ShotRange("range_maxlevels_dark", ThemeKind.Dark, MaxLevelPlan(), 440, 168,
+                          LodPlan.MaxLevels + " 级 · 暗色");
                 ShotRange("range_extreme_light", ThemeKind.Light, ExtremePlan(), 420, 168,
                           "2 级 + 距离 100 / 100000 HU：刻度退化为大数，不崩不叠");
                 ShotRange("range_1level_light", ThemeKind.Light, OneLevelPlan(), 420, 168,
@@ -78,7 +78,7 @@ namespace LodStudio.Cli
                           dragLevel: 1, dragKind: RangeHandleKind.Ratio, dragValue: 0.50);
                 ShotRange("range_invalid_light", ThemeKind.Light, DefaultPlan(), 440, 168,
                           "外部校验错误：右上角错误标记 + 禁止开始拖动",
-                          validationError: "保留比例必须一级比一级低（第 2 级 65.3% 不小于第 1 级 99.7%）。");
+                          validationError: "保留比例必须一级比一级低（第 2 级 90% 不小于第 1 级 85%）。");
                 ShotRangeRebound("range_rebound_flash_light", ThemeKind.Light, DefaultPlan(), 440, 168,
                                  "松手回弹：非法值回弹到拖动前并标红 400ms（此处为红闪瞬间）");
                 ShotRangeThemeRoundTrip();
@@ -98,7 +98,7 @@ namespace LodStudio.Cli
                 ShotToast("toast_long_text_light", ThemeKind.Light,
                           new ToastSpec("这是一个特别长的提示标题用来验证不会溢出也不会被裁切掉", "副行同样很长：路径 C:\\Users\\TPP\\Documents\\某工程\\SMD\\survivor_teenangst.dx90.vtx 已经处理完成", ToastTone.Info));
                 ShotToast("toast_err_dark", ThemeKind.Dark,
-                          new ToastSpec("Blender 启动失败", "未找到 blender.exe，请在设置的「引擎」页指定路径", ToastTone.Err));
+                          new ToastSpec("减面进程启动失败", "内置减面组件缺失，请重新构建程序", ToastTone.Err));
                 ShotToast("toast_stack_light", ThemeKind.Light,
                           new ToastSpec("扫描完成", "12 个 QC · 12 个模型", ToastTone.Ok),
                           new ToastSpec("部分 QC 有手写 $lod", "已按设置跳过，可在高级参数里改为覆盖", ToastTone.Warn),
@@ -249,7 +249,7 @@ namespace LodStudio.Cli
             {
                 Title = "停止本次生成？",
                 Message = "已经生成的 LOD 文件会保留，QC 不再继续写入。未完成的模型可以稍后重新运行。",
-                Detail = "正在处理：\n  角色\\survivor_teenangst.qc\n  道具\\crate_large.qc\n已完成 4 / 12 个 QC · 3 个 Blender 进程将被结束",
+                Detail = "正在处理：\n  角色\\survivor_teenangst.qc\n  道具\\crate_large.qc\n已完成 4 / 12 个 QC · 3 个减面进程将被结束",
                 OkText = "停止生成",
                 CancelText = "继续生成",
                 Danger = true
@@ -262,16 +262,16 @@ namespace LodStudio.Cli
         {
             var options = new DialogOptions
             {
-                Title = "保存为预设",
-                Message = "当前参数会存到「我的预设」，下次可在预设下拉里直接选。",
-                InputLabel = "预设名称",
+                Title = "输入名称",
+                Message = "名称最多 24 个字。",
+                InputLabel = "名称",
                 InputInitial = "角色·8级 轻量",
                 OkText = "保存",
                 CancelText = "取消",
                 Validate = delegate (string v)
                 {
-                    if (string.IsNullOrWhiteSpace(v)) return "预设名称不能为空。";
-                    if (v.Trim().Length > 24) return "预设名称最多 24 个字。";
+                    if (string.IsNullOrWhiteSpace(v)) return "名称不能为空。";
+                    if (v.Trim().Length > 24) return "名称最多 24 个字。";
                     return null;
                 }
             };
@@ -283,16 +283,16 @@ namespace LodStudio.Cli
         {
             var options = new DialogOptions
             {
-                Title = "保存为预设",
-                Message = "当前参数会存到「我的预设」，下次可在预设下拉里直接选。",
-                InputLabel = "预设名称",
+                Title = "输入名称",
+                Message = "名称最多 24 个字。",
+                InputLabel = "名称",
                 InputInitial = string.Empty,
                 OkText = "保存",
                 CancelText = "取消",
                 Validate = delegate (string v)
                 {
-                    if (string.IsNullOrWhiteSpace(v)) return "预设名称不能为空。";
-                    if (v.Trim().Length > 24) return "预设名称最多 24 个字。";
+                    if (string.IsNullOrWhiteSpace(v)) return "名称不能为空。";
+                    if (v.Trim().Length > 24) return "名称最多 24 个字。";
                     return null;
                 }
             };
@@ -307,7 +307,7 @@ namespace LodStudio.Cli
             {
                 Title = "关于远景工坊",
                 Message = "远景工坊 · L4D2 自动 LOD 工具 v" + AppInfo.Version + "\n为模型工程自动生成多级 LOD，并把 $lod 幂等写回 QC。",
-                Detail = "运行环境：Windows 10/11 · .NET Framework 4.8\nBlender：4.1.1（已探测）\n配置文件：%APPDATA%\\L4D2LOD远景工坊\\settings.ini",
+                Detail = "运行环境：Windows 10/11 · .NET Framework 4.8\n减面后端：内置 meshoptimizer\n配置文件：%APPDATA%\\L4D2LOD远景工坊\\settings.ini",
                 OkText = "知道了"
             };
             ShotDialog(name, theme, delegate (DialogHost host) { return host.ShowInfoAsync(options); }, options,
@@ -617,12 +617,15 @@ namespace LodStudio.Cli
 
         private static LodPlan DefaultPlan()
         {
-            return LodPlan.FromPreset(PresetLibrary.Builtins()[0]);
+            return LodPlan.CreateDefault();
         }
 
-        private static LodPlan EightPlan()
+        internal static LodPlan MaxLevelPlan()
         {
-            return LodPlan.FromPreset(PresetLibrary.Builtins()[6]);
+            var plan = new LodPlan();
+            for (int i = 0; i < LodPlan.MaxLevels; i++)
+                plan.Levels.Add(new LodLevel(10 + i * 10, (95 - i * 10) / 100.0));
+            return plan;
         }
 
         private static LodPlan OneLevelPlan()

@@ -12,7 +12,7 @@ namespace LodStudio.Engine
     /// 环境诊断：把"出问题时最需要知道的事实"拼成一段可复制的纯文本，供用户发给开发者。
     ///
     /// 内容：版本/时间/用户/管理员/低完整性/位数/系统/.NET/处理器/界面缩放、目录可写测试（✔/✘ + 原因）、
-    /// 引擎（Blender 路径+版本、编译器路径+存在性）、当前方案摘要、设置文件路径、临时目录、
+    /// 引擎（内置后端、编译器路径与存在性）、当前方案摘要、设置文件路径、临时目录、
     /// 磁盘剩余空间、长路径支持提示，最后请用户"把这段发给开发者"。
     ///
     /// 任何一项读取失败都退化成说明文字，Build 本身绝不抛异常；Engine 层不引用 WPF
@@ -22,7 +22,7 @@ namespace LodStudio.Engine
     {
         private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
 
-        public static string Build(AppSettings settings, IReadOnlyList<string> probeDirs, string blenderVersion,
+        public static string Build(AppSettings settings, IReadOnlyList<string> probeDirs,
                                    bool isAdmin, bool isLowIntegrity)
         {
             var sb = new StringBuilder(4096);
@@ -34,7 +34,7 @@ namespace LodStudio.Engine
 
                 Section(sb, "身份与系统", b => WriteIdentity(b, isAdmin, isLowIntegrity));
                 Section(sb, "目录写入测试", b => WriteDirectoryTests(b, probeDirs));
-                Section(sb, "引擎", b => WriteEngines(b, settings, blenderVersion));
+                Section(sb, "引擎", b => WriteEngines(b, settings));
                 Section(sb, "当前方案", b => WritePlan(b, settings));
                 Section(sb, "路径与存储", b => WritePaths(b, probeDirs));
                 Section(sb, "磁盘剩余空间", b => WriteDisks(b, probeDirs));
@@ -214,18 +214,9 @@ namespace LodStudio.Engine
             }
         }
 
-        private static void WriteEngines(StringBuilder sb, AppSettings settings, string blenderVersion)
+        private static void WriteEngines(StringBuilder sb, AppSettings settings)
         {
-            bool gpMode = settings != null && settings.ReduceBackend == (int)ReduceBackend.Gltfpack;
-            sb.AppendLine("减面后端: " + (gpMode ? "内置 gltfpack（无需 Blender，实验）" : "Blender"));
-
-            string blender = settings == null ? "" : (settings.BlenderPath ?? "");
-            if (string.IsNullOrEmpty(blender))
-                sb.AppendLine("Blender: 未指定" + (gpMode ? "（内置 gltfpack 后端无需 Blender；装了可作回退）"
-                                                       : "（请在设置里指到 blender.exe，或点「自动查找」）"));
-            else
-                sb.AppendLine("Blender: " + blender + "  " +
-                              (string.IsNullOrEmpty(blenderVersion) ? "(无法运行或未检测到版本)" : "(" + blenderVersion + ")"));
+            sb.AppendLine("减面后端: 内置 meshoptimizer · " + GltfpackTool.ContentHash);
 
             string nekomdl = settings == null ? "" : (settings.NekomdlPath ?? "");
             bool auto = false;

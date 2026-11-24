@@ -102,6 +102,19 @@
         </Setter>
     </Style>
 
+    <Style x:Key="FocusOutline">
+        <Setter Property="Control.Template">
+            <Setter.Value>
+                <ControlTemplate>
+                    <Border BorderBrush="{DynamicResource Brush.FocusRing}" BorderThickness="1" Margin="2"
+                            IsHitTestVisible="False" SnapsToDevicePixels="True">
+                        <Border BorderBrush="{DynamicResource Brush.Panel}" BorderThickness="1" />
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- ════════════════════ 按钮 ════════════════════ -->
 
     <Style x:Key="Btn.Base" TargetType="Button">
@@ -118,7 +131,7 @@
         <Setter Property="HorizontalContentAlignment" Value="Center" />
         <Setter Property="VerticalContentAlignment" Value="Center" />
         <Setter Property="Cursor" Value="Hand" />
-        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="FocusVisualStyle" Value="{StaticResource FocusOutline}" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="Button">
@@ -233,7 +246,7 @@
 
     <!-- 标题栏图标按钮 -->
     <Style x:Key="CaptionButton" TargetType="Button">
-        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="FocusVisualStyle" Value="{StaticResource FocusOutline}" />
         <Setter Property="OverridesDefaultStyle" Value="True" />
         <Setter Property="Width" Value="34" />
         <Setter Property="Height" Value="34" />
@@ -385,7 +398,7 @@
     </Style>
 
     <Style x:Key="Combo.Base" TargetType="ComboBox">
-        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="FocusVisualStyle" Value="{StaticResource FocusOutline}" />
         <Setter Property="OverridesDefaultStyle" Value="True" />
         <Setter Property="SnapsToDevicePixels" Value="True" />
         <Setter Property="FontFamily" Value="{StaticResource Font.Cjk}" />
@@ -521,7 +534,7 @@
     </Style>
 
     <Style x:Key="List.Row" TargetType="ListBoxItem">
-        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="FocusVisualStyle" Value="{StaticResource FocusOutline}" />
         <Setter Property="OverridesDefaultStyle" Value="True" />
         <Setter Property="SnapsToDevicePixels" Value="True" />
         <Setter Property="HorizontalContentAlignment" Value="Stretch" />

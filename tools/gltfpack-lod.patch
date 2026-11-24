@@ -1,0 +1,657 @@
+--- a/gltf/mesh.cpp
++++ b/gltf/mesh.cpp
+@@ -10,6 +10,7 @@
+ #include <string.h>
+ 
+ #include "../src/meshoptimizer.h"
++#include "lod-appearance.h"
+ 
+ static float inverseTranspose(float* result, const float* transform)
+ {
+@@ -202,13 +203,7 @@
+ 		return false;
+ 
+ 	if (settings.keep_nodes)
+-	{
+-		if (lhs->name && *lhs->name)
+-			return false;
+-
+-		if (rhs->name && *rhs->name)
+-			return false;
+-	}
++		return false;
+ 
+ 	// we can merge nodes that don't have transforms of their own and have the same parent
+ 	// this is helpful when instead of splitting mesh into primitives, DCCs split mesh into mesh nodes
+@@ -1061,7 +1056,499 @@
+ 	}
+ }
+ 
+-static void simplifyMesh(Mesh& mesh, float threshold, float error, bool aggressive, bool lock_borders, bool permissive, bool update)
++// Simplify disconnected triangle islands separately. Use position IDs for connectivity
++// across split UV/normal vertices without welding their distinct attributes.
++static size_t islandRoot(std::vector<size_t>& parents, size_t i)
++{
++	while (parents[i] != i)
++	{
++		parents[i] = parents[parents[i]];
++		i = parents[i];
++	}
++	return i;
++}
++
++static std::vector<std::vector<unsigned int> > findTriangleIslands(
++	const std::vector<unsigned int>& indices, const std::vector<unsigned int>& position_ids)
++{
++	size_t triangle_count = indices.size() / 3;
++	std::vector<size_t> parents(triangle_count);
++	std::unordered_map<uint64_t, size_t> edges;
++	edges.reserve(indices.size());
++	for (size_t i = 0; i < triangle_count; ++i)
++	{
++		parents[i] = i;
++		for (size_t k = 0; k < 3; ++k)
++		{
++			unsigned int a = position_ids[indices[i * 3 + k]];
++			unsigned int b = position_ids[indices[i * 3 + (k + 1) % 3]];
++			if (a == b)
++				continue;
++			uint64_t key = (uint64_t(std::min(a, b)) << 32) | std::max(a, b);
++			auto edge = edges.emplace(key, i);
++			if (!edge.second)
++				parents[islandRoot(parents, i)] = islandRoot(parents, edge.first->second);
++		}
++	}
++
++	std::vector<std::vector<unsigned int> > islands;
++	std::vector<size_t> slots(triangle_count, size_t(-1));
++	for (size_t i = 0; i < triangle_count; ++i)
++	{
++		size_t& slot = slots[islandRoot(parents, i)];
++		if (slot == size_t(-1))
++		{
++			slot = islands.size();
++			islands.emplace_back();
++		}
++		islands[slot].insert(islands[slot].end(), indices.begin() + i * 3, indices.begin() + i * 3 + 3);
++	}
++	return islands;
++}
++
++static std::vector<unsigned char> lockOutlineSupports(const std::vector<Attr>& positions)
++{
++	std::vector<unsigned char> locks(positions.size());
++	// Preserve extrema along axes, face diagonals and body diagonals, in both directions.
++	for (int x = 0; x <= 1; ++x)
++		for (int y = -1; y <= 1; ++y)
++			for (int z = -1; z <= 1; ++z)
++			{
++				if (x == 0 && (y < 0 || (y == 0 && z <= 0)))
++					continue;
++
++				float min_dot = 0, max_dot = 0;
++				size_t min_vertex = 0, max_vertex = 0;
++				for (size_t i = 0; i < positions.size(); ++i)
++				{
++					const float* p = positions[i].f;
++					float dot = x * p[0] + y * p[1] + z * p[2];
++					if (i == 0 || dot < min_dot) { min_dot = dot; min_vertex = i; }
++					if (i == 0 || dot > max_dot) { max_dot = dot; max_vertex = i; }
++				}
++				if (min_dot != max_dot)
++					locks[min_vertex] = locks[max_vertex] = meshopt_SimplifyVertex_Lock;
++			}
++	return locks;
++}
++
++static bool hasIndependentPrimitiveBorders(const cgltf_node* node, const Stream* current)
++{
++	if (!node || !node->mesh || node->mesh->primitives_count < 2)
++		return true;
++
++	std::vector<float> positions;
++	std::vector<size_t> offsets(1, 0);
++	for (size_t i = 0; i < node->mesh->primitives_count; ++i)
++	{
++		const cgltf_accessor* accessor = cgltf_find_accessor(&node->mesh->primitives[i], cgltf_attribute_type_position, 0);
++		if (!accessor || accessor->type != cgltf_type_vec3)
++			return false;
++
++		size_t offset = positions.size();
++		size_t count = accessor->count * 3;
++		positions.resize(offset + count);
++		if (count && cgltf_accessor_unpack_floats(accessor, positions.data() + offset, count) != count)
++			return false;
++		offsets.push_back(positions.size() / 3);
++	}
++
++	if (positions.empty())
++		return false;
++	size_t source_count = positions.size() / 3;
++	if (current)
++		for (const Attr& p : current->data)
++			positions.insert(positions.end(), p.f, p.f + 3);
++
++	std::vector<unsigned int> remap(positions.size() / 3);
++	meshopt_generatePositionRemap(remap.data(), positions.data(), remap.size(), 3 * sizeof(float));
++	std::vector<unsigned char> shared(current ? source_count : 0);
++	for (size_t i = 1; i < offsets.size(); ++i)
++		for (size_t j = offsets[i - 1]; j < offsets[i]; ++j)
++			if (remap[j] < offsets[i - 1])
++			{
++				if (!current)
++					return false;
++				shared[remap[j]] = 1;
++			}
++
++	for (size_t i = source_count; i < remap.size(); ++i)
++		if (remap[i] >= source_count || shared[remap[i]])
++			return false;
++	return true;
++}
++
++static void simplifyIslands(std::vector<unsigned int>& result, std::vector<unsigned int>& uvremap,
++	Mesh& mesh, const Stream& positions, const std::vector<float>& attributes, const float* weights,
++	size_t stride, float ratio, float error, unsigned int options, bool allow_vertex_updates, bool density_budget, float lod_progress)
++{
++	struct Region
++	{
++		std::vector<unsigned int> indices;
++		std::vector<unsigned int> source_vertices;
++		lodstudio::ValidationResult candidate;
++		size_t target = 0;
++		size_t stage_minimum = 0;
++		float density_priority = 0;
++		float detail_strength = 0;
++		bool balanced = false;
++
++		size_t kept() const { return candidate.indices.empty() ? indices.size() : candidate.indices.size(); }
++		double retention() const { return double(kept()) / indices.size(); }
++	};
++
++	result.clear();
++	result.reserve(mesh.indices.size());
++	std::vector<unsigned int> position_ids(positions.data.size());
++	meshopt_generatePositionRemap(position_ids.data(), positions.data[0].f, positions.data.size(), sizeof(Attr));
++	std::vector<std::vector<unsigned int> > islands = findTriangleIslands(mesh.indices, position_ids);
++	lodstudio::Bounds mesh_bounds;
++	if (density_budget)
++		for (const Attr& p : positions.data)
++			mesh_bounds.include(lodstudio::xyz(p));
++	float mesh_scale = mesh_bounds.extent();
++	float far_strength = density_budget ? lodstudio::farStrength(lod_progress) : 0.f;
++
++	// A primitive boundary can be stitched to a neighboring material.
++	bool shared_material_borders = density_budget && std::any_of(mesh.nodes.begin(), mesh.nodes.end(), [](const cgltf_node* node) {
++		return node && node->mesh && node->mesh->primitives_count > 1;
++	});
++
++	// In the far tiers, allow an independent primitive to simplify its own
++	// outlines even if two other primitives of the node share an edge.
++	const Stream* current = far_strength > 0 ? &positions : NULL;
++	bool independent_material_borders = lod_progress >= 0 && shared_material_borders &&
++		std::all_of(mesh.nodes.begin(), mesh.nodes.end(), [current](const cgltf_node* node) {
++			return hasIndependentPrimitiveBorders(node, current);
++		});
++
++	std::vector<Region> regions;
++	std::vector<size_t> island_offsets(1, 0);
++	size_t total_target = 0;
++	for (const auto& island : islands)
++	{
++		float detail_strength = 0.f;
++		if (far_strength > 0 && std::isfinite(mesh_scale) && mesh_scale > 0)
++		{
++			lodstudio::Bounds bounds;
++			for (unsigned int vertex : island)
++				bounds.include(lodstudio::xyz(positions.data[vertex]));
++			float fraction = bounds.extent() / mesh_scale;
++			detail_strength = far_strength * std::max(0.f, std::min(1.f, (0.09f - fraction) / 0.07f));
++		}
++		for (auto& indices : lodstudio::partitionIsland(island, positions.data, density_budget))
++		{
++			if (indices.empty())
++				continue;
++			Region region;
++			size_t triangles = indices.size() / 3;
++			double legacy_strength = std::min(1.0, sqrt(double(triangles) / 512));
++			double weight = lodstudio::componentBudgetWeight(island.size() / 3, mesh.indices.size() / 3);
++			double retention = density_budget ? lodstudio::islandRetention(weight, ratio)
++				: 1 - (1 - ratio) * legacy_strength;
++			region.target = triangles <= (density_budget ? 1 : 32) ? triangles : size_t(ceil(triangles * retention));
++			if (density_budget)
++			{
++				region.stage_minimum = size_t(ceil(triangles * lodstudio::islandRetentionFloor(weight, ratio)));
++				if (ratio < 1 && triangles > 1)
++				{
++					// A manifold edge collapse can remove two triangles at once.
++					// Permit that smallest step when rounding erases the budget.
++					size_t first_reduce = triangles - std::min(size_t(2), triangles - 1);
++					region.target = std::min(region.target, first_reduce);
++					region.stage_minimum = std::min(region.stage_minimum, first_reduce);
++				}
++			}
++			if (detail_strength > 0 && triangles > 1)
++			{
++				// Detail budget is derived from size, independent of tessellation.
++				double detail_retention = 1 - (1 - ratio) * (0.60 + 0.39 * detail_strength);
++				size_t detail_target = size_t(ceil(triangles * detail_retention));
++				region.target = std::min(region.target, detail_target);
++				region.stage_minimum = std::min(region.stage_minimum, detail_target);
++			}
++			region.detail_strength = detail_strength;
++			region.density_priority = density_budget ? lodstudio::islandDensityPriority(island.size() / 3, ratio) : 0;
++			region.indices.swap(indices);
++			total_target += region.target;
++			regions.push_back(std::move(region));
++		}
++		island_offsets.push_back(regions.size());
++	}
++
++	// Shared vertices on region borders remain at their original positions, including UV wedges.
++	std::vector<size_t> region_owner(positions.data.size(), size_t(-1));
++	std::vector<unsigned char> region_border(positions.data.size());
++	for (size_t i = 0; i < regions.size(); ++i)
++		for (unsigned int vertex : regions[i].indices)
++		{
++			unsigned int position = position_ids[vertex];
++			size_t& owner = region_owner[position];
++			if (owner == size_t(-1))
++				owner = i;
++			else if (owner != i)
++				region_border[position] = meshopt_SimplifyVertex_Lock;
++		}
++	std::vector<std::vector<size_t> > neighbors(regions.size());
++	if (density_budget)
++	{
++		std::unordered_map<uint64_t, std::vector<size_t> > edge_owners;
++		for (size_t i = 0; i < regions.size(); ++i)
++		{
++			const auto& indices = regions[i].indices;
++			for (size_t triangle = 0; triangle < indices.size(); triangle += 3)
++				for (size_t edge = 0; edge < 3; ++edge)
++				{
++					unsigned int a = position_ids[indices[triangle + edge]];
++					unsigned int b = position_ids[indices[triangle + (edge + 1) % 3]];
++					if (a == b)
++						continue;
++					uint64_t key = (uint64_t(std::min(a, b)) << 32) | std::max(a, b);
++					auto& owners = edge_owners[key];
++					if (!owners.empty() && owners.back() == i)
++						continue;
++					for (size_t other : owners)
++					{
++						neighbors[i].push_back(other);
++						neighbors[other].push_back(i);
++					}
++					owners.push_back(i);
++				}
++		}
++		for (auto& adjacent : neighbors)
++		{
++			std::sort(adjacent.begin(), adjacent.end());
++			adjacent.erase(std::unique(adjacent.begin(), adjacent.end()), adjacent.end());
++		}
++	}
++
++	std::vector<unsigned char> seam_flags;
++	if (allow_vertex_updates)
++	{
++		seam_flags.resize(position_ids.size());
++		for (size_t i = 0; i < position_ids.size(); ++i)
++			if (position_ids[i] != i)
++				seam_flags[position_ids[i]] = meshopt_SimplifyVertex_Lock;
++	}
++
++	std::vector<unsigned int> local_index(positions.data.size(), ~0u);
++	const Stream* normals = getStream(mesh, cgltf_attribute_type_normal);
++	const Stream* uv = getStream(mesh, cgltf_attribute_type_texcoord);
++	const Stream* color = getStream(mesh, cgltf_attribute_type_color);
++	const Stream* tangents = getStream(mesh, cgltf_attribute_type_tangent);
++	const Stream* joints = getStream(mesh, cgltf_attribute_type_joints);
++	const Stream* skin_weights = getStream(mesh, cgltf_attribute_type_weights);
++	std::vector<const Stream*> additional_uvs;
++	for (const Stream& stream : mesh.streams)
++		if (stream.type == cgltf_attribute_type_texcoord && stream.index > 0)
++			additional_uvs.push_back(&stream);
++
++	auto solve = [&](Region& region, size_t minimum) {
++		minimum = std::max(minimum, region.stage_minimum);
++		region.candidate = lodstudio::ValidationResult();
++		region.source_vertices.clear();
++		if (std::max(region.target, minimum) >= region.indices.size() / 3)
++			return;
++
++		std::vector<Attr> local_positions;
++		std::vector<float> local_attributes;
++		std::vector<Attr> local_joints, local_weights;
++		std::vector<unsigned int> indices;
++		indices.reserve(region.indices.size());
++		for (unsigned int source : region.indices)
++		{
++			unsigned int& index = local_index[source];
++			if (index == ~0u)
++			{
++				index = unsigned(local_positions.size());
++				local_positions.push_back(positions.data[source]);
++				local_attributes.insert(local_attributes.end(), attributes.begin() + source * stride, attributes.begin() + (source + 1) * stride);
++				region.source_vertices.push_back(source);
++				if (joints && skin_weights)
++				{
++					local_joints.push_back(joints->data[source]);
++					local_weights.push_back(skin_weights->data[source]);
++				}
++			}
++			indices.push_back(index);
++		}
++
++		lodstudio::Bounds bounds;
++		for (const Attr& p : local_positions)
++			bounds.include(lodstudio::xyz(p));
++		float scale = bounds.extent();
++		if (std::isfinite(scale) && scale > 0)
++		{
++			lodstudio::Geometry geometry = {local_positions, local_attributes, local_joints, local_weights,
++				region.source_vertices, color, tangents, additional_uvs, stride, normals != NULL, uv != NULL,
++				mesh.material && mesh.material->normal_texture.texture, bounds.low, 1.f / scale, region.density_priority, 0, 0, false};
++			auto outline_locks = lockOutlineSupports(local_positions);
++			std::vector<unsigned char> hard_locks(local_positions.size());
++			for (size_t i = 0; i < region.source_vertices.size(); ++i)
++				hard_locks[i] = region_border[position_ids[region.source_vertices[i]]];
++			std::vector<unsigned char> seam_locks;
++			if (allow_vertex_updates)
++				for (unsigned int source : region.source_vertices)
++					seam_locks.push_back(seam_flags[position_ids[source]]);
++			bool deep = density_budget ? region.target * 3 < region.indices.size() * 0.65 : ratio < 0.65f;
++			region.candidate = lodstudio::reduce(indices, geometry, weights, outline_locks, std::move(hard_locks),
++				region.target * 3, error, options, deep, seam_locks, minimum * 3, region.density_priority,
++				density_budget, ratio, mesh_scale / scale, shared_material_borders, lod_progress, independent_material_borders, region.detail_strength);
++		}
++		else
++			region.candidate.keptOriginal = true;
++
++		for (unsigned int source : region.source_vertices)
++			local_index[source] = ~0u;
++	};
++
++	for (Region& region : regions)
++		solve(region, 0);
++
++	size_t balanced = 0;
++	double max_regional_spread = 0, max_adjacent_spread = 0;
++	if (density_budget)
++		for (size_t component = 1; component < island_offsets.size(); ++component)
++		{
++			size_t begin = island_offsets[component - 1], end = island_offsets[component];
++			if (end - begin < 2)
++				continue;
++
++			const double overall_spread = 0.38 + 0.04 * (1 - ratio);
++			const double adjacent_spread = 0.23 + 0.04 * (1 - ratio);
++			auto measure = [&]() {
++				double highest = 0, lowest = 1, adjacent = 0;
++				for (size_t i = begin; i < end; ++i)
++				{
++					highest = std::max(highest, regions[i].retention());
++					lowest = std::min(lowest, regions[i].retention());
++					for (size_t neighbor : neighbors[i])
++						adjacent = std::max(adjacent, std::abs(regions[i].retention() - regions[neighbor].retention()));
++				}
++				return std::make_pair(highest - lowest, adjacent);
++			};
++
++			// Enforce a tighter limit at real patch boundaries and a limit across
++			// the island as a whole. Revalidation can only increase retention.
++			for (int pass = 0; pass < 5; ++pass)
++			{
++				auto spread = measure();
++				if (spread.first <= overall_spread + 1e-7 && spread.second <= adjacent_spread + 1e-7)
++					break;
++
++				std::vector<double> floors(end - begin);
++				double highest = 0;
++				for (size_t i = begin; i < end; ++i)
++					highest = std::max(highest, regions[i].retention());
++				for (size_t i = begin; i < end; ++i)
++					floors[i - begin] = std::max(regions[i].retention(),
++						pass == 4 ? 1.0 - adjacent_spread : highest - overall_spread);
++				if (pass < 4)
++					for (int step = 0; step < 6; ++step)
++					{
++						// A path of six edges cannot impose a stricter floor
++						// with these gap limits and a maximum retention of one.
++						auto previous = floors;
++						for (size_t i = begin; i < end; ++i)
++							for (size_t neighbor : neighbors[i])
++								floors[i - begin] = std::max(floors[i - begin], previous[neighbor - begin] - adjacent_spread);
++					}
++
++				for (size_t i = begin; i < end; ++i)
++					if (regions[i].retention() + 1e-7 < floors[i - begin])
++					{
++						if (!regions[i].balanced)
++							++balanced;
++						regions[i].balanced = true;
++						size_t minimum = size_t(ceil(floors[i - begin] * (regions[i].indices.size() / 3)));
++						solve(regions[i], minimum);
++					}
++			}
++
++			auto spread = measure();
++			max_regional_spread = std::max(max_regional_spread, spread.first);
++			max_adjacent_spread = std::max(max_adjacent_spread, spread.second);
++		}
++
++	size_t retried = 0, retained = 0;
++	size_t update_trials = 0, updates_accepted = 0, update_savings = 0;
++	for (const Region& region : regions)
++	{
++		const lodstudio::ValidationResult& candidate = region.candidate;
++		if (candidate.indices.empty())
++		{
++			result.insert(result.end(), region.indices.begin(), region.indices.end());
++		}
++		else if (candidate.updatedVertices.empty())
++		{
++			for (unsigned int index : candidate.indices)
++				result.push_back(region.source_vertices[index]);
++		}
++		else
++		{
++			std::vector<unsigned int> published = region.source_vertices;
++			for (unsigned int index : candidate.indices)
++			{
++				unsigned int source = region.source_vertices[index];
++				if (candidate.updatedVertices[index] && published[index] == source)
++				{
++					unsigned int moved = unsigned(positions.data.size());
++					published[index] = moved;
++					const float* attrs = &candidate.updatedAttributes[index * stride];
++					for (Stream& stream : mesh.streams)
++					{
++						Attr value = stream.data[source];
++						if (stream.type == cgltf_attribute_type_position)
++							value = candidate.updatedPositions[index];
++						else if (stream.type == cgltf_attribute_type_normal)
++							std::copy(attrs, attrs + 3, value.f);
++						else if (stream.type == cgltf_attribute_type_texcoord)
++							std::copy(attrs + 6, attrs + 8, value.f);
++						stream.data.push_back(value);
++					}
++					if (!uvremap.empty())
++						uvremap.push_back(moved);
++				}
++				result.push_back(published[index]);
++			}
++			++updates_accepted;
++			update_savings += candidate.trianglesSavedByUpdate;
++		}
++		retried += candidate.retried ? 1 : 0;
++		retained += candidate.keptOriginal ? 1 : 0;
++		update_trials += candidate.triedUpdate ? 1 : 0;
++	}
++	if (far_strength > 0.6f && ratio < 0.55f && updates_accepted == 0 && mesh.indices.size() >= 64 * 3 &&
++		std::isfinite(mesh_scale) && mesh_scale > 0)
++	{
++		std::vector<unsigned int> identity(positions.data.size());
++		for (size_t i = 0; i < identity.size(); ++i)
++			identity[i] = unsigned(i);
++		const std::vector<Attr> empty;
++		bool skinned = joints && skin_weights;
++		lodstudio::Geometry geometry = {positions.data, attributes, skinned ? joints->data : empty,
++			skinned ? skin_weights->data : empty, identity, color, tangents, additional_uvs, stride,
++			normals != NULL, uv != NULL, mesh.material && mesh.material->normal_texture.texture,
++			mesh_bounds.low, 1.f / mesh_scale, 0, 0, 0, false};
++		size_t regular_triangles = result.size() / 3;
++		bool opaque = !mesh.material || mesh.material->alpha_mode == cgltf_alpha_mode_opaque;
++		lodstudio::tryWholePrimitive(result, mesh.indices, islands, geometry, weights, ratio, error, options, far_strength, opaque);
++		if (result.size() / 3 < regular_triangles)
++			fprintf(stderr, "lodstudio-whole-primitive %zu %zu\n", regular_triangles, result.size() / 3);
++	}
++
++	if (retried || retained)
++		fprintf(stderr, "lodstudio-appearance %zu %zu 0\n", retried, retained);
++	if (update_trials)
++		fprintf(stderr, "lodstudio-vertex-update %zu %zu %zu\n", update_trials, updates_accepted, update_savings);
++	if (density_budget)
++		fprintf(stderr, "lodstudio-density-budget %zu %zu %zu %u %u\n", mesh.indices.size() / 3,
++			total_target, balanced, unsigned(std::round(max_regional_spread * 10000)),
++			unsigned(std::round(max_adjacent_spread * 10000)));
++}
++
++static void simplifyMesh(Mesh& mesh, float threshold, float error, bool aggressive, bool lock_borders,
++	bool permissive, bool update, bool allow_vertex_updates, bool density_budget, float lod_progress)
+ {
+ 	assert(mesh.type == cgltf_primitive_type_triangles);
+ 
+@@ -1073,6 +1560,23 @@
+ 		return;
+ 
+ 	size_t presplit_vertices = positions->data.size();
++
++	// Keep authored channels that are outside the validator's correspondence model.
++	if (lock_borders && !permissive && !aggressive && !update)
++	{
++		const bool validate_extra_uvs = density_budget && lodstudio::farStrength(lod_progress) > 0;
++		bool extra_channels = std::any_of(mesh.streams.begin(), mesh.streams.end(), [validate_extra_uvs](const Stream& stream) {
++			return stream.type == cgltf_attribute_type_custom || stream.target != 0 ||
++				(stream.index > 0 && ((stream.type == cgltf_attribute_type_texcoord && !validate_extra_uvs) ||
++				 stream.type == cgltf_attribute_type_joints || stream.type == cgltf_attribute_type_weights ||
++				 stream.type == cgltf_attribute_type_color));
++		});
++		if (mesh.targets || extra_channels)
++		{
++			fprintf(stderr, "lodstudio-appearance 0 0 1\n");
++			return;
++		}
++	}
+ 
+ 	std::vector<unsigned int> uvremap;
+ 	simplifyUvSplit(mesh, uvremap);
+@@ -1099,7 +1603,8 @@
+ 
+ 	float attrw[8] = {};
+ 	std::vector<float> attrs;
+-	simplifyAttributes(attrs, attrw, sizeof(attrw) / sizeof(attrw[0]), mesh, update ? 1.f : 0.f);
++	simplifyAttributes(attrs, attrw, sizeof(attrw) / sizeof(attrw[0]), mesh,
++		update ? 1.f : (lock_borders && !permissive && !aggressive ? 2.0f : 0.f));
+ 
+ 	std::vector<unsigned char> locks;
+ 	if (permissive)
+@@ -1113,6 +1618,9 @@
+ 		    attrs.data(), sizeof(attrw), attrw, sizeof(attrw) / sizeof(attrw[0]), permissive ? locks.data() : NULL, target_index_count, target_error, options));
+ 		simplifyUpdate(attrs, sizeof(attrw) / sizeof(attrw[0]), mesh);
+ 	}
++	else if (lock_borders && !permissive && !aggressive)
++		simplifyIslands(indices, uvremap, mesh, *positions, attrs, attrw, sizeof(attrw) / sizeof(attrw[0]),
++			threshold, target_error, options, allow_vertex_updates, density_budget, lod_progress);
+ 	else
+ 		indices.resize(meshopt_simplifyWithAttributes(&indices[0], &mesh.indices[0], mesh.indices.size(), positions->data[0].f, vertex_count, sizeof(Attr),
+ 		    attrs.data(), sizeof(attrw), attrw, sizeof(attrw) / sizeof(attrw[0]), permissive ? locks.data() : NULL, target_index_count, target_error, options));
+@@ -1335,13 +1843,15 @@
+ 		break;
+ 
+ 	case cgltf_primitive_type_triangles:
+-		filterBones(mesh);
++		if (settings.quantize || !settings.keep_attributes)
++			filterBones(mesh);
+ 		reindexMesh(mesh, settings);
+ 		filterTriangles(mesh);
+ 
+ 		if (settings.simplify_ratio < 1)
+ 		{
+-			simplifyMesh(mesh, settings.simplify_ratio, settings.simplify_error / mesh.quality, settings.simplify_aggressive, settings.simplify_lock_borders, settings.simplify_permissive, settings.simplify_update);
++			simplifyMesh(mesh, settings.simplify_ratio, settings.simplify_error / mesh.quality, settings.simplify_aggressive, settings.simplify_lock_borders, settings.simplify_permissive, settings.simplify_update,
++				settings.simplify_guarded_update, settings.simplify_density_budget, settings.simplify_lod_progress);
+ 		}
+ 
+ 		optimizeMesh(mesh, settings.compressmore);
+--- a/gltf/gltfpack.cpp
++++ b/gltf/gltfpack.cpp
+@@ -1253,6 +1253,7 @@
+ Settings defaults()
+ {
+ 	Settings settings = {};
++	settings.simplify_lod_progress = -1.f;
+ 	settings.quantize = true;
+ 	settings.pos_bits = 14;
+ 	settings.tex_bits = 12;
+@@ -1454,6 +1455,22 @@
+ 		else if (strcmp(arg, "-slb") == 0)
+ 		{
+ 			settings.simplify_lock_borders = true;
++		}
++		else if (strcmp(arg, "-lodb") == 0)
++		{
++			settings.simplify_density_budget = true;
++		}
++		else if (strcmp(arg, "-lodp") == 0 && i + 1 < argc && isdigit(argv[i + 1][0]))
++		{
++			settings.simplify_lod_progress = clamp(float(atof(argv[++i])), 0.f, 1.f);
++		}
++		else if (strcmp(arg, "-lodfw") == 0)
++		{
++			settings.lod_float_weights = true;
++		}
++		else if (strcmp(arg, "-lodvu") == 0)
++		{
++			settings.simplify_guarded_update = true;
+ 		}
+ 		else if (strcmp(arg, "-sv") == 0)
+ 		{
+@@ -1685,6 +1702,8 @@
+ 			fprintf(stderr, "\nSimplification:\n");
+ 			fprintf(stderr, "\t-si R: simplify meshes targeting triangle/point count ratio R (default: 1; R should be between 0 and 1)\n");
+ 			fprintf(stderr, "\t-se E: limit simplification error to E (default: 0.01 = 1%% deviation; E should be between 0 and 1)\n");
++			fprintf(stderr, "\t-lodp R: distance-based appearance budget R (0 = near, 1 = far; with -lodb)\n");
++			fprintf(stderr, "\t-lodvu: try validated vertex updates with locked borders (-slb)\n");
+ 			fprintf(stderr, "\t-sv: simplify with vertex position and attribute optimization\n");
+ 			fprintf(stderr, "\t-sp: use permissive simplification mode to allow simplification across attribute discontinuities\n");
+ 			fprintf(stderr, "\t-sa: aggressively simplify to the target ratio disregarding quality\n");
+--- a/gltf/gltfpack.h
++++ b/gltf/gltfpack.h
+@@ -156,6 +156,10 @@
+ 	bool simplify_lock_borders;
+ 	bool simplify_permissive;
+ 	bool simplify_update;
++	bool simplify_guarded_update;
++	bool simplify_density_budget;
++	float simplify_lod_progress;
++	bool lod_float_weights;
+ 
+ 	bool texture_ktx2;
+ 	bool texture_webp;
+--- a/gltf/stream.cpp
++++ b/gltf/stream.cpp
+@@ -658,6 +658,11 @@
+ 	}
+ 	else if (stream.type == cgltf_attribute_type_weights)
+ 	{
++		// Native DMX publication maps fixed vertices back to their original
++		// corners, including the unquantized skin influence values.
++		if (settings.lod_float_weights)
++			return writeVertexStreamRaw(bin, stream, cgltf_type_vec4, 4);
++
+ 		for (size_t i = 0; i < stream.data.size(); ++i)
+ 		{
+ 			const Attr& a = stream.data[i];

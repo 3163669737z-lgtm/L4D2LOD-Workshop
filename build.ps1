@@ -82,6 +82,12 @@ $args = @(
 & $dotnetExe @args
 if ($LASTEXITCODE -ne 0) { Fail "dotnet publish 退出码 $LASTEXITCODE" }
 
+$cliPublishDir = Join-Path $BuildDir "publish-console-$Configuration"
+& $dotnetExe publish $Project -c $Configuration -o $cliPublishDir --nologo -v minimal -p:ConsoleBuild=true
+if ($LASTEXITCODE -ne 0) { Fail "控制台构建退出码 $LASTEXITCODE" }
+$cliExe = Join-Path $cliPublishDir 'L4D2LOD-cli.exe'
+if (-not (Test-Path -LiteralPath $cliExe)) { Fail '发布目录里没有 L4D2LOD-cli.exe' }
+
 $exeName = 'L4D2LOD远景工坊.exe'
 $builtExe = Join-Path $publishDir $exeName
 if (-not (Test-Path -LiteralPath $builtExe)) {
@@ -122,6 +128,9 @@ if (-not $NoDist) {
         }
     }
     if (-not $copied) { Fail "无法写入 $finalExe（文件被占用且改名降级也失败）。请关闭正在运行的实例后重试。" }
+    Copy-Item -LiteralPath $cliExe -Destination $DistDir -Force
+    Copy-Item -LiteralPath (Join-Path $Root 'THIRD_PARTY_NOTICES.md') -Destination $DistDir -Force
+    Copy-Item -LiteralPath (Join-Path $Root 'src\ThirdParty\Datamodel\COPYING') -Destination (Join-Path $DistDir 'Datamodel.NET-LICENSE.txt') -Force
     # 顺带部署使用说明（菜单「查看使用说明」会找 exe 旁的 README.md）
     $manual = Join-Path $Root 'README.md'
     if (Test-Path -LiteralPath $manual) {

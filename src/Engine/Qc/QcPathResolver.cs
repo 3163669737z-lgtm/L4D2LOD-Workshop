@@ -9,7 +9,7 @@ namespace LodStudio.Engine
     ///
     /// 旧版规则（真实工程验证过，不能"优化"掉，否则会漏模型）：
     ///  * 基目录候选：$cd/$pushd 后的当前目录 → 根 QC 目录 → 声明这个条目的文件所在目录；
-    ///  * 每个基目录下依次尝试：base\路径（有扩展名）或 base\路径.glb、base\路径.smd（无扩展名，.glb 优先）；
+    ///  * 有扩展名时尝试原路径，无扩展名时依次查找 GLB、SMD 和 DMX。
     ///    base\文件名（去掉目录）；base\SMD\文件名；无扩展名再 base\SMD\文件名.glb；
     ///  * 最后追加根目录的上一级：up1\路径、up1\SMD\文件名；
     ///  * 全都找不到时，在根 QC 目录下按文件名递归搜：找到也只算 Fallback（Exists=false，不处理）并给警告。
@@ -58,6 +58,7 @@ namespace LodStudio.Engine
                         // 真实工程里有 "SMD\Acc_Kemomimi" 这种不写扩展名的；studiomdl 按 .smd 找，这里 .glb 优先
                         cands.Add(Path.Combine(b, norm + ".glb")); nameOnly.Add(false);
                         cands.Add(Path.Combine(b, norm + ".smd")); nameOnly.Add(false);
+                        cands.Add(Path.Combine(b, norm + ".dmx")); nameOnly.Add(false);
                     }
                     cands.Add(Path.Combine(b, entry.Name)); nameOnly.Add(true);
                     cands.Add(Path.Combine(Path.Combine(b, "SMD"), entry.Name)); nameOnly.Add(true);
@@ -126,10 +127,15 @@ namespace LodStudio.Engine
             string ext;
             try { ext = Path.GetExtension(s.ResolvedPath).ToLowerInvariant(); }
             catch { ext = ""; }
-            if (ext != ".glb" && ext != ".smd") return "nonglb";
+            if (!IsSupportedModelExtension(ext)) return "nonglb";
             if (!string.IsNullOrEmpty(s.Innnode)) return "innode";
             return null;
         }
+
+        internal static bool IsSupportedModelExtension(string extension) =>
+            string.Equals(extension, ".glb", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(extension, ".smd", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(extension, ".dmx", StringComparison.OrdinalIgnoreCase);
 
         /// <summary>两个路径是否指向同一文件（大小写不敏感；用于去重）。</summary>
         public static bool SamePath(string a, string b)

@@ -54,7 +54,6 @@ namespace LodStudio.Views
         private SettingsPageAppearance _pageAppearance;
         private SettingsPageDiagnostics _pageDiagnostics;
 
-        private bool _engineProbeBusy;
 
         public SettingsWindow(AppSettings settings, ShellViewModel shell)
         {
@@ -62,6 +61,7 @@ namespace LodStudio.Views
 
             _settings = settings ?? (shell != null ? shell.Settings : new AppSettings());
             _shell = shell;
+            if (_shell != null) WindowWorkArea.Track(this);
 
             try { Icon = BitmapFrame.Create(new Uri("pack://application:,,,/Assets/app.ico", UriKind.Absolute)); }
             catch { }
@@ -91,12 +91,6 @@ namespace LodStudio.Views
 
         public AppSettings Settings { get { return _settings; } }
         public ShellViewModel Shell { get { return _shell; } }
-
-        /// <summary>引擎页探测到的 Blender 版本（例如 "Blender 4.1.1"）；诊断页会用到。</summary>
-        public string BlenderVersion { get; private set; }
-
-        /// <summary>引擎页是否正在后台探测版本（预览脚本用它等待状态稳定）。</summary>
-        public bool EngineProbeBusy { get { return _engineProbeBusy; } }
 
         /// <summary>切到指定页（0 引擎 / 1 常规 / 2 LOD 高级 / 3 外观 / 4 诊断）。</summary>
         public void SelectPage(int page)
@@ -141,28 +135,6 @@ namespace LodStudio.Views
                 UiCapture.DoEvents(1);
             }
             catch { }
-        }
-
-        internal void SetEngineProbeBusy(bool busy)
-        {
-            _engineProbeBusy = busy;
-        }
-
-        internal void SetBlenderVersion(string version)
-        {
-            BlenderVersion = version ?? "";
-        }
-
-        /// <summary>让引擎页在需要时后台探测一次 Blender 版本（诊断页会调用，保证报告里有版本号）。</summary>
-        public void EnsureEngineProbe()
-        {
-            if (_pageEngine != null) _pageEngine.EnsureProbe();
-        }
-
-        /// <summary>引擎页探测结束：把版本号同步给诊断页的环境行。</summary>
-        internal void OnEngineProbeFinished()
-        {
-            if (_pageDiagnostics != null) _pageDiagnostics.SyncFromSettings();
         }
 
         /// <summary>运行诊断页的诊断（预览脚本用；主窗口自己的诊断走 shell.RunDiagnosticsAsync）。</summary>

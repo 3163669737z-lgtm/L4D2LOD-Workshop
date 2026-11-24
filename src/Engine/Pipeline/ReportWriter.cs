@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Text;
 
 namespace LodStudio.Engine
@@ -107,7 +108,7 @@ namespace LodStudio.Engine
             if (ctx != null && !string.IsNullOrEmpty(ctx.RootDir))
                 sb.AppendLine("- 工程目录：" + ctx.RootDir);
             string presetName = ctx == null || string.IsNullOrEmpty(ctx.PresetName) ? "自定义" : ctx.PresetName;
-            sb.AppendLine("- LOD 方案：" + presetName + "（" + (plan == null ? "（未设置）" : plan.Summary()) + "）");
+            sb.AppendLine("- LOD 方案：" + (ctx?.Automatic == true ? "按各工程可见组合面数规划" : presetName + "（" + (plan == null ? "未设置" : plan.Summary()) + "）"));
             sb.AppendLine("- 写入方式：" + ModeText(mode));
             if (outcome != null && outcome.Cancelled) sb.AppendLine("- 状态：**用户中途停止**");
             sb.AppendLine();
@@ -119,7 +120,27 @@ namespace LodStudio.Engine
             sb.AppendLine("| --- | --- |");
             sb.AppendLine("| 根 QC | " + N(stats.RootQcCount) + " 个 |");
             sb.AppendLine("| 唯一模型 | " + N(stats.UniqueModelCount) + " 个（全局去重后） |");
-            sb.AppendLine("| 简化任务 | " + N(stats.JobCount) + " 个（成功 " + N(stats.JobOk) + " / 失败 " + N(stats.JobFail) + "） |");
+            sb.AppendLine("| 简化任务 | " + N(stats.JobCount) + " 个（检查完成 " + N(stats.JobOk) + " / 失败 " + N(stats.JobFail) + "） |");
+            sb.AppendLine("| 实际新网格 | 发布 " + N(stats.PublishedLods) + " 个，直接沿用已减网格 " +
+                          N(stats.ReusedLevels) + " 档，沿用源网格 " + N(stats.UnreducedLevels) + " 档 |");
+            if (stats.ModelsWithoutReduction > 0)
+                sb.AppendLine("| 未找到合格减面 | " + N(stats.ModelsWithoutReduction) + " 个模型，详见运行日志 |");
+            sb.AppendLine("| 外观保护 | 重试 " + N(stats.RetriedComponents) + " 个局部区域，保留 " +
+                          N(stats.RetainedComponents) + " 个局部区域，保护 " + N(stats.ProtectedPrimitives) +
+                          " 个图元，沿用上一档 " + N(stats.ReusedLevels) + " 次 |");
+            if (stats.BalancedRegions > 0 || stats.MaximumRegionalSpread > 0)
+                sb.AppendLine("| 区域均摊 | 调整 " + N(stats.BalancedRegions) + " 个区域，最大区域减面率差 " +
+                              (stats.MaximumRegionalSpread / 100.0).ToString("0.##", CultureInfo.InvariantCulture) +
+                              " 个百分点，相邻区域最大差 " +
+                              (stats.MaximumAdjacentRegionalSpread / 100.0).ToString("0.##", CultureInfo.InvariantCulture) +
+                              " 个百分点 |");
+            if (stats.LodTriangles.Length > 0 && ctx?.Automatic != true)
+                sb.AppendLine("| 各档实际面数 | " + string.Join(" · ", stats.LodTriangles
+                    .Select((count, i) => "LOD" + (i + 1) + " " + N(count))) + " |");
+            if (stats.VertexUpdateTrials > 0)
+                sb.AppendLine("| 顶点微调 | 尝试 " + N(stats.VertexUpdateTrials) + " 个区域，采用 " +
+                              N(stats.VertexUpdateAccepted) + " 个，较固定顶点额外减少 " +
+                              N(stats.VertexUpdateTrianglesSaved) + " 面（各级合计） |");
             sb.AppendLine("| " + (mode == OutputMode.CollectionOnly ? "写入合集的 QC" : "已注入 $lod 的 QC") +
                           " | " + N(stats.InjectedQcCount) + " 个 |");
             sb.AppendLine("| 跳过 QC | " + N(stats.SkippedQcCount) + " 个 |");
@@ -128,7 +149,8 @@ namespace LodStudio.Engine
                 sb.AppendLine("| 试编译 | 成功 " + N(stats.CompileOk) + " / 失败 " + N(stats.CompileFail) + " |");
             else
                 sb.AppendLine("| 试编译 | 未开启 |");
-            sb.AppendLine("| 原始面数 → 末级 LOD 面数 | " + N(stats.TotalSourceTriangles) + " → " + N(stats.TotalLastLodTriangles) + " |");
+            if (ctx?.Automatic != true)
+                sb.AppendLine("| 原始面数 → 末级 LOD 面数 | " + N(stats.TotalSourceTriangles) + " → " + N(stats.TotalLastLodTriangles) + " |");
             sb.AppendLine("| 错误 / 提示 | " + N(errorTotal) + " / " + N(warnTotal) + " |");
             sb.AppendLine();
 
@@ -146,11 +168,39 @@ namespace LodStudio.Engine
                 foreach (QcOutcome q in outcome.QcOutcomes)
                 {
                     if (q == null) continue;
-                    sb.AppendLine("| QC · " + Cell(Relative(ctx, q.QcPath)) + " | " + Cell(StateText(q, mode)) +
+                    sb.AppendLine("| " + (q.Standalone ? "模型 · " : "QC · ") + Cell(Relative(ctx, q.QcPath)) + " | " + Cell(StateText(q, mode)) +
                                   " | " + Cell(DescribeQc(ctx, q)) + " |");
                 }
             }
             sb.AppendLine();
+
+            if (ctx?.Automatic == true && outcome != null)
+            {
+                sb.AppendLine("## 自动 LOD 结果");
+                sb.AppendLine();
+                sb.AppendLine("距离按模型尺寸、减面比例及参考视角估算。外观校验基于原始网格采样。");
+                sb.AppendLine();
+                foreach (var q in outcome.QcOutcomes.Where(q => q.SourceTriangles > 0))
+                {
+                    sb.AppendLine("### " + Relative(ctx, q.QcPath));
+                    sb.AppendLine();
+                    sb.AppendLine("原始可见组合上限 " + N(q.SourceTriangles) + " 三角面。");
+                    sb.AppendLine();
+                    if (q.Levels.Count == 0) continue;
+                    sb.AppendLine("| 候选档 | 目标保留 | 实际三角面 | 实际保留 | 估算距离 HU | Source 阈值 | 结果 |");
+                    sb.AppendLine("| --- | --- | --- | --- | --- | --- | --- |");
+                    foreach (var level in q.Levels)
+                    {
+                        bool kept = level.SkipReason == null && (q.Injected || q.Generated);
+                        sb.AppendLine($"| {level.Candidate} | {level.TargetRatio:P0} | {N(level.Triangles)} | " +
+                            $"{level.Triangles / (double)q.SourceTriangles:P1} | " +
+                            (kept ? level.EstimatedDistanceHu.ToString("0.0", Inv) : "—") + " | " +
+                            (kept && !q.Standalone ? level.SwitchPoint.ToString("0.###", Inv) : "—") + " | " +
+                            (kept ? "已输出" : Cell(level.SkipReason ?? "未发布")) + " |");
+                    }
+                    sb.AppendLine();
+                }
+            }
 
             // ── 跳过原因 ──
             sb.AppendLine("## 跳过的 QC（" + N(CountSkipped(outcome)) + "）");
@@ -321,6 +371,7 @@ namespace LodStudio.Engine
             if (hasError && q.Injected) return "部分完成";
             if (hasError) return "失败";
             if (q.Skipped) return "跳过";
+            if (q.Generated) return "已生成模型 LOD";
             if (q.Injected) return mode == OutputMode.CollectionOnly ? "已写入合集" : "已写入 $lod";
             if (q.CompileTried && q.CompileOk) return "成功";
             return "未处理";
@@ -330,6 +381,7 @@ namespace LodStudio.Engine
         {
             var parts = new List<string>();
             if (q.Skipped && !string.IsNullOrEmpty(q.SkipReason)) parts.Add(q.SkipReason);
+            if (q.Generated) parts.Add(q.OutputFiles.Count + " 个 LOD 网格");
             if (q.Injected)
             {
                 OutputMode mode = ctx == null ? OutputMode.InPlace : ctx.Mode;

@@ -12,7 +12,6 @@ namespace LodStudio.Views
     public partial class ShellWindow
     {
         internal ShellViewModel Vm { get { return _vm; } }
-        internal int LayoutScale { get; set; }
 
         internal void TestShowToast(string title, string sub, ToastTone tone) { Toasts.Show(title, sub, tone, 4000); }
         internal Task<bool> TestConfirmAsync(string title, string message, bool danger, string detail)
@@ -26,31 +25,12 @@ namespace LodStudio.Views
         internal void TestSetLogExpanded(bool expanded) { _vm.IsLogExpanded = expanded; ApplyLogExpanded(expanded, false); }
         internal void TestSetSize(double w, double h)
         {
+            MinWidth = Math.Min(1120, w);
+            MinHeight = Math.Min(720, h);
             Width = w; Height = h;
             UpdateLayout();
         }
         internal Visual RootVisual { get { return RootBorder; } }
-        internal void TestApplyLayoutScale(double scale)
-        {
-            LayoutScale = 1;
-            try
-            {
-                if (Content is FrameworkElement fe)
-                {
-                    fe.LayoutTransform = scale > 1.001 ? new ScaleTransform(scale, scale) : Transform.Identity;
-                    fe.UpdateLayout();
-                }
-            }
-            catch { }
-        }
-        internal void TestClearLayoutScale()
-        {
-            try
-            {
-                if (Content is FrameworkElement fe) { fe.LayoutTransform = Transform.Identity; fe.UpdateLayout(); }
-            }
-            catch { }
-        }
         internal ScrollViewer QueueScroll { get { return FindChild<ScrollViewer>(QueueList); } }
         internal Window WindowSelf { get { return this; } }
     }

@@ -18,10 +18,9 @@ namespace LodStudio.Cli
     {
         public static int RunPlan(CommandLine cli)
         {
-            string root = FirstPath(cli);
-            if (root == null || !Directory.Exists(root))
+            if (!TryInputs(cli, out var tasks, out string root))
             {
-                Console.WriteLine("PLAN: 需要一个存在的工程目录。用法：--plan <工程目录> [--out 目录]");
+                Console.WriteLine("PLAN: 请指定现有的工程目录、QC、GLB、SMD 或 DMX。");
                 return 2;
             }
             string outDir = EnsureOut(cli, "plan");
@@ -30,7 +29,7 @@ namespace LodStudio.Cli
             if (options == null) return 2;
 
             var sw = System.Diagnostics.Stopwatch.StartNew();
-            var plan = BatchPlanner.Build(new List<TaskRef> { new TaskRef(TaskKind.Folder, root) }, root, options, obs, CancellationToken.None);
+            var plan = BatchPlanner.Build(tasks, root, options, obs, CancellationToken.None);
             sw.Stop();
 
             string json = PlanToJson(plan, options);
@@ -40,15 +39,14 @@ namespace LodStudio.Cli
                               plan.ProcessCount + " 处理 / " + plan.SkipCount + " 跳过 / " + plan.ErrorCount + " 错误 · " +
                               sw.Elapsed.TotalSeconds.ToString("0.0", CultureInfo.InvariantCulture) + "s");
             Console.WriteLine("PLAN JSON -> " + Path.Combine(outDir, "plan.json"));
-            return plan.ErrorCount > 0 ? 1 : 0;
+            return plan.ErrorCount > 0 || plan.Tasks.Any(t => t.Error != null) ? 1 : 0;
         }
 
         public static int RunBatch(CommandLine cli)
         {
-            string root = FirstPath(cli);
-            if (root == null || !Directory.Exists(root))
+            if (!TryInputs(cli, out var tasks, out string root))
             {
-                Console.WriteLine("BATCH: 需要一个存在的工程目录。用法：--batch <工程目录> [--out 目录] [选项]");
+                Console.WriteLine("BATCH: 请指定现有的工程目录、QC、GLB、SMD 或 DMX。");
                 return 2;
             }
             string outDir = EnsureOut(cli, "batch");
@@ -58,19 +56,13 @@ namespace LodStudio.Cli
             options.ReportDir = !string.IsNullOrEmpty(cli.GetOption("report-dir")) ? cli.GetOption("report-dir") : outDir;
 
             var sw = System.Diagnostics.Stopwatch.StartNew();
-            var plan = BatchPlanner.Build(new List<TaskRef> { new TaskRef(TaskKind.Folder, root) }, root, options, obs, CancellationToken.None);
+            var plan = BatchPlanner.Build(tasks, root, options, obs, CancellationToken.None);
             File.WriteAllText(Path.Combine(outDir, "plan.json"), PlanToJson(plan, options), new UTF8Encoding(false));
-            if (plan.QcPlans.Count == 0 || plan.ErrorCount > 0 && plan.ProcessCount == 0)
-            {
-                Console.WriteLine("BATCH: 没有可处理的内容（见上面的日志）。");
-                File.WriteAllText(Path.Combine(outDir, "batch.json"), OutcomeToJson(null, plan), new UTF8Encoding(false));
-                return 1;
-            }
 
             BatchOutcome outcome = null;
             using (var cts = new CancellationTokenSource())
             {
-                Console.CancelKeyPress += delegate (object s, ConsoleCancelEventArgs e) { e.Cancel = true; try { cts.Cancel(); } catch { } try { BlenderScheduler.KillAll(); } catch { } };
+                Console.CancelKeyPress += delegate (object s, ConsoleCancelEventArgs e) { e.Cancel = true; try { cts.Cancel(); } catch { } try { ReductionScheduler.KillAll(); } catch { } };
                 outcome = BatchRunner.Run(plan, options, obs, cts.Token);
             }
             sw.Stop();
@@ -78,7 +70,7 @@ namespace LodStudio.Cli
             File.WriteAllText(Path.Combine(outDir, "batch.json"), OutcomeToJson(outcome, plan), new UTF8Encoding(false));
             Console.WriteLine();
             Console.WriteLine("BATCH: " + (outcome.Ok ? "OK" : "FAILED") + " · " +
-                              outcome.Stats.InjectedQcCount + " QC 写入 · " + outcome.Stats.JobOk + "/" + outcome.Stats.JobCount + " 减面成功 · " +
+                              outcome.Stats.InjectedQcCount + " QC 写入 · " + outcome.GeneratedModels + " 个独立模型 · " + outcome.Stats.PublishedLods + " 个 LOD 网格 · " +
                               "用时 " + sw.Elapsed.TotalSeconds.ToString("0.0", CultureInfo.InvariantCulture) + "s");
             if (!string.IsNullOrEmpty(outcome.ReportPath)) Console.WriteLine("报告: " + outcome.ReportPath);
             if (!string.IsNullOrEmpty(outcome.LogPath)) Console.WriteLine("日志: " + outcome.LogPath);
@@ -94,14 +86,17 @@ namespace LodStudio.Cli
             var settings = SettingsStore.Load();
             var opts = new BatchRunOptions
             {
-                BlenderPath = cli.GetOption("blender", settings.BlenderPath),
                 NekomdlPath = cli.GetOption("nekomdl", settings.NekomdlPath),
                 Workers = cli.GetIntOption("workers", settings.Workers),
-                MinTriangles = cli.GetIntOption("min-triangles", settings.MinTriangles),
-                QualityFirst = !cli.HasFlag("fast"),
+                QualityFirst = !cli.HasFlag("fast") && (cli.HasFlag("quality") || settings.QualityFirst),
+                AdaptiveTriangleBudget = !cli.HasFlag("legacy-budget") &&
+                                         (cli.HasFlag("density-budget") || settings.AdaptiveTriangleBudget),
+                AllowVertexUpdates = !cli.HasFlag("fixed-vertices") &&
+                                     (cli.HasFlag("vertex-update") || settings.AllowVertexUpdates),
+                KeepOriginalModels = cli.GetOption("keep-models", settings.KeepOriginalModels),
                 Force = cli.HasFlag("force"),
                 CompileAfter = cli.HasFlag("compile"),
-                NoFacial = !cli.HasFlag("facial"),
+                NoFacial = !cli.HasFlag("facial") && (cli.HasFlag("nofacial") || settings.NoFacial),
                 SkipMainModel = cli.HasFlag("skip-main"),
                 OutputMode = (OutputMode)Math.Max(0, Math.Min(2, cli.GetIntOption("mode", settings.OutputMode))),
                 BackupEnabled = !cli.HasFlag("no-backup"),
@@ -109,26 +104,45 @@ namespace LodStudio.Cli
                 ReportDir = null,
                 WriteReport = true
             };
-            string backendText = (cli.GetOption("backend") ?? "").Trim();
-            if (backendText.Length == 0)
-                opts.Backend = settings.ReduceBackend == 1 ? ReduceBackend.Gltfpack : ReduceBackend.Blender;
-            else if (string.Equals(backendText, "gltfpack", StringComparison.OrdinalIgnoreCase))
-                opts.Backend = ReduceBackend.Gltfpack;
-            else if (string.Equals(backendText, "blender", StringComparison.OrdinalIgnoreCase))
-                opts.Backend = ReduceBackend.Blender;
-            else
+            opts.MinTriangles = cli.GetIntOption("min-triangles", opts.AdaptiveTriangleBudget ? 0 : settings.MinTriangles);
+            if (cli.HasFlag("shrink-body"))
+                obs.Log(LogLevel.Warn, "Body 内缩选项已停用。可用 --keep-models 为指定文件沿用原网格。");
+            string backend = cli.GetOption("backend", "gltfpack").Trim();
+            if (string.Equals(backend, "blender", StringComparison.OrdinalIgnoreCase))
+                obs.Log(LogLevel.Info, "旧 Blender 选项已迁移到内置 meshoptimizer。");
+            else if (backend.Length != 0 && !string.Equals(backend, "gltfpack", StringComparison.OrdinalIgnoreCase))
             {
-                Console.WriteLine("BATCH: --backend 只接受 blender 或 gltfpack。");
+                Console.WriteLine("BATCH: --backend 支持 gltfpack（内置 meshoptimizer）。");
                 return null;
             }
-            if (string.IsNullOrEmpty(opts.BlenderPath)) opts.BlenderPath = BlenderLocator.Find(null);
-            if (string.IsNullOrEmpty(opts.NekomdlPath)) opts.NekomdlPath = Nekomdl.Find(null);
+            int presetIndex = cli.GetIntOption("preset", PresetLibrary.DefaultIndex);
+            bool autoPreset = cli.HasFlag("preset") && presetIndex == PresetLibrary.AutomaticIndex;
+            bool manual = cli.HasFlag("preset") && !autoPreset || cli.HasFlag("dist") || cli.HasFlag("ratio") || cli.HasFlag("levels");
+            opts.Automatic = cli.HasFlag("auto") || autoPreset || !manual;
+            if (opts.Automatic)
+            {
+                if (manual || opts.CompileAfter || opts.Force || cli.HasFlag("nofacial") || cli.HasFlag("no-backup") ||
+                    (cli.HasFlag("mode") && opts.OutputMode != OutputMode.InPlace))
+                {
+                    Console.WriteLine("自动模式使用原 QC 写入、备份和表情保护。已有手工参数的脚本可显式指定 --preset 或 --dist 与 --ratio。");
+                    return null;
+                }
+                opts.OutputMode = OutputMode.InPlace;
+                opts.NoFacial = false;
+                opts.QualityFirst = !cli.HasFlag("fast");
+                opts.AdaptiveTriangleBudget = !cli.HasFlag("legacy-budget");
+                opts.AllowVertexUpdates = cli.HasFlag("vertex-update") && !cli.HasFlag("fixed-vertices");
+                opts.KeepOriginalModels = cli.GetOption("keep-models", "");
+                opts.MinTriangles = cli.GetIntOption("min-triangles", 0);
+                if (opts.SkipMainModel) opts.SkipMainQcPaths = null;
+                return opts;
+            }
+            if (opts.CompileAfter && string.IsNullOrEmpty(opts.NekomdlPath)) opts.NekomdlPath = Nekomdl.Find(null);
             if (opts.SkipMainModel)
-                opts.SkipMainQcPaths = new HashSet<string>(settings.SkipMainQcs, StringComparer.OrdinalIgnoreCase);
+                opts.SkipMainQcPaths = null;
 
             // 方案
             var all = PresetLibrary.Builtins();
-            int presetIndex = cli.GetIntOption("preset", 0);
             LodPlan plan;
             string dist = cli.GetOption("dist");
             string ratio = cli.GetOption("ratio");
@@ -143,19 +157,31 @@ namespace LodStudio.Cli
                 }
                 plan = new LodPlan();
                 for (int i = 0; i < d.Count; i++) plan.Levels.Add(new LodLevel(d[i], r[i] / 100.0));
-                opts.PresetName = "自定义";
+                opts.PresetName = PresetLibrary.CustomName;
             }
             else
             {
-                if (presetIndex < 0 || presetIndex >= all.Length) presetIndex = 0;
-                plan = LodPlan.FromPreset(all[presetIndex]);
-                opts.PresetName = all[presetIndex].Name;
+                if (presetIndex < 0 || presetIndex > PresetLibrary.CustomIndex)
+                {
+                    Console.WriteLine("BATCH: --preset 支持 0 保守、1 平衡、2 激进、3 自定义、4 自动。");
+                    return null;
+                }
+                if (presetIndex == PresetLibrary.CustomIndex)
+                {
+                    plan = settings.GetCustomPlan();
+                    opts.PresetName = PresetLibrary.CustomName;
+                }
+                else
+                {
+                    plan = LodPlan.FromPreset(all[presetIndex]);
+                    opts.PresetName = all[presetIndex].Name;
+                }
             }
             int levels = cli.GetIntOption("levels", 0);
             if (levels > 0 && levels < plan.Count)
             {
                 plan.Levels = plan.Levels.Take(levels).ToList();
-                opts.PresetName += "（前 " + levels + " 级）";
+                opts.PresetName = PresetLibrary.CustomName;
             }
             string err = plan.Validate();
             if (err != null)
@@ -178,13 +204,18 @@ namespace LodStudio.Cli
             return list;
         }
 
-        private static string FirstPath(CommandLine cli)
+        private static bool TryInputs(CommandLine cli, out List<TaskRef> tasks, out string root)
         {
+            tasks = new List<TaskRef>();
+            root = null;
             foreach (var p in cli.Paths)
             {
-                try { if (Directory.Exists(p)) return Path.GetFullPath(p); } catch { }
+                var task = TaskRef.FromPath(p);
+                if (task == null) return false;
+                tasks.Add(task);
+                if (root == null) root = task.Kind == TaskKind.Folder ? task.Path : Path.GetDirectoryName(task.Path);
             }
-            return cli.Paths.FirstOrDefault();
+            return tasks.Count > 0;
         }
 
         private static string EnsureOut(CommandLine cli, string tag)
@@ -203,9 +234,12 @@ namespace LodStudio.Cli
             w.BeginObject();
             w.Prop("rootDir", plan.RootDir);
             w.Prop("preset", plan.PresetName);
-            w.Prop("plan", plan.Plan.Summary());
+            w.Prop("plan", plan.Automatic ? "按各项目面数自动规划" : plan.Plan.Summary());
+            w.Prop("automatic", plan.Automatic);
             w.Prop("mode", (int)opt.OutputMode);
             w.Prop("qualityFirst", opt.QualityFirst);
+            w.Prop("adaptiveTriangleBudget", opt.AdaptiveTriangleBudget);
+            w.Prop("allowVertexUpdates", opt.AllowVertexUpdates);
             w.Prop("force", opt.Force);
             w.Name("counts").BeginObject()
                 .Prop("qc", plan.QcPlans.Count).Prop("process", plan.ProcessCount).Prop("skip", plan.SkipCount)
@@ -220,6 +254,11 @@ namespace LodStudio.Cli
                 w.Prop("action", q.Action.ToString());
                 w.Prop("reason", q.Reason ?? "");
                 w.Prop("wrapper", q.IsWrapperQc);
+                w.Prop("standalone", q.IsStandalone);
+                w.Prop("sourceTriangles", q.SourceTriangles);
+                w.Name("candidates").BeginArray();
+                foreach (var level in q.Levels?.Levels ?? new List<LodLevel>()) w.Value(level.Ratio);
+                w.EndArray();
                 w.Name("models").BeginArray();
                 foreach (var m in q.Models)
                 {
@@ -245,7 +284,7 @@ namespace LodStudio.Cli
                 w.Prop("jobs", m.Jobs.Count);
                 w.Prop("skipReason", m.SkipReason ?? "");
                 w.Name("outputs").BeginArray();
-                foreach (var j in m.Jobs) w.Value(j.Destination);
+                if (!plan.Automatic) foreach (var j in m.Jobs) w.Value(j.Destination);
                 w.EndArray();
                 w.EndObject();
             }
@@ -269,10 +308,22 @@ namespace LodStudio.Cli
                     .Prop("injectedQc", s.InjectedQcCount).Prop("skippedQc", s.SkippedQcCount).Prop("errorQc", s.ErrorQcCount)
                     .Prop("compileOk", s.CompileOk).Prop("compileFail", s.CompileFail)
                     .Prop("sourceTriangles", s.TotalSourceTriangles).Prop("lastLodTriangles", s.TotalLastLodTriangles)
+                    .Prop("retriedComponents", s.RetriedComponents).Prop("retainedComponents", s.RetainedComponents)
+                    .Prop("protectedPrimitives", s.ProtectedPrimitives).Prop("reusedLevels", s.ReusedLevels)
+                    .Prop("unreducedLevels", s.UnreducedLevels).Prop("publishedLods", s.PublishedLods)
+                    .Prop("modelsWithoutReduction", s.ModelsWithoutReduction)
+                    .Prop("vertexUpdateTrials", s.VertexUpdateTrials).Prop("vertexUpdateAccepted", s.VertexUpdateAccepted)
+                    .Prop("vertexUpdateTrianglesSaved", s.VertexUpdateTrianglesSaved)
+                    .Prop("balancedRegions", s.BalancedRegions).Prop("maximumRegionalSpread", s.MaximumRegionalSpread / 100.0)
+                    .Prop("maximumAdjacentRegionalSpread", s.MaximumAdjacentRegionalSpread / 100.0)
                     .EndObject();
+                w.Name("lodTriangles").BeginArray();
+                foreach (long triangles in s.LodTriangles) w.Value(triangles);
+                w.EndArray();
                 w.Prop("reportPath", outcome.ReportPath ?? "");
                 w.Prop("logPath", outcome.LogPath ?? "");
                 w.Prop("elapsedSeconds", outcome.Elapsed.TotalSeconds);
+                w.Prop("generatedModels", outcome.GeneratedModels);
                 w.Name("qc").BeginArray();
                 foreach (var q in outcome.QcOutcomes)
                 {
@@ -282,6 +333,18 @@ namespace LodStudio.Cli
                     w.Prop("skipped", q.Skipped);
                     w.Prop("skipReason", q.SkipReason ?? "");
                     w.Prop("compileOk", q.CompileOk);
+                    w.Prop("lodBlockFile", q.LodBlockFile ?? "");
+                    w.Prop("sourceTriangles", q.SourceTriangles);
+                    w.Prop("generated", q.Generated);
+                    w.Name("outputs").BeginArray();
+                    foreach (var file in q.OutputFiles) w.Value(file);
+                    w.EndArray();
+                    w.Name("levels").BeginArray();
+                    foreach (var level in q.Levels)
+                        w.BeginObject().Prop("candidate", level.Candidate).Prop("triangles", level.Triangles)
+                            .Prop("targetRatio", level.TargetRatio).Prop("estimatedDistanceHu", level.EstimatedDistanceHu)
+                            .Prop("switchPoint", level.SwitchPoint).Prop("skipReason", level.SkipReason ?? "").EndObject();
+                    w.EndArray();
                     w.Name("errors").BeginArray();
                     foreach (var e in q.Errors) w.Value(e);
                     w.EndArray();

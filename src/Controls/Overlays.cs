@@ -358,7 +358,7 @@ namespace LodStudio.Controls
         private enum DialogKind { Confirm, Info, Prompt }
 
         private const double PanelWidth = 460.0;
-        private const double DetailMaxHeight = 220.0;
+        private const double ContentMaxHeight = 330.0;
         private const double ButtonMinWidth = 92.0;
 
         private static readonly Typeface FaceCjk = new Typeface(new FontFamily("Microsoft YaHei UI"), FontStyles.Normal, FontWeights.Normal, FontStretches.Normal);
@@ -377,6 +377,7 @@ namespace LodStudio.Controls
         private TranslateTransform _panelTransform;
         private Button _primaryButton;
         private Button _cancelButton;
+        private Button _closeButton;
         private TextBox _input;
         private TextBlock _errorLine;
 
@@ -420,7 +421,14 @@ namespace LodStudio.Controls
 
         private void OnSizeChanged(object sender, SizeChangedEventArgs e)
         {
-            if (_panel != null) _panel.MaxHeight = Math.Max(200, ActualHeight - 48);
+            FitPanel();
+        }
+
+        private void FitPanel()
+        {
+            if (_panel == null) return;
+            _panel.MaxWidth = Math.Max(0, ActualWidth - 48);
+            _panel.MaxHeight = Math.Max(0, ActualHeight - 48);
         }
 
         /// <summary>系统"显示动画效果"是否开启；关闭时所有动效即时完成。</summary>
@@ -475,6 +483,9 @@ namespace LodStudio.Controls
         }
 
         // ══════════════════════════ 公开 API（签名不可变） ══════════════════════════
+
+        internal void Dismiss() => RequestClose(CancelResult());
+        internal void FocusDialog() => FocusInitial();
 
         /// <summary>确认对话框：返回 true=确定，false=取消/关闭。Danger 时主按钮为红色且默认焦点在"取消"。</summary>
         public Task<bool> ConfirmAsync(DialogOptions options)
@@ -555,9 +566,9 @@ namespace LodStudio.Controls
             IsOpen = true;
             Visibility = Visibility.Visible;
             // 关键：BuildVisual 里读 ActualHeight 时宿主还是 Collapsed（=0），会把面板夹到 200 高、按钮被裁。
-            // 先显示并完成一次布局，再按真实高度设置 MaxHeight。
+            // 先显示并完成一次布局，再按宿主的可用空间限制面板。
             UpdateLayout();
-            if (_panel != null) _panel.MaxHeight = Math.Max(240, ActualHeight - 48);
+            FitPanel();
             StartOpenAnimation();
             Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(FocusInitial));
         }
@@ -566,6 +577,7 @@ namespace LodStudio.Controls
         {
             _root = new Grid { Background = Brushes.Transparent };
             KeyboardNavigation.SetTabNavigation(_root, KeyboardNavigationMode.Cycle);
+            KeyboardNavigation.SetControlTabNavigation(_root, KeyboardNavigationMode.Cycle);
             KeyboardNavigation.SetDirectionalNavigation(_root, KeyboardNavigationMode.Contained);
             _root.PreviewKeyDown += OnRootPreviewKeyDown;
 
@@ -595,7 +607,6 @@ namespace LodStudio.Controls
             _panel.BorderThickness = new Thickness(1);
             _panel.Padding = new Thickness(20);
             _panel.Margin = new Thickness(0, 0, 3, 3);
-            _panel.MaxHeight = Math.Max(200, ActualHeight - 48);
             frame.Children.Add(_panel);
 
             _panelTransform = new TranslateTransform(0, AnimationsEnabled ? 8.0 : 0.0);
@@ -604,8 +615,11 @@ namespace LodStudio.Controls
             center.Children.Add(frame);
             _root.Children.Add(center);
 
-            var body = new StackPanel();
-            _panel.Child = body;
+            var layout = new Grid();
+            layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            layout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            _panel.Child = layout;
 
             // 标题行：标题 + 右上角关闭 ×
             var titleRow = new Grid();
@@ -623,16 +637,29 @@ namespace LodStudio.Controls
             title.Margin = new Thickness(0, 0, 12, 0);
             titleRow.Children.Add(title);
 
-            var close = new Button { Content = CloseGlyph(), ToolTip = "关闭（Esc）", Focusable = true };
-            ApplyButtonStyle(close, "Btn.Icon");
-            close.Width = 26;
-            close.Height = 26;
-            close.Padding = new Thickness(0);
-            close.HorizontalAlignment = HorizontalAlignment.Right;
-            close.VerticalAlignment = VerticalAlignment.Top;
-            close.Click += delegate { RequestClose(CancelResult()); };
-            titleRow.Children.Add(close);
-            body.Children.Add(titleRow);
+            _closeButton = new Button { Content = CloseGlyph(), ToolTip = "关闭（Esc）", Focusable = true, TabIndex = 4 };
+            ApplyButtonStyle(_closeButton, "Btn.Icon");
+            _closeButton.Width = 26;
+            _closeButton.Height = 26;
+            _closeButton.Padding = new Thickness(0);
+            _closeButton.VerticalAlignment = VerticalAlignment.Top;
+            _closeButton.Click += delegate { Dismiss(); };
+            System.Windows.Automation.AutomationProperties.SetName(_closeButton, "关闭");
+            Grid.SetColumn(_closeButton, 1);
+            titleRow.Children.Add(_closeButton);
+            layout.Children.Add(titleRow);
+
+            var body = new StackPanel();
+            var content = new ScrollViewer
+            {
+                Content = body, MaxHeight = ContentMaxHeight, Focusable = false, IsTabStop = false, TabIndex = 3,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
+            };
+            content.ScrollChanged += (s, e) => content.Focusable = content.IsTabStop = content.ScrollableHeight > 0;
+            System.Windows.Automation.AutomationProperties.SetName(content, "详细内容");
+            Grid.SetRow(content, 1);
+            layout.Children.Add(content);
 
             // 正文
             if (!string.IsNullOrEmpty(_options.Message))
@@ -647,7 +674,7 @@ namespace LodStudio.Controls
                 body.Children.Add(msg);
             }
 
-            // 详情区：等宽 11.5、最大高 220、可滚动
+            // 正文与详情共用滚动区，标题和确认按钮固定。
             if (!string.IsNullOrEmpty(_options.Detail))
             {
                 var box = new Border { Margin = new Thickness(0, 12, 0, 0) };
@@ -656,12 +683,6 @@ namespace LodStudio.Controls
                 box.SetResourceReference(Border.BorderBrushProperty, "Brush.Line");
                 box.BorderThickness = new Thickness(1);
                 box.Padding = new Thickness(10);
-                var scroll = new ScrollViewer
-                {
-                    MaxHeight = DetailMaxHeight,
-                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                    HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
-                };
                 var detail = new TextBlock();
                 ApplyStyle(detail, "Widget.Dialog.DetailText");
                 detail.FontFamily = MonoFont();
@@ -669,8 +690,7 @@ namespace LodStudio.Controls
                 detail.SetResourceReference(TextBlock.ForegroundProperty, "Brush.Ink");
                 detail.TextWrapping = TextWrapping.Wrap;
                 detail.Text = _options.Detail;
-                scroll.Content = detail;
-                box.Child = scroll;
+                box.Child = detail;
                 body.Children.Add(box);
             }
 
@@ -743,7 +763,8 @@ namespace LodStudio.Controls
                 _primaryButton.Click += delegate { AcceptPrimary(); };
                 buttons.Children.Add(_primaryButton);
             }
-            body.Children.Add(buttons);
+            Grid.SetRow(buttons, 2);
+            layout.Children.Add(buttons);
             return _root;
         }
 
@@ -764,7 +785,8 @@ namespace LodStudio.Controls
 
         private void OnRootPreviewKeyDown(object sender, KeyEventArgs e)
         {
-            if (!IsOpen || _closing) return;
+            if (!IsOpen) return;
+            if (_closing) { e.Handled = true; return; }
             if (e.Key == Key.Escape)
             {
                 e.Handled = true;
@@ -780,7 +802,8 @@ namespace LodStudio.Controls
                     return;
                 }
                 e.Handled = true;
-                AcceptPrimary();
+                if (_cancelButton?.IsKeyboardFocused == true || _closeButton?.IsKeyboardFocused == true) Dismiss();
+                else AcceptPrimary();
             }
         }
 
@@ -868,8 +891,10 @@ namespace LodStudio.Controls
             _panelTransform = null;
             _primaryButton = null;
             _cancelButton = null;
+            _closeButton = null;
             _input = null;
             _errorLine = null;
+            _options = null;
             Visibility = Visibility.Collapsed;
 
             // 恢复打开前的焦点
@@ -878,7 +903,7 @@ namespace LodStudio.Controls
                 if (_previousFocus is UIElement)
                 {
                     var el = (UIElement)_previousFocus;
-                    if (el.IsVisible) Keyboard.Focus(el);
+                    if (el.IsVisible && el.IsEnabled) Keyboard.Focus(el);
                 }
             }
             catch { }
