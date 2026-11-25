@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
+using LodStudio.Services;
 
 namespace LodStudio.Controls
 {
@@ -19,17 +20,14 @@ namespace LodStudio.Controls
 
     public enum SegVariant
     {
-        /// <summary>页签：纯文字 + 底部信号色下划线（选中）</summary>
+        /// <summary>页签：纯文字 + 底部平滑滑行信号光条（选中）</summary>
         Tabs,
-        /// <summary>分段按钮：1px 外框，选中段填充</summary>
+        /// <summary>分段按钮：圆角玻璃容器 + 弹性滑行胶囊选中块</summary>
         Boxed
     }
 
     /// <summary>
-    /// 自绘分段控件（页签 / 分段按钮）。
-    /// - 键盘：Tab 聚焦，←→ 切换，Home/End 到首尾，Enter/Space 确认；
-    /// - 数量小字（Count>=0 时显示）；
-    /// - 选中态用信号色下划线（Tabs）或填充（Boxed），悬停用 InkFaint。
+    /// 现代化自绘分段控件（页签 / 胶囊分段按钮），支持平滑滑动指示器动画。
     /// </summary>
     public sealed class Segmented : FrameworkElement
     {
@@ -40,13 +38,27 @@ namespace LodStudio.Controls
         private int _hover = -1;
         private int _selected;
 
+        private double _indX = double.NaN;
+        private double _indW = double.NaN;
+        private double _targetX;
+        private double _targetW;
+        private double _velX;
+        private double _velW;
+
+        private const double SpringStiffness = 1764;
+        private const double SpringDamping = 62;
+        private static readonly double SpringFrequency = Math.Sqrt(SpringStiffness - SpringDamping * SpringDamping / 4);
+
+        private bool CanAnimate => IsLoaded && IsVisible && SystemParameters.ClientAreaAnimation &&
+                                   UiMotion.ActiveMotionTier > 0 && !UiMotion.SuppressContinuousAmbient;
+
         public IList<SegOption> Items { get; private set; } = new List<SegOption>();
         public SegVariant Variant { get; set; } = SegVariant.Tabs;
         public double FontSize { get; set; } = 12.5;
         public double CountFontSize { get; set; } = 10.5;
 
-    /// <summary>计数数字的固定槽宽：0→10→100 变化时页签宽度不变，避免整行控件轻微位移。</summary>
-    public double CountSlotWidth { get; set; } = 26;
+        /// <summary>计数数字的固定槽宽：0→10→100 变化时页签宽度不变，避免整行控件轻微位移。</summary>
+        public double CountSlotWidth { get; set; } = 26;
         public double ItemPadding { get; set; } = 14;
         /// <summary>true = 各段等分控件宽度（铺满），false = 按文字自然宽度排列</summary>
         public bool EqualWidths { get; set; }
@@ -62,6 +74,7 @@ namespace LodStudio.Controls
                 int v = Math.Max(0, Math.Min(Items.Count - 1, value));
                 if (v == _selected) return;
                 _selected = v;
+                UpdateIndicatorTarget(true);
                 InvalidateVisual();
                 var h = SelectedIndexChanged;
                 if (h != null) h(this, EventArgs.Empty);
@@ -81,11 +94,19 @@ namespace LodStudio.Controls
         {
             Focusable = true;
             SnapsToDevicePixels = true;
-            FocusVisualStyle = null;          // 不用系统默认虚线焦点框（自绘中性实线）
+            FocusVisualStyle = null;
             Cursor = Cursors.Hand;
             IsKeyboardFocusWithinChanged += delegate { InvalidateVisual(); };
             MouseEnter += delegate { if (IsKeyboardFocused) InvalidateVisual(); };
             MouseLeave += delegate { if (IsKeyboardFocused) InvalidateVisual(); };
+            Loaded += delegate { UiMotion.AmbientSuppressionChanged += OnMotionChanged; };
+            Unloaded += delegate
+            {
+                UiMotion.AmbientSuppressionChanged -= OnMotionChanged;
+                SnapIndicator();
+                InvalidateVisual();
+            };
+            IsVisibleChanged += delegate { SyncMotion(); };
         }
 
         public void SetItems(IList<SegOption> items, int selected)
@@ -93,8 +114,74 @@ namespace LodStudio.Controls
             Items = items ?? new List<SegOption>();
             _selected = Math.Max(0, Math.Min(Math.Max(0, Items.Count - 1), selected));
             _hover = -1;
+            SnapIndicator();
+            _indX = double.NaN;
+            _indW = double.NaN;
             InvalidateMeasure();
             InvalidateVisual();
+        }
+
+        private void UpdateIndicatorTarget(bool animate)
+        {
+            if (_selected < 0 || _selected >= _rects.Count) return;
+            Rect r = _rects[_selected];
+            _targetX = r.X;
+            _targetW = r.Width;
+            if (!animate || double.IsNaN(_indX) || !CanAnimate)
+            {
+                SnapIndicator();
+                return;
+            }
+            RenderFrameHub.Subscribe(OnAnimTick);
+        }
+
+        private void SnapIndicator()
+        {
+            _indX = _targetX;
+            _indW = _targetW;
+            _velX = _velW = 0;
+            RenderFrameHub.Unsubscribe(OnAnimTick);
+        }
+
+        private void OnMotionChanged(object sender, EventArgs e)
+        {
+            if (Dispatcher.CheckAccess()) SyncMotion();
+            else Dispatcher.BeginInvoke(new Action(SyncMotion));
+        }
+
+        private void SyncMotion()
+        {
+            if (CanAnimate) return;
+            SnapIndicator();
+            InvalidateVisual();
+        }
+
+        private void OnAnimTick(double deltaSeconds)
+        {
+            if (CanAnimate)
+            {
+                StepSpring(ref _indX, ref _velX, _targetX, deltaSeconds);
+                StepSpring(ref _indW, ref _velW, _targetW, deltaSeconds);
+                if (Math.Abs(_indX - _targetX) < 0.35 && Math.Abs(_indW - _targetW) < 0.35 &&
+                    Math.Abs(_velX) < 12 && Math.Abs(_velW) < 12)
+                    SnapIndicator();
+            }
+            else SnapIndicator();
+            InvalidateVisual();
+        }
+
+        private static void StepSpring(ref double position, ref double velocity, double target, double elapsed)
+        {
+            // Exact damped oscillator step for the elapsed frame time.
+            double decay = SpringDamping / 2;
+            double offset = position - target;
+            double sine = Math.Sin(SpringFrequency * elapsed);
+            double cosine = Math.Cos(SpringFrequency * elapsed);
+            double envelope = Math.Exp(-decay * elapsed);
+            double wave = offset * cosine + (velocity + decay * offset) * sine / SpringFrequency;
+            velocity = envelope * (velocity * cosine -
+                (SpringStiffness * offset + decay * velocity) * sine / SpringFrequency);
+            position = target + envelope * wave;
         }
 
         protected override Size MeasureOverride(Size availableSize)
@@ -104,15 +191,15 @@ namespace LodStudio.Controls
             for (int i = 0; i < Items.Count; i++)
             {
                 var opt = Items[i];
-                var ft = MakeText(opt, Cjk, dpi);
-                var ftc = opt.Count >= 0 ? MakeCount(opt, dpi) : null;
+                var ft = MakeText(opt, Cjk, dpi, false);
+                var ftc = opt.Count >= 0 ? MakeCount(opt, dpi, false) : null;
                 double iw = ft.Width + (ftc != null ? 5 + CountSlotWidth : 0) + ItemPadding * 2;
                 w += iw;
-                h = Math.Max(h, ft.Height + (Variant == SegVariant.Boxed ? 12 : 6));
+                h = Math.Max(h, ft.Height + (Variant == SegVariant.Boxed ? 12 : 8));
             }
-            if (Variant == SegVariant.Boxed) { w += 2; h += 2; }
+            if (Variant == SegVariant.Boxed) { w += 6; h += 4; }
             if (EqualWidths && !double.IsInfinity(availableSize.Width) && availableSize.Width > w)
-                w = availableSize.Width;                       // 铺满可用宽度，各段等分
+                w = availableSize.Width;
             if (EqualWidths && !double.IsInfinity(availableSize.Height) && availableSize.Height > h)
                 h = availableSize.Height;
             return new Size(w, h);
@@ -125,18 +212,16 @@ namespace LodStudio.Controls
             if (!EqualWidths)
             {
                 var dpi = VisualTreeHelper.GetDpi(this).PixelsPerDip;
-                double x = 0;
                 for (int i = 0; i < Items.Count; i++)
                 {
                     var opt = Items[i];
-                    var ft = MakeText(opt, Cjk, dpi);
-                    var ftc = opt.Count >= 0 ? MakeCount(opt, dpi) : null;
+                    var ft = MakeText(opt, Cjk, dpi, false);
+                    var ftc = opt.Count >= 0 ? MakeCount(opt, dpi, false) : null;
                     widths[i] = ft.Width + (ftc != null ? 5 + CountSlotWidth : 0) + ItemPadding * 2;
-                    x += widths[i];
                 }
                 return widths;
             }
-            double usable = total - (Variant == SegVariant.Boxed ? 2 : 0);
+            double usable = Math.Max(1, total - (Variant == SegVariant.Boxed ? 6 : 0));
             double each = usable / n;
             for (int i = 0; i < n; i++) widths[i] = each;
             return widths;
@@ -145,71 +230,101 @@ namespace LodStudio.Controls
         protected override void OnRender(DrawingContext dc)
         {
             _rects.Clear();
-            var ink = Res("Brush.Ink");
-            var inkFaint = Res("Brush.InkFaint");
-            var inkSoft = Res("Brush.InkSoft");
             var signal = Res("Brush.Signal");
+            var signalGlow = Res("Brush.SignalGlow");
+            var signalSoft = Res("Brush.SignalSoft");
             var line = Res("Brush.Line");
-            var lineStrong = Res("Brush.LineStrong");
-            var sunken = Res("Brush.Sunken");
+            var prismBorder = Res("Brush.PrismBorder");
+            var glassPanel = Res("Brush.GlassElevated");
+            var glassSunken = Res("Brush.GlassSunken");
             var hoverFill = Res("Brush.RowHover");
             var dpi = VisualTreeHelper.GetDpi(this).PixelsPerDip;
 
-            double x = 0, h = ActualHeight;
-            if (Variant == SegVariant.Boxed) x = 1;
+            double h = ActualHeight;
+            double x = Variant == SegVariant.Boxed ? 3 : 0;
+
+            if (Variant == SegVariant.Boxed)
+            {
+                dc.DrawRoundedRectangle(glassSunken, new Pen(line, 1),
+                    new Rect(0.5, 0.5, Math.Max(0, ActualWidth - 1), Math.Max(0, h - 1)), 9, 9);
+            }
 
             double[] widths = BuildWidths(ActualWidth);
-            var underlinePoints = new List<Point>();
+            for (int i = 0; i < Items.Count; i++)
+            {
+                double iw = widths[i];
+                _rects.Add(new Rect(x, 0, iw, h));
+                x += iw;
+            }
+
+            if (_selected >= 0 && _selected < _rects.Count)
+            {
+                var selected = _rects[_selected];
+                if (double.IsNaN(_indX) || selected.X != _targetX || selected.Width != _targetW)
+                    UpdateIndicatorTarget(false);
+            }
+
+            // 选中滑行胶囊（Boxed 在文字下层绘制）
+            if (Variant == SegVariant.Boxed && _selected >= 0 && _selected < _rects.Count && !double.IsNaN(_indX))
+            {
+                double padY = 3;
+                var pillRect = new Rect(_indX + 0.5, padY, Math.Max(2, _indW - 1), Math.Max(2, h - padY * 2));
+                dc.DrawRoundedRectangle(glassPanel, new Pen(prismBorder, 1), pillRect, 6.5, 6.5);
+                // 底部微弱信号强调线
+                double barW = Math.Min(22, Math.Max(8, pillRect.Width * 0.34));
+                dc.DrawRoundedRectangle(signal, null,
+                    new Rect(pillRect.X + (pillRect.Width - barW) / 2, pillRect.Bottom - 2.5, barW, 2), 1, 1);
+            }
+
             for (int i = 0; i < Items.Count; i++)
             {
                 var opt = Items[i];
-                var ft = MakeText(opt, i == _selected ? CjkBold : Cjk, dpi);
-                FormattedText ftc = opt.Count >= 0 ? MakeCount(opt, dpi) : null;
-                double iw = widths[i];
-                var r = new Rect(x, 0, iw, h);
-                _rects.Add(r);
+                bool sel = i == _selected;
+                var r = _rects[i];
+                var ft = MakeText(opt, sel ? CjkBold : Cjk, dpi, sel);
+                FormattedText ftc = opt.Count >= 0 ? MakeCount(opt, dpi, sel) : null;
 
                 if (Variant == SegVariant.Tabs)
                 {
-                    if (i == _hover && opt.Enabled) dc.DrawRectangle(hoverFill, null, new Rect(r.X, 2, r.Width, h - 4));
-                    double ty = (h - ft.Height) / 2 - 1;
+                    if (i == _hover && opt.Enabled && !sel)
+                    {
+                        dc.DrawRoundedRectangle(hoverFill, null, new Rect(r.X + 2, 3, Math.Max(0, r.Width - 4), Math.Max(0, h - 8)), 6, 6);
+                    }
+                    double ty = (h - ft.Height) / 2 - 1.5;
                     double tx = r.X + ItemPadding;
                     dc.DrawText(ft, new Point(tx, ty));
-                    if (ftc != null) dc.DrawText(ftc, new Point(tx + ft.Width + 5 + (CountSlotWidth - ftc.Width) / 2, ty + ft.Baseline - ftc.Baseline));
-                    if (i == _selected)
+                    if (ftc != null)
                     {
-                        underlinePoints.Add(new Point(r.X + ItemPadding - 4, h - 1.5));
-                        underlinePoints.Add(new Point(r.Right - ItemPadding + 4, h - 1.5));
+                        double cx = tx + ft.Width + 5;
+                        var badgeRect = new Rect(cx, ty + 1, CountSlotWidth, Math.Max(14, ft.Height - 2));
+                        dc.DrawRoundedRectangle(sel ? signalSoft : glassSunken, null, badgeRect, 6, 6);
+                        dc.DrawText(ftc, new Point(cx + (CountSlotWidth - ftc.Width) / 2, ty + ft.Baseline - ftc.Baseline));
                     }
                 }
                 else
                 {
-                    bool sel = i == _selected;
-                    if (i > 0) dc.DrawLine(new Pen(line, 1), new Point(r.X, 1), new Point(r.X, h - 1));
-                    // 填充左右各让 1px：左边不盖分隔线/外框，右边不盖右侧外框（最后一段最容易越界）
-                    double fillLeft = r.X + 1;
-                    double fillWidth = Math.Max(0, r.Width - (i > 0 ? 2 : 3));
-                    if (sel) dc.DrawRectangle(sunken, null, new Rect(fillLeft, 1, fillWidth, h - 2));
-                    else if (i == _hover) dc.DrawRectangle(hoverFill, null, new Rect(fillLeft, 1, fillWidth, h - 2));
-                    double ty = (h - ft.Height) / 2;
+                    if (i == _hover && !sel && opt.Enabled)
+                    {
+                        dc.DrawRoundedRectangle(hoverFill, null, new Rect(r.X + 1, 3, Math.Max(0, r.Width - 2), Math.Max(0, h - 6)), 6, 6);
+                    }
+                    double ty = (h - ft.Height) / 2 - 0.5;
                     double tx = r.X + (r.Width - ft.Width - (ftc != null ? 5 + CountSlotWidth : 0)) / 2;
                     dc.DrawText(ft, new Point(tx, ty));
-                    if (ftc != null) dc.DrawText(ftc, new Point(tx + ft.Width + 5 + (CountSlotWidth - ftc.Width) / 2, ty + ft.Baseline - ftc.Baseline));
+                    if (ftc != null)
+                        dc.DrawText(ftc, new Point(tx + ft.Width + 5 + (CountSlotWidth - ftc.Width) / 2, ty + ft.Baseline - ftc.Baseline));
                 }
-                x += iw;
             }
 
-            if (Variant == SegVariant.Tabs && underlinePoints.Count == 2)
+            // Tabs 底部滑行信号光条
+            if (Variant == SegVariant.Tabs && _selected >= 0 && _selected < _rects.Count && !double.IsNaN(_indX))
             {
-                var pen = new Pen(signal, 2);
-                dc.DrawLine(pen, underlinePoints[0], underlinePoints[1]);
-            }
-
-            // 外框最后画：避免最后一段的 hover/选中填充盖住右侧外框线
-            if (Variant == SegVariant.Boxed)
-            {
-                dc.DrawRectangle(null, new Pen(lineStrong, 1),
-                    new Rect(0.5, 0.5, Math.Max(0, ActualWidth - 1), Math.Max(0, h - 1)));
+                double left = _indX + Math.Max(4, ItemPadding - 4);
+                double width = Math.Max(10, _indW - Math.Max(8, (ItemPadding - 4) * 2));
+                dc.PushOpacity(0.45);
+                dc.DrawRoundedRectangle(signalGlow, null, new Rect(left - 4, h - 6, width + 8, 6), 3, 3);
+                dc.Pop();
+                dc.DrawRoundedRectangle(signalGlow, null, new Rect(left - 2, h - 4.5, width + 4, 4.5), 2.25, 2.25);
+                dc.DrawRoundedRectangle(signal, null, new Rect(left, h - 3.0, width, 2.5), 1.25, 1.25);
             }
         }
 
@@ -219,17 +334,20 @@ namespace LodStudio.Controls
             return b ?? Brushes.Black;
         }
 
-        private FormattedText MakeText(SegOption opt, Typeface face, double dpi)
+        private FormattedText MakeText(SegOption opt, Typeface face, double dpi, bool selected)
         {
+            Brush brush = selected ? Res("Brush.Ink") : Res("Brush.InkSoft");
             return new FormattedText(opt.Text ?? "", CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, face,
-                FontSize, Res("Brush.Ink"), dpi);
+                FontSize, brush, dpi);
         }
 
-        private FormattedText MakeCount(SegOption opt, double dpi)
+        private FormattedText MakeCount(SegOption opt, double dpi, bool selected)
         {
-            var tf = new Typeface(new FontFamily("Bahnschrift"), FontStyles.Normal, FontWeights.Normal, FontStretches.Normal);
+            var tf = new Typeface(new FontFamily("Bahnschrift"), FontStyles.Normal,
+                selected ? FontWeights.SemiBold : FontWeights.Normal, FontStretches.Normal);
+            Brush brush = selected ? Res("Brush.Signal") : Res("Brush.InkFaint");
             return new FormattedText(opt.Count.ToString(CultureInfo.InvariantCulture), CultureInfo.CurrentUICulture,
-                FlowDirection.LeftToRight, tf, CountFontSize, Res("Brush.InkFaint"), dpi);
+                FlowDirection.LeftToRight, tf, CountFontSize, brush, dpi);
         }
 
         protected override void OnMouseMove(MouseEventArgs e)

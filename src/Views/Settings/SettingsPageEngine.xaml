@@ -15,12 +15,12 @@
 
     <StackPanel>
         <TextBlock Text="引擎" Style="{StaticResource Set.PageTitle}" />
-        <TextBlock Text="减面由内置后端完成。开启试编译时可指定编译器。"
+        <TextBlock Text="减面用的是内置引擎。想在生成后试编译，可以在这里设置编译器。"
                    Style="{StaticResource Set.PageSub}" Margin="0,3,0,0" />
         <controls:Rule Margin="0,14,0,0" />
 
-        <TextBlock Text="减面后端" Style="{StaticResource Set.GroupTitle}" Margin="0,14,0,0" />
-        <TextBlock Text="内置 meshoptimizer · 按连通块减面，保留开放边界和轮廓极值。"
+        <TextBlock Text="内置减面引擎" Style="{StaticResource Set.GroupTitle}" Margin="0,14,0,0" />
+        <TextBlock Text="meshoptimizer 会分开处理各个相连的部件，保留开放边界和轮廓的关键点。"
                    Style="{StaticResource Set.Hint}" Margin="0,5,0,0" />
 
         <!-- ═══════════ 编译器 ═══════════ -->
@@ -32,7 +32,7 @@
                            Foreground="{DynamicResource Brush.InkSoft}" />
             </Border>
         </StackPanel>
-        <TextBlock Text="可选：只有开启「生成后试编译」才会用到。nekomdl.exe 通常与 studiomdl 放在一起。"
+        <TextBlock Text="开启「生成后试编译」才需要 nekomdl.exe。通常能在 studiomdl 旁边找到它。"
                    Style="{StaticResource Set.Hint}" Margin="0,3,0,0" />
 
         <TextBlock Text="nekomdl.exe 路径" Style="{StaticResource Set.Label}" Margin="0,10,0,0" />
@@ -44,11 +44,11 @@
             </Grid.ColumnDefinitions>
             <TextBox x:Name="TxtCompilerPath" Grid.Column="0" Style="{StaticResource Input.Mono}"
                      IsReadOnly="True" Height="30" VerticalContentAlignment="Center"
-                     Tag="未设置（点「浏览…」或「自动查找」）" ToolTipService.ShowDuration="30000" />
+                     Tag="还没选编译器，可浏览或自动查找" ToolTipService.ShowDuration="30000" />
             <Button x:Name="BtnBrowseCompiler" Grid.Column="1" Style="{StaticResource Set.SmallButton}"
                     Content="浏览…" Margin="8,0,0,0" ToolTip="选择 nekomdl.exe" />
             <Button x:Name="BtnFindCompiler" Grid.Column="2" Style="{StaticResource Set.SmallGhostButton}"
-                    Content="自动查找" Margin="4,0,0,0" ToolTip="在 Steam 库与常见工具目录里查找" />
+                    Content="自动查找" Margin="4,0,0,0" ToolTip="到 Steam 库和常见的工具文件夹里找" />
         </Grid>
 
         <StackPanel Orientation="Horizontal" Margin="0,8,0,0">

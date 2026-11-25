@@ -122,6 +122,8 @@ struct Geometry
 	float uvProjectionRadiusSquared;
 	float detailTolerance;
 	bool coarseCorrespondence;
+	int fidelityMode;
+	bool shadowMode;
 
 	Vec3 position(unsigned int i) const { return (xyz(positions[i]) - origin) * inverseScale; }
 	const float* vertexAttributes(unsigned int i) const { return &attributes[i * attributeStride]; }
@@ -301,6 +303,8 @@ inline bool additionalUvsMatch(const Geometry& geometry, const Face& from, const
 		Attr before = geometry.interpolateStream(stream, from, sample.barycentric);
 		Attr after = geometry.interpolateStream(stream, to, barycentric);
 		float tolerance = std::min(0.018f, 0.0075f + 0.003f * geometry.densityTolerance);
+		if (geometry.fidelityMode == 0)
+			tolerance *= 0.85f;
 		if (std::abs(before.f[0] - after.f[0]) > tolerance || std::abs(before.f[1] - after.f[1]) > tolerance ||
 		    secondaryUvOrientation(geometry, stream, from) != secondaryUvOrientation(geometry, stream, to))
 			return false;
@@ -311,6 +315,9 @@ inline bool additionalUvsMatch(const Geometry& geometry, const Face& from, const
 
 inline bool appearanceMatches(const Geometry& geometry, const Face& from, const Sample& sample, const Face& to, Vec3 barycentric)
 {
+	if (geometry.shadowMode)
+		return skinMatches(geometry, sample, to, barycentric);
+
 	auto attrs = geometry.interpolate(to, barycentric);
 	Vec3 normal = shadingNormal(geometry, to, attrs);
 	if (geometry.coarseCorrespondence)
@@ -327,6 +334,8 @@ inline bool appearanceMatches(const Geometry& geometry, const Face& from, const 
 	float detail = geometry.detailTolerance;
 	float normalAlignment = std::max((geometry.hasNormalMap ? 0.68f : 0.61f) - 0.12f * detail,
 		(geometry.hasNormalMap ? 0.94f : 0.90f) - 0.065f * density - 0.18f * detail);
+	if (geometry.fidelityMode == 0)
+		normalAlignment += (1.f - normalAlignment) * 0.2f;
 	if (dot(sample.normal, normal) < normalAlignment)
 		return false;
 
@@ -355,9 +364,12 @@ inline bool appearanceMatches(const Geometry& geometry, const Face& from, const 
 	if (geometry.hasUv)
 	{
 		float uvTolerance = std::min(0.032f, 0.0075f + 0.004f * density) + 0.028f * detail;
+		if (geometry.fidelityMode == 0)
+			uvTolerance *= 0.85f;
 		if (std::abs(attrs[6] - sample.attributes[6]) > uvTolerance ||
 		    std::abs(attrs[7] - sample.attributes[7]) > uvTolerance ||
-		    (from.uvOrientation == 0) != (to.uvOrientation == 0))
+		    (from.uvOrientation == 0) != (to.uvOrientation == 0) ||
+		    (geometry.fidelityMode == 2 && from.uvOrientation != to.uvOrientation))
 			return false;
 		if (from.uvOrientation != 0 && !tangentMatches(from, to, sample.normal, normal,
 		    std::max(0.57f, (geometry.hasNormalMap ? 0.82f : 0.75f) - 0.05f * density) - 0.12f * detail))
@@ -407,6 +419,11 @@ public:
 		return !nodes.empty() && matchNode(0, geometry, from, sample, maxDistanceSquared);
 	}
 
+	float distanceSquared(Vec3 point, const Face** closest = nullptr) const
+	{
+		return nodes.empty() ? INFINITY : nearest(0, point, INFINITY, closest);
+	}
+
 private:
 	std::vector<Node> nodes;
 
@@ -437,6 +454,37 @@ private:
 		return index;
 	}
 
+	float nearest(size_t index, Vec3 point, float best, const Face** closest) const
+	{
+		const Node& node = nodes[index];
+		if (node.bounds.distanceSquared(point) >= best)
+			return best;
+		if (node.right)
+		{
+			size_t first = index + 1, second = node.right;
+			if (nodes[second].bounds.distanceSquared(point) < nodes[first].bounds.distanceSquared(point))
+				std::swap(first, second);
+			best = nearest(first, point, best, closest);
+			return nearest(second, point, best, closest);
+		}
+		for (size_t i = node.first; i < node.last; ++i)
+		{
+			const Face& face = faces[i];
+			if (face.bounds.distanceSquared(point) < best)
+			{
+				Vec3 delta = interpolatePosition(face, closestBarycentric(face, point)) - point;
+				float distance = dot(delta, delta);
+				if (distance < best)
+				{
+					best = distance;
+					if (closest)
+						*closest = &face;
+				}
+			}
+		}
+		return best;
+	}
+
 	bool matchNode(size_t index, const Geometry& geometry, const Face& from, const Sample& sample, float maxDistanceSquared) const
 	{
 		const Node& node = nodes[index];
@@ -448,8 +496,9 @@ private:
 		for (size_t i = node.first; i < node.last; ++i)
 		{
 			const Face& face = faces[i];
+			float facing = geometry.shadowMode ? 0.65f : 0.65f - 0.19f * geometry.detailTolerance;
 			if (face.areaSquared <= 1e-24f || face.bounds.distanceSquared(sample.point) > maxDistanceSquared ||
-			    dot(from.geometricNormal, face.geometricNormal) < 0.65f - 0.19f * geometry.detailTolerance)
+			    dot(from.geometricNormal, face.geometricNormal) < facing)
 				continue;
 			Vec3 barycentric = closestBarycentric(face, sample.point);
 			Vec3 delta = interpolatePosition(face, barycentric) - sample.point;
@@ -480,6 +529,55 @@ private:
 		return false;
 	}
 };
+
+struct SurfaceDeviation
+{
+	unsigned int maxPpm;
+	unsigned int meanPpm;
+	size_t sampleCount;
+};
+
+inline SurfaceDeviation measureSurfaceDeviation(Geometry geometry, const std::vector<unsigned int>& sourceIndices,
+	const std::vector<unsigned int>& reducedIndices)
+{
+	if (sourceIndices.empty() || reducedIndices.empty())
+		return {};
+
+	geometry.hasUv = false;
+	const Surface original(geometry, sourceIndices), reduced(geometry, reducedIndices);
+	float maximumSquared = 0;
+	double sum = 0;
+	auto measure = [&](const Surface& from, const Surface& to) {
+		std::vector<float> cornerDistances(geometry.positions.size(), -1.f);
+		for (const Face& face : from.faces)
+		{
+			if (to.keys.count(face.key))
+				continue;
+			float distances[4] = {to.distanceSquared(interpolatePosition(face, {1.f / 3, 1.f / 3, 1.f / 3}))};
+			for (int i = 0; i < 3; ++i)
+			{
+				float& cached = cornerDistances[face.vertices[i]];
+				if (cached < 0)
+					cached = to.distanceSquared(face.position[i]);
+				distances[i + 1] = cached;
+			}
+			for (float distance : distances)
+			{
+				maximumSquared = std::max(maximumSquared, distance);
+				sum += std::sqrt(double(distance));
+			}
+		}
+	};
+	measure(original, reduced);
+	measure(reduced, original);
+	// The same four samples on identical triangles contribute exact zeros.
+	size_t count = (original.faces.size() + reduced.faces.size()) * 4;
+	auto ppm = [](double distance) {
+		return unsigned(std::min(double(std::numeric_limits<unsigned int>::max()),
+			std::round(distance * 1000000.0)));
+	};
+	return {ppm(std::sqrt(double(maximumSquared))), ppm(sum / count), count};
+}
 
 inline bool compareSamples(const Geometry& sourceGeometry, const Surface& from,
 	const Geometry& targetGeometry, const Surface& to, float maxDistanceSquared,
@@ -516,11 +614,17 @@ inline bool compareSamples(const Geometry& sourceGeometry, const Surface& from,
 		int relaxedProbes = 0, coarseProbes = 0;
 		for (Vec3 probe : probes)
 		{
-			auto attrs = sourceGeometry.interpolate(face, probe);
-			Sample sample = {interpolatePosition(face, probe), shadingNormal(sourceGeometry, face, attrs), attrs,
-				sourceGeometry.interpolateSkin(face, probe),
-				sourceGeometry.interpolateStream(sourceGeometry.tangentStream, face, probe),
-				sourceGeometry.interpolateStream(sourceGeometry.colorStream, face, probe).f[3], probe};
+			Sample sample = {};
+			sample.point = interpolatePosition(face, probe);
+			sample.barycentric = probe;
+			sample.skin = sourceGeometry.interpolateSkin(face, probe);
+			if (!sourceGeometry.shadowMode)
+			{
+				sample.attributes = sourceGeometry.interpolate(face, probe);
+				sample.normal = shadingNormal(sourceGeometry, face, sample.attributes);
+				sample.tangent = sourceGeometry.interpolateStream(sourceGeometry.tangentStream, face, probe);
+				sample.alpha = sourceGeometry.interpolateStream(sourceGeometry.colorStream, face, probe).f[3];
+			}
 			if (!to.matches(targetGeometry, face, sample, maxDistanceSquared))
 			{
 				if (relaxedGeometry && to.matches(*relaxedGeometry, face, sample, maxDistanceSquared))
@@ -535,6 +639,17 @@ inline bool compareSamples(const Geometry& sourceGeometry, const Surface& from,
 				}
 				for (unsigned int vertex : face.vertices)
 					locks[vertex] = meshopt_SimplifyVertex_Lock;
+				if (checkNewFaces && targetGeometry.fidelityMode == 2 && !targetGeometry.shadowMode)
+				{
+					// A rejected new face has already lost some original
+					// vertices. Keep the source triangle beneath the failed
+					// probe available on the next proposal.
+					const Face* closest = nullptr;
+					to.distanceSquared(sample.point, &closest);
+					if (closest)
+						for (unsigned int vertex : closest->vertices)
+							locks[vertex] = meshopt_SimplifyVertex_Lock;
+				}
 				accepted = false;
 				break;
 			}
@@ -598,7 +713,7 @@ inline bool validateVertexUpdates(const Geometry& original, const std::vector<un
 		if (displacement > maxMovement * maxMovement)
 		{
 			// Clamp the proposal before validation instead of discarding a region on one outlier.
-			float fraction = maxMovement / std::sqrt(displacement);
+			float fraction = 0.9999f * maxMovement / std::sqrt(displacement);
 			for (int k = 0; k < 3; ++k)
 				positions[i].f[k] = original.positions[i].f[k] +
 					(positions[i].f[k] - original.positions[i].f[k]) * fraction;
@@ -606,6 +721,12 @@ inline bool validateVertexUpdates(const Geometry& original, const std::vector<un
 				values[k] = before[k] + (values[k] - before[k]) * fraction;
 			delta = (xyz(positions[i]) - xyz(original.positions[i])) * original.inverseScale;
 			displacement = dot(delta, delta);
+			if (displacement > maxMovement * maxMovement)
+			{
+				positions[i] = original.positions[i];
+				std::copy(before, before + original.attributeStride, values);
+				continue;
+			}
 		}
 		if (original.hasNormals)
 		{
@@ -629,45 +750,71 @@ inline bool validateVertexUpdates(const Geometry& original, const std::vector<un
 	return moved;
 }
 
+// A rejected budget is the lower bound. Look for a smaller valid step from
+// the current accepted mesh, measured in whole triangles.
+template <typename Propose>
+inline bool bisectTarget(size_t rejected, size_t accepted, int trials, const Propose& propose)
+{
+	size_t low = rejected / 3, high = accepted / 3;
+	for (int trial = 0; trial < trials && high > low + 1; ++trial)
+	{
+		size_t middle = low + (high - low) / 2;
+		if (propose(middle * 3))
+			return true;
+		low = middle;
+	}
+	return false;
+}
+
 inline void tryVertexUpdates(ValidationResult& result, const std::vector<unsigned int>& source,
 	const Geometry& geometry, const Surface& original,
 	const float* weights, std::vector<unsigned char> locks, size_t target, size_t minimum,
 	float error, unsigned int options)
 {
 	const size_t fixedCount = result.indices.size();
-	if (geometry.colorStream || geometry.tangentStream || !geometry.additionalUvs.empty() || fixedCount <= target + 6)
+	if (geometry.shadowMode || geometry.colorStream || geometry.tangentStream ||
+	    !geometry.additionalUvs.empty() || fixedCount <= target + 6)
 		return;
 
-	const float radius = std::min(0.018f, error * 1.2f);
+	const float radius = std::min(0.018f, error * 1.2f) * (geometry.fidelityMode == 0 ? 0.85f : 1.f);
 	const float maxMovement = std::min(0.014f, radius) * (geometry.joints.empty() ? 1.f : 0.75f);
-	// Try a bounded set of smaller budgets from the accepted fixed-vertex result.
-	// Bone IDs and weights are inherited from the survivor and checked in both directions.
-	std::vector<unsigned int> fixed = result.indices;
+	Bounds originalBounds;
+	for (unsigned int i : source)
+		originalBounds.include(xyz(geometry.positions[i]));
 	result.triedUpdate = true;
-	auto propose = [&](const std::vector<unsigned int>& seed, size_t goal) {
-		auto indices = seed;
-		auto positions = geometry.positions;
-		auto attributes = geometry.attributes;
+	auto propose = [&](size_t goal, bool fromSource) {
+		bool progressive = !fromSource && !result.updatedVertices.empty();
+		auto indices = fromSource ? source : result.indices;
+		auto positions = progressive ? result.updatedPositions : geometry.positions;
+		auto attributes = progressive ? result.updatedAttributes : geometry.attributes;
 		auto attemptLocks = locks;
 		size_t count = meshopt_simplifyWithUpdate(indices.data(), indices.size(), positions[0].f,
 			positions.size(), sizeof(Attr), attributes.data(), geometry.attributeStride * sizeof(float),
 			weights, geometry.attributeStride, attemptLocks.data(), goal, error,
 			options | meshopt_SimplifyPreserveFolds, nullptr);
 		if (count < std::max(size_t(3), minimum) || count >= result.indices.size())
-			return;
+			return false;
 		indices.resize(count);
 		std::vector<unsigned char> changed(positions.size());
 		if (!validateVertexUpdates(geometry, indices, locks, positions, attributes, changed, maxMovement))
-			return;
+			return false;
+
+		Bounds updatedBounds;
+		for (unsigned int i : indices)
+			updatedBounds.include(xyz(positions[i]));
+		for (int axis = 0; axis < 3; ++axis)
+			if (updatedBounds.low.axis(axis) != originalBounds.low.axis(axis) ||
+			    updatedBounds.high.axis(axis) != originalBounds.high.axis(axis))
+				return false;
 
 		Geometry updated = {positions, attributes, geometry.joints, geometry.weights,
 			geometry.localToSource, geometry.colorStream, geometry.tangentStream, geometry.additionalUvs, geometry.attributeStride,
 			geometry.hasNormals, geometry.hasUv, geometry.hasNormalMap, geometry.origin, geometry.inverseScale,
-			geometry.densityTolerance, 0, 0, false};
+			geometry.densityTolerance, 0, 0, false, geometry.fidelityMode, false};
 		const Surface candidate(updated, indices);
 		if (!compareSamples(updated, candidate, geometry, original, radius * radius, attemptLocks, true, &changed) ||
 		    !compareSamples(geometry, original, updated, candidate, radius * radius, attemptLocks, false, &changed))
-			return;
+			return false;
 
 		result.indices.swap(indices);
 		result.updatedPositions.swap(positions);
@@ -675,18 +822,24 @@ inline void tryVertexUpdates(ValidationResult& result, const std::vector<unsigne
 		result.updatedVertices.swap(changed);
 		result.trianglesSavedByUpdate = (fixedCount - count) / 3;
 		result.keptOriginal = false;
+		return true;
 	};
-	for (float scale : {0.75f, 0.87f, 0.94f})
+	auto tryGoal = [&](size_t goal) {
+		return propose(goal, false) ||
+			(source.size() != result.indices.size() && propose(goal, true));
+	};
+	for (int pass = 0; pass < 2 && result.indices.size() > target + 6; ++pass)
 	{
-		size_t goal = std::max(target, size_t(std::ceil(fixedCount / 3 * scale)) * 3);
-		if (goal >= fixedCount)
-			continue;
-		propose(fixed, goal);
-		// Starting from the source can choose a different set of surviving vertices.
-		if (source.size() != fixed.size() && result.indices.size() > goal)
-			propose(source, goal);
-		if (result.trianglesSavedByUpdate > 0)
-			return;
+		size_t count = result.indices.size();
+		size_t rejected = target;
+		if (pass == 0)
+		{
+			// Start with a moderate step. Sweeping the gap from the source
+			// also lets meshoptimizer choose a different set of survivors.
+			rejected = std::max(target, size_t(std::ceil(count / 3 * 0.75)) * 3);
+		}
+		if (!tryGoal(rejected) && !bisectTarget(rejected, count, 5, tryGoal))
+			break;
 	}
 }
 
@@ -1098,6 +1251,20 @@ inline void tryWholePrimitive(std::vector<unsigned int>& best, const std::vector
 	// A small surface-area allowance for opaque LODs lets the candidate
 	// lose fine shading/UV0 detail while retaining skin and secondary UVs.
 	float approximateArea = opaque && !geometry.colorStream && !geometry.tangentStream ? 0.12f * strength : 0.f;
+	const bool highCompression = geometry.fidelityMode == 2;
+	float projectedTolerance = 0.039f + 0.017f * strength;
+	float supportTolerance = 0.022f;
+	if (highCompression)
+	{
+		distance = 0.023f + 0.02f * strength;
+		strict.detailTolerance = 0.15f;
+		relaxed.detailTolerance = 0.55f;
+		strict.uvProjectionRadiusSquared = relaxed.uvProjectionRadiusSquared = distance * distance * 0.64f;
+		relaxedArea = std::min(0.54f, relaxedArea + 0.08f);
+		approximateArea = 0;
+		projectedTolerance = 0.025f + 0.015f * strength;
+		supportTolerance = 0.012f + 0.006f * strength;
+	}
 
 	// An isolated decoration that contributes to the visible shape must
 	// still have its own triangles. A vertex shared with another island
@@ -1116,16 +1283,16 @@ inline void tryWholePrimitive(std::vector<unsigned int>& best, const std::vector
 				shared[vertex] = 1;
 			bounds.include(geometry.position(vertex));
 		}
-		prominent[i] = bounds.extent() > 0.045f;
+		prominent[i] = highCompression || bounds.extent() > 0.045f;
 	}
 
 	auto assess = [&](const std::vector<unsigned int>& indices, std::vector<unsigned char>& learnedLocks) {
 		const Surface reduced(geometry, indices);
-		if (!outline.matches(reduced, 0.039f + 0.017f * strength))
+		if (!outline.matches(reduced, projectedTolerance))
 			return false;
 		auto extents = outlineSupports(geometry, indices, true);
 		for (size_t axis = 0; axis < support.size(); ++axis)
-			if (support[axis] - extents[axis] > 0.022f)
+			if (support[axis] - extents[axis] > supportTolerance)
 				return false;
 
 		auto missing = prominent;
@@ -1152,14 +1319,15 @@ inline void tryWholePrimitive(std::vector<unsigned int>& best, const std::vector
 			costs[i] *= pass.normals;
 		costs[6] *= pass.uv;
 		costs[7] *= pass.uv;
+		const float retentions[] = {highCompression ? 0.f : 1.f, 0.68f, 0.81f, 0.92f};
 		size_t previous = best.size();
-		for (float retention : {0.68f, 0.81f, 0.92f})
+		for (float retention : retentions)
 		{
 			size_t goal = std::max(target, size_t(std::ceil(previous / 3 * retention)) * 3);
 			if (goal >= best.size())
 				continue;
 			auto trialLocks = locks;
-			for (int retry = 0; retry < 2; ++retry)
+			for (int retry = 0; retry < (highCompression ? 3 : 2); ++retry)
 			{
 				std::vector<unsigned int> indices(source.size());
 				size_t count = meshopt_simplifyWithAttributes(indices.data(), source.data(), source.size(),
@@ -1190,12 +1358,14 @@ inline ValidationResult reduce(const std::vector<unsigned int>& source, const Ge
 {
 	ValidationResult result;
 	const Surface original(geometry, source);
+	const bool highCompression = geometry.fidelityMode == 2;
+	const float fidelityScale = geometry.fidelityMode == 0 ? 0.85f : 1.f;
 	// The original surface remains the reference for every candidate.
-	const float radius = std::min(0.033f, std::min(0.018f, error * 1.2f) * (1 + 0.8f * densityPriority));
+	const float radius = fidelityScale * std::min(0.033f, std::min(0.018f, error * 1.2f) * (1 + 0.8f * densityPriority));
 	target = std::max(target, minimum);
 	// Some thin surfaces deliberately use outward shading normals on inward geometry.
 	// Anchor these authored triangles so simplification cannot extend the backside into adjacent faces.
-	if (geometry.hasNormals)
+	if (geometry.hasNormals && !geometry.shadowMode)
 		for (const Face& face : original.faces)
 		{
 			auto center = geometry.interpolate(face, {1.f/3, 1.f/3, 1.f/3});
@@ -1212,7 +1382,7 @@ inline ValidationResult reduce(const std::vector<unsigned int>& source, const Ge
 	std::array<float, 26> supports = {};
 	bool checkBoundary = false;
 	bool materialBoundaryLocked = sharedMaterialBorders;
-	bool permissive = false;
+	bool permissive = geometry.shadowMode;
 	bool preserveFolds = true;
 	bool normalizeOutline = false;
 	float boundaryTolerance = 0;
@@ -1223,6 +1393,29 @@ inline ValidationResult reduce(const std::vector<unsigned int>& source, const Ge
 	float relaxedAreaFraction = 0;
 	ProjectedOutline projectedOutline;
 	float projectedTolerance = 0;
+	if (geometry.shadowMode)
+	{
+		// Shadows may collapse shading wedges, but every candidate must keep
+		// the projected silhouette and the extrema of the original shape.
+		projectedOutline.prepare(original);
+		projectedTolerance = 0.015f;
+		normalizeOutline = true;
+		supports = outlineSupports(geometry, source, normalizeOutline);
+		outlineTolerance = 0.004f * fidelityScale;
+		if (!geometry.joints.empty())
+		{
+			std::vector<unsigned int> remap(geometry.positions.size());
+			meshopt_generatePositionRemap(remap.data(), geometry.positions[0].f, remap.size(), sizeof(Attr));
+			for (unsigned int i = 0; i < remap.size(); ++i)
+			{
+				unsigned int first = remap[i];
+				if (i != first &&
+				    (!std::equal(geometry.joints[i].f, geometry.joints[i].f + 4, geometry.joints[first].f) ||
+				     !std::equal(geometry.weights[i].f, geometry.weights[i].f + 4, geometry.weights[first].f)))
+					anchored[i] = anchored[first] = meshopt_SimplifyVertex_Lock;
+			}
+		}
+	}
 
 	auto attempt = [&](const std::vector<unsigned int>& input, size_t goal, std::vector<unsigned char>& locks,
 		const float* costs, float proposalError) {
@@ -1279,7 +1472,7 @@ inline ValidationResult reduce(const std::vector<unsigned int>& source, const Ge
 
 	auto search = [&](const float* costs, float proposalError, int steps, const std::vector<unsigned char>& baseLocks) {
 		auto locks = baseLocks;
-		if (!attempt(source, target, locks, costs, proposalError) && result.retried)
+		if (!attempt(source, target, locks, costs, proposalError) && locks != baseLocks)
 			attempt(source, target, locks, costs, proposalError);
 		if (permissive)
 			for (float retention : {0.70f, 0.82f, 0.90f, 0.95f})
@@ -1298,7 +1491,7 @@ inline ValidationResult reduce(const std::vector<unsigned int>& source, const Ge
 		for (int step = 0; step < steps && result.indices.size() > target; ++step)
 		{
 			size_t count = result.indices.size();
-			size_t medium = std::max(target, size_t(std::ceil(count / 3 * 0.80)) * 3);
+			size_t medium = std::max(target, size_t(std::ceil(count / 3 * (geometry.shadowMode ? 0.65 : 0.80))) * 3);
 			size_t gentle = std::max(target, size_t(std::ceil(count / 3 * 0.94)) * 3);
 			locks = baseLocks;
 			if (attempt(result.indices, medium, locks, costs, proposalError))
@@ -1306,6 +1499,13 @@ inline ValidationResult reduce(const std::vector<unsigned int>& source, const Ge
 			if (permissive)
 				locks = baseLocks;
 			if (attempt(result.indices, gentle, locks, costs, proposalError))
+				continue;
+			if (count > target + 6 && bisectTarget(medium, count, 5, [&](size_t goal) {
+				// Use fresh locks at each budget. A failed large proposal
+				// can touch many more vertices than a smaller valid step.
+				auto trialLocks = baseLocks;
+				return attempt(result.indices, goal, trialLocks, costs, proposalError);
+			}))
 				continue;
 			if (permissive)
 			{
@@ -1338,7 +1538,36 @@ inline ValidationResult reduce(const std::vector<unsigned int>& source, const Ge
 	if (densityPriority > 0 && result.indices.size() > target + 6)
 		search(weights, proposalError, 8, anchored);
 
-	if (deepReduction && result.indices.size() > target + 12)
+	if (!geometry.shadowMode && geometry.hasNormals && result.indices.size() > target + 6)
+	{
+		// Let low-curvature interiors choose cheaper collapses while pinning
+		// sharp junctions and favoring survivors on curved portions.
+		auto interiorLocks = anchored;
+		std::vector<Vec3> firstNormals(geometry.positions.size());
+		std::vector<unsigned int> remap(geometry.positions.size());
+		meshopt_generatePositionRemap(remap.data(), geometry.positions[0].f, remap.size(), sizeof(Attr));
+		for (const Face& face : original.faces)
+			for (unsigned int vertex : face.vertices)
+			{
+				unsigned int position = remap[vertex];
+				Vec3& normal = firstNormals[position];
+				if (dot(normal, normal) == 0)
+					normal = face.geometricNormal;
+				else if (dot(normal, face.geometricNormal) < 0.85f)
+					interiorLocks[position] |= meshopt_SimplifyVertex_Lock;
+				else if (dot(normal, face.geometricNormal) < 0.98f)
+					interiorLocks[position] |= meshopt_SimplifyVertex_Priority;
+			}
+		for (size_t i = 0; i < remap.size(); ++i)
+			interiorLocks[i] |= interiorLocks[remap[i]];
+		std::array<float, 8> costs;
+		std::copy(weights, weights + costs.size(), costs.begin());
+		for (size_t k = 0; k < 3; ++k)
+			costs[k] *= highCompression ? 0.45f : 0.65f;
+		search(costs.data(), proposalError * (highCompression ? 1.75f : 1.3f), 4, interiorLocks);
+	}
+
+	if (!geometry.shadowMode && deepReduction && result.indices.size() > target + 12)
 	{
 		// A different quadric weighting can find collapses that bypass UV-heavy failure regions.
 		// The same geometric and attribute acceptance limits apply to every proposal.
@@ -1359,7 +1588,7 @@ inline ValidationResult reduce(const std::vector<unsigned int>& source, const Ge
 			search(alternate.data(), proposalError * 1.8f, 6, anchored);
 		}
 	}
-	if (adaptiveBudget && result.indices.size() > target)
+	if ((adaptiveBudget || geometry.shadowMode) && result.indices.size() > target)
 	{
 		auto trySmallStep = [&](std::vector<unsigned char> locks, float candidateError) {
 			const size_t micro = std::max(target, result.indices.size() - 3);
@@ -1429,7 +1658,7 @@ inline ValidationResult reduce(const std::vector<unsigned int>& source, const Ge
 					borderLocks[i] = borderLocks[positionIds[i]] = meshopt_SimplifyVertex_Lock;
 
 			checkBoundary = true;
-			boundaryTolerance = std::min(0.003f, radius * 0.23f);
+			boundaryTolerance = std::min(0.003f * fidelityScale, radius * 0.23f);
 			auto learnedLocks = borderLocks;
 			if (!attempt(result.indices, target, learnedLocks, weights, proposalError))
 			{
@@ -1439,7 +1668,14 @@ inline ValidationResult reduce(const std::vector<unsigned int>& source, const Ge
 			}
 			checkBoundary = false;
 		}
-		if (originalBoundary.valid && result.indices.size() > target)
+		if (geometry.shadowMode && originalBoundary.valid && result.indices.size() > target)
+		{
+			checkBoundary = true;
+			boundaryTolerance = std::min(0.004f * fidelityScale, radius * 0.5f);
+			search(weights, proposalError * 3.f, 8, anchored);
+			checkBoundary = false;
+		}
+		if (!geometry.shadowMode && originalBoundary.valid && result.indices.size() > target)
 		{
 			std::vector<unsigned char> handedness(positionIds.size());
 			for (const Face& face : original.faces)
@@ -1508,18 +1744,22 @@ inline ValidationResult reduce(const std::vector<unsigned int>& source, const Ge
 					// wider UV/normal limits. Facing and skin checks still apply.
 					relaxedValidation.densityTolerance = validation.densityTolerance + 2.6f * distance;
 					relaxedValidation.uvProjectionRadiusSquared = validation.uvProjectionRadiusSquared;
-					relaxedAreaFraction = 0.24f * distance;
+					relaxedAreaFraction = (highCompression ? 0.32f : 0.24f) * distance;
 					// The same normalized disturbance has a much smaller footprint
 					// on a bead or trim piece than on its surrounding garment.
 					validation.detailTolerance = relaxedValidation.detailTolerance = detailStrength;
 					surfaceTolerance = std::max(surfaceTolerance, 0.29f * detailStrength);
 					boundaryTolerance = std::max(boundaryTolerance, 0.13f * detailStrength);
 				}
+				surfaceTolerance = std::max(radius, surfaceTolerance * fidelityScale);
+				boundaryTolerance *= fidelityScale;
+				validation.uvProjectionRadiusSquared *= fidelityScale * fidelityScale;
+				relaxedValidation.uvProjectionRadiusSquared = validation.uvProjectionRadiusSquared;
 
 				std::array<float, 8> costs;
 				std::copy(weights, weights + costs.size(), costs.begin());
 				for (size_t k = 0; k < 3; ++k)
-					costs[k] *= 0.5f;
+					costs[k] *= highCompression ? 0.42f : 0.5f;
 				for (size_t k = 6; k < 8; ++k)
 					costs[k] *= useDistance ? 0.5f - 0.35f * distance : 0.5f;
 				if (!useDistance)
@@ -1538,6 +1778,12 @@ inline ValidationResult reduce(const std::vector<unsigned int>& source, const Ge
 						locks[i] = (locks[i] & ~meshopt_SimplifyVertex_Lock) | meshopt_SimplifyVertex_Priority;
 				supports = outlineSupports(geometry, source, normalizeOutline);
 				outlineTolerance = (useDistance ? 1.f : 1.7f) * (boundaryTolerance + compact * 0.02f * distance);
+				if (highCompression)
+				{
+					projectedOutline.prepare(original);
+					projectedTolerance = 0.022f + 0.014f * distance;
+					outlineTolerance = std::min(outlineTolerance, 0.016f);
+				}
 				preserveFolds = false;
 				search(costs.data(), proposalError * 4.f, 8, locks);
 				for (size_t k = 0; k < 3; ++k)
@@ -1545,16 +1791,17 @@ inline ValidationResult reduce(const std::vector<unsigned int>& source, const Ge
 				search(costs.data(), proposalError * (compact > 0 ? 10.f : 7.f), 8, locks);
 
 				float coarse = useDistance ? farStrength(distance) : 0.f;
-				if (coarse > 0 && source.size() >= 96 * 3 && result.indices.size() > target)
+				if (coarse > 0 && geometry.fidelityMode != 0 && source.size() >= 96 * 3 && result.indices.size() > target)
 				{
 					// The ordinary candidates stay available. This additional pass
 					// can smooth local folds if the six projected outlines agree.
 					projectedOutline.prepare(original);
-					projectedTolerance = 0.035f + 0.025f * coarse;
+					if (!highCompression)
+						projectedTolerance = 0.035f + 0.025f * coarse;
 					float tolerance = std::max(detailStrength, 0.65f * coarse);
 					validation.detailTolerance = relaxedValidation.detailTolerance = tolerance;
 					surfaceTolerance = std::max(surfaceTolerance, 0.075f + 0.065f * coarse);
-					relaxedAreaFraction = std::max(relaxedAreaFraction, 0.39f * coarse);
+					relaxedAreaFraction = std::max(relaxedAreaFraction, (highCompression ? 0.46f : 0.39f) * coarse);
 					for (size_t k = 6; k < 8; ++k)
 						costs[k] *= 0.4f;
 					search(costs.data(), proposalError * (7.f + 4.f * coarse), 8, locks);

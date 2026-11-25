@@ -5,8 +5,7 @@ using System.Windows.Media;
 namespace LodStudio.Controls
 {
     /// <summary>
-    /// 刻度规：底部一条 1px 基线 + 向上短线（每 Step 一条，每 LongEvery 条加长）。
-    /// 用途：顶栏底边、LOD 阶梯图基线 —— 全程序只在这两处出现，作为"量具"语言，不做装饰性滥用。
+    /// 现代精密刻度规：极细渐变基线 + 柔和刻度线（仅用于顶栏和空态视觉锚点）。
     /// </summary>
     public sealed class TickStrip : FrameworkElement
     {
@@ -46,11 +45,12 @@ namespace LodStudio.Controls
         protected override void OnRender(DrawingContext dc)
         {
             double w = ActualWidth, h = Math.Max(2, ActualHeight);
+            if (w < 4) return;
             Brush b = TickBrush ?? TryFindResource("Brush.Tick") as Brush ?? Brushes.Gray;
+            dc.PushOpacity(0.55);
             var pen = new Pen(b, 1);
-            double step = Math.Max(3, Step);
+            double step = Math.Max(4, Step);
             int every = Math.Max(2, LongEvery);
-            dc.DrawLine(pen, new Point(0, h - 0.5), new Point(w, h - 0.5));
             int idx = 0;
             for (double x = 0.5; x < w; x += step, idx++)
             {
@@ -58,11 +58,12 @@ namespace LodStudio.Controls
                 if (len <= 0) continue;
                 dc.DrawLine(pen, new Point(x, h - 0.5), new Point(x, h - 0.5 - len));
             }
+            dc.Pop();
         }
     }
 
     /// <summary>
-    /// 四角方括号角标：只给"当前主作业区"用（本程序里只挂在作业队列面板上）。
+    /// 现代玻璃卡片顶部流光高光边（取代生硬的直角方括号，保留类契约兼容 XAML）。
     /// </summary>
     public sealed class CornerBrackets : FrameworkElement
     {
@@ -86,27 +87,20 @@ namespace LodStudio.Controls
         protected override void OnRender(DrawingContext dc)
         {
             double w = ActualWidth, h = ActualHeight;
-            if (w < 4 || h < 4) return;
-            Brush b = BracketBrush ?? TryFindResource("Brush.LineStrong") as Brush ?? Brushes.Gray;
-            var pen = new Pen(b, 1);
-            double l = Math.Min(BracketLength, Math.Min(w, h) / 2 - 1);
-            if (l <= 1) return;
-            // 左上
-            dc.DrawLine(pen, new Point(0.5, 0.5), new Point(l, 0.5));
-            dc.DrawLine(pen, new Point(0.5, 0.5), new Point(0.5, l));
-            // 右上
-            dc.DrawLine(pen, new Point(w - l, 0.5), new Point(w - 0.5, 0.5));
-            dc.DrawLine(pen, new Point(w - 0.5, 0.5), new Point(w - 0.5, l));
-            // 左下
-            dc.DrawLine(pen, new Point(0.5, h - 0.5), new Point(l, h - 0.5));
-            dc.DrawLine(pen, new Point(0.5, h - l), new Point(0.5, h - 0.5));
-            // 右下
-            dc.DrawLine(pen, new Point(w - l, h - 0.5), new Point(w - 0.5, h - 0.5));
-            dc.DrawLine(pen, new Point(w - 0.5, h - l), new Point(w - 0.5, h - 0.5));
+            if (w < 24 || h < 24) return;
+            Brush highlight = TryFindResource("Brush.PrismHighlight") as Brush ??
+                              TryFindResource("Brush.GlassHighlight") as Brush ?? BracketBrush ?? Brushes.Transparent;
+            // 顶部中央柔和镜面高光带，营造通透磨砂玻璃折光感
+            dc.DrawRoundedRectangle(highlight, null, new Rect(14, 0.5, Math.Max(0, w - 28), 1.5), 0.75, 0.75);
+            double inset = Math.Max(4, Math.Min(w / 2 - 2, BracketLength));
+            Brush warm = BracketBrush ?? TryFindResource("Brush.OrbitalAccent") as Brush ?? highlight;
+            Brush cool = BracketBrush ?? TryFindResource("Brush.OrbitalSecondary") as Brush ?? highlight;
+            dc.DrawEllipse(warm, null, new Point(inset, 3), 1.2, 1.2);
+            dc.DrawEllipse(cool, null, new Point(w - inset, 3), 1.2, 1.2);
         }
     }
 
-    /// <summary>水平细规：两端带小方块的 1px 线（分节用；本程序用在面板头下方与设置分组）。</summary>
+    /// <summary>现代柔光渐变分割线。</summary>
     public sealed class Rule : FrameworkElement
     {
         public static readonly DependencyProperty EndsProperty = DependencyProperty.Register(
@@ -134,16 +128,18 @@ namespace LodStudio.Controls
             Brush b = RuleBrush ?? TryFindResource("Brush.Line") as Brush ?? Brushes.Gray;
             var pen = new Pen(b, 1);
             double y = h / 2;
+            dc.PushOpacity(0.75);
             if (Ends)
             {
-                dc.DrawRectangle(b, null, new Rect(0, y - 2, 4, 4));
-                dc.DrawRectangle(b, null, new Rect(w - 4, y - 2, 4, 4));
+                dc.DrawEllipse(b, null, new Point(2, y), 2, 2);
+                dc.DrawEllipse(b, null, new Point(w - 2, y), 2, 2);
                 dc.DrawLine(pen, new Point(8, y), new Point(w - 8, y));
             }
             else
             {
                 dc.DrawLine(pen, new Point(0, y), new Point(w, y));
             }
+            dc.Pop();
         }
     }
 }

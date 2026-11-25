@@ -14,7 +14,7 @@
         TextOptions.TextFormattingMode="Ideal" TextOptions.TextRenderingMode="ClearType">
 
     <shell:WindowChrome.WindowChrome>
-        <shell:WindowChrome CaptionHeight="48" ResizeBorderThickness="6"
+        <shell:WindowChrome CaptionHeight="52" ResizeBorderThickness="6"
                             CornerRadius="0" GlassFrameThickness="0"
                             UseAeroCaptionButtons="False" />
     </shell:WindowChrome.WindowChrome>
@@ -27,93 +27,114 @@
         </ResourceDictionary>
     </Window.Resources>
 
-    <Border x:Name="RootBorder" Background="{DynamicResource Brush.Canvas}"
-            BorderBrush="{DynamicResource Brush.WindowBorder}" BorderThickness="1">
-        <Grid>
-            <Grid.RowDefinitions>
-                <RowDefinition Height="48" />
-                <RowDefinition Height="*" />
-                <RowDefinition Height="56" />
-            </Grid.RowDefinitions>
-
-            <!-- ═══════════════════ 标题栏（WindowChrome CaptionHeight=48） ═══════════════════ -->
-            <Grid Grid.Row="0" Background="{DynamicResource Brush.Canvas}">
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Left" VerticalAlignment="Center"
-                            Margin="16,0,0,0">
-                    <Border Width="4" Height="18" Background="{DynamicResource Brush.Signal}" VerticalAlignment="Center" />
-                    <TextBlock Text="设置" Style="{StaticResource Text.PageTitle}" Margin="10,0,0,0"
-                               VerticalAlignment="Center" />
-                    <TextBlock Text="PREFERENCES" FontFamily="{StaticResource Font.Latin}"
-                               FontSize="{StaticResource FS.BrandLatin}" Foreground="{DynamicResource Brush.InkFaint}"
-                               Margin="10,3,0,0" VerticalAlignment="Center" />
-                </StackPanel>
-
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center"
-                            Margin="0,0,4,0">
-                    <!-- "已保存"脉冲：固定宽度容器，出现/消失不挤动关闭按钮 -->
-                    <Grid x:Name="SavedHost" Width="112" Height="24" VerticalAlignment="Center"
-                          IsHitTestVisible="False">
-                        <Border x:Name="SavedPill" HorizontalAlignment="Right" VerticalAlignment="Center"
-                                Background="{DynamicResource Brush.OkSoft}" Padding="8,2,8,2" Opacity="0">
-                            <StackPanel Orientation="Horizontal">
-                                <controls:Icon x:Name="SavedIcon" Kind="Check" Size="10"
-                                               IconBrush="{DynamicResource Brush.Ok}" VerticalAlignment="Center" />
-                                <TextBlock x:Name="SavedText" Text="已保存" FontSize="{StaticResource FS.Micro}"
-                                           Foreground="{DynamicResource Brush.Ok}" Margin="5,0,0,0"
-                                           VerticalAlignment="Center" />
-                            </StackPanel>
-                        </Border>
-                    </Grid>
-
-                    <Border Width="1" Height="20" Background="{DynamicResource Brush.Line}" Margin="2,0,10,0" />
-                    <Button x:Name="BtnCloseWindow" Style="{StaticResource WindowButtonClose}" Width="40" Height="40"
-                            Click="OnCloseClick" ToolTip="关闭（Esc）"
-                            shell:WindowChrome.IsHitTestVisibleInChrome="True">
-                        <controls:Icon Kind="Close" Size="11" IconBrush="{DynamicResource Brush.InkSoft}" />
-                    </Button>
-                </StackPanel>
-
-                <Border Height="1" VerticalAlignment="Bottom" Background="{DynamicResource Brush.Line}" />
-            </Grid>
-
-            <!-- ═══════════════════ 主体：左导航 + 右侧内容 ═══════════════════ -->
-            <Grid Grid.Row="1">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="208" />
-                    <ColumnDefinition Width="1" />
-                    <ColumnDefinition Width="*" />
-                </Grid.ColumnDefinitions>
-
-                <Border Grid.Column="0" Background="{DynamicResource Brush.Panel}">
-                    <ListBox x:Name="NavList" Style="{StaticResource Set.NavList}" Margin="0,8,0,0" />
-                </Border>
-                <Border Grid.Column="1" Background="{DynamicResource Brush.Line}" />
-
-                <ScrollViewer x:Name="PageScroll" Grid.Column="2" Background="{DynamicResource Brush.Panel}"
-                              VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
-                              Focusable="False" Padding="24,20,24,28">
-                    <Grid x:Name="PageHost" MaxWidth="620" HorizontalAlignment="Left" />
-                </ScrollViewer>
-            </Grid>
-
-            <!-- ═══════════════════ 底栏 ═══════════════════ -->
-            <Grid Grid.Row="2" Background="{DynamicResource Brush.Canvas}">
-                <Border Height="1" VerticalAlignment="Top" Background="{DynamicResource Brush.Line}" />
-                <TextBlock Text="设置会即时保存并应用" Style="{StaticResource Text.Small}"
-                           Margin="20,0,240,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center"
-                            Margin="0,0,20,0">
-                    <Button x:Name="BtnOpenSettingsFolder" Style="{StaticResource Btn.Ghost}" Height="30"
-                            Padding="10,0,10,0" Click="OnOpenSettingsFolderClick">
-                        <StackPanel Orientation="Horizontal">
-                            <controls:Icon Kind="Folder" Size="13" IconBrush="{DynamicResource Brush.InkSoft}" />
-                            <TextBlock Text="打开设置文件夹" Margin="7,0,0,0" VerticalAlignment="Center" />
-                        </StackPanel>
-                    </Button>
-                    <Button x:Name="BtnCloseFooter" Style="{StaticResource Btn.Secondary}" Width="96" Height="30"
-                            Content="关闭" Margin="8,0,0,0" Click="OnCloseClick" />
-                </StackPanel>
-            </Grid>
+    <Grid>
+        <!-- 极光毛玻璃底色 -->
+        <Grid Background="{DynamicResource Brush.Canvas}" IsHitTestVisible="False" ClipToBounds="True">
+            <Ellipse Width="520" Height="420" HorizontalAlignment="Left" VerticalAlignment="Top"
+                     Margin="-160,-180,0,0" Fill="{DynamicResource Brush.AuroraPrimary}" />
+            <Ellipse Width="560" Height="440" HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                     Margin="0,0,-160,-180" Fill="{DynamicResource Brush.AuroraSecondary}" />
+            <Ellipse Width="470" Height="360" HorizontalAlignment="Right" VerticalAlignment="Top"
+                     Margin="0,-120,34,0" Fill="{DynamicResource Brush.AuroraGold}" IsHitTestVisible="False" />
         </Grid>
-    </Border>
+
+        <Border x:Name="RootBorder" Background="{DynamicResource Brush.WindowGlass}"
+                BorderBrush="{DynamicResource Brush.WindowBorder}" BorderThickness="1">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="52" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="58" />
+                </Grid.RowDefinitions>
+
+                <!-- ═══════════════════ 标题栏 ═══════════════════ -->
+                <Grid Grid.Row="0" Background="{DynamicResource Brush.GlassHeader}">
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Left" VerticalAlignment="Center"
+                                Margin="18,0,0,0">
+                        <Border Width="4" Height="18" CornerRadius="2" Background="{DynamicResource Brush.Signal}" VerticalAlignment="Center" />
+                        <TextBlock Text="设置" Style="{StaticResource Text.ArtPageTitle}" Margin="10,0,0,0"
+                                   VerticalAlignment="Center" />
+                        <TextBlock Text="P R E F E R E N C E S" Style="{StaticResource Text.ArtLatinTag}"
+                                   Margin="10,3,0,0" VerticalAlignment="Center" />
+                    </StackPanel>
+
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                Margin="0,0,8,0">
+                        <Grid x:Name="SavedHost" Width="120" Height="26" VerticalAlignment="Center"
+                              IsHitTestVisible="False">
+                            <Border x:Name="SavedPill" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                    CornerRadius="12" Background="{DynamicResource Brush.OkSoft}" Padding="10,3,10,3"
+                                    Opacity="0" RenderTransformOrigin="0.5,0.5">
+                                <Border.RenderTransform>
+                                    <ScaleTransform x:Name="SavedScale" />
+                                </Border.RenderTransform>
+                                <StackPanel Orientation="Horizontal">
+                                    <controls:Icon x:Name="SavedIcon" Kind="Check" Size="10"
+                                                   IconBrush="{DynamicResource Brush.Ok}" VerticalAlignment="Center" />
+                                    <TextBlock x:Name="SavedText" Text="已保存" FontSize="{StaticResource FS.Micro}"
+                                               Foreground="{DynamicResource Brush.Ok}" Margin="5,0,0,0"
+                                               VerticalAlignment="Center" />
+                                </StackPanel>
+                            </Border>
+                        </Grid>
+
+                        <Border Width="1" Height="18" Background="{DynamicResource Brush.Line}" Margin="6,0,8,0" Opacity="0.7" />
+                        <Button x:Name="BtnCloseWindow" Style="{StaticResource WindowButtonClose}" Width="36" Height="34"
+                                Click="OnCloseClick" ToolTip="关闭（Esc）"
+                                shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                            <controls:Icon Kind="Close" Size="11" IconBrush="{DynamicResource Brush.InkSoft}" />
+                        </Button>
+                    </StackPanel>
+
+                    <Border Height="1" VerticalAlignment="Bottom" Background="{DynamicResource Brush.Line}" Opacity="0.65" />
+                </Grid>
+
+                <!-- ═══════════════════ 主体：毛玻璃侧边导航 + 悬浮玻璃内容卡 ═══════════════════ -->
+                <Grid Grid.Row="1" Margin="14,12,14,12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="206" />
+                        <ColumnDefinition Width="12" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+
+                    <Border Grid.Column="0" Style="{StaticResource Card.Glass}">
+                        <ListBox x:Name="NavList" Style="{StaticResource Set.NavList}" Margin="0,10,0,10" />
+                    </Border>
+
+                    <Border Grid.Column="2" Style="{StaticResource Card.Glass}">
+                        <Border.Effect>
+                            <DropShadowEffect BlurRadius="18" ShadowDepth="4" Direction="270" Opacity="0.14" Color="{DynamicResource Color.ShadowColor}" />
+                        </Border.Effect>
+                        <Grid>
+                            <controls:CornerBrackets IsHitTestVisible="False" BracketLength="10" />
+                            <ScrollViewer x:Name="PageScroll" Background="Transparent"
+                                          VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                                          Focusable="False" Padding="24,20,24,28">
+                                <Grid x:Name="PageHost" MaxWidth="620" HorizontalAlignment="Left" />
+                            </ScrollViewer>
+                        </Grid>
+                    </Border>
+                </Grid>
+
+                <!-- ═══════════════════ 底栏 ═══════════════════ -->
+                <Grid Grid.Row="2" Background="{DynamicResource Brush.GlassHeader}">
+                    <Border Height="1" VerticalAlignment="Top" Background="{DynamicResource Brush.Line}" Opacity="0.65" />
+                    <TextBlock Text="设置会即时保存并应用" Style="{StaticResource Text.Small}"
+                               Margin="20,0,240,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                Margin="0,0,18,0">
+                        <Button x:Name="BtnOpenSettingsFolder" Style="{StaticResource Btn.Ghost}" Height="32"
+                                Padding="10,0,10,0" Click="OnOpenSettingsFolderClick">
+                            <StackPanel Orientation="Horizontal">
+                                <controls:Icon Kind="Folder" Size="13" IconBrush="{DynamicResource Brush.InkSoft}" />
+                                <TextBlock Text="打开设置文件夹" Margin="7,0,0,0" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Button>
+                        <Button x:Name="BtnCloseFooter" Style="{StaticResource Btn.Secondary}" Width="96" Height="32"
+                                Content="关闭" Margin="8,0,0,0" Click="OnCloseClick" />
+                    </StackPanel>
+                </Grid>
+            </Grid>
+        </Border>
+    </Grid>
 </Window>

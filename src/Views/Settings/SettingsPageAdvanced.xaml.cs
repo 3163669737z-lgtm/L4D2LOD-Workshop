@@ -19,12 +19,19 @@ namespace LodStudio.Views.Settings
         public SettingsPageAdvanced()
         {
             InitializeComponent();
+            SegProfile.SetItems(new[]
+            {
+                new SegOption("轮廓精保"),
+                new SegOption("均衡高效"),
+                new SegOption("极致减面")
+            }, 1);
+            SegShadowMode.SetItems(new[] { new SegOption("独立阴影"), new SegOption("复用已有 LOD") }, 0);
         }
 
         protected override void OnAttached()
         {
-            ChkQuality.Checked += OnQualityChanged;
-            ChkQuality.Unchecked += OnQualityChanged;
+            SegProfile.SelectedIndexChanged += OnProfileChanged;
+            SegShadowMode.SelectedIndexChanged += OnShadowModeChanged;
             ChkAdaptiveBudget.Checked += OnAdaptiveBudgetChanged;
             ChkAdaptiveBudget.Unchecked += OnAdaptiveBudgetChanged;
             ChkVertexUpdates.Checked += OnVertexUpdatesChanged;
@@ -37,15 +44,34 @@ namespace LodStudio.Views.Settings
             ChkCompile.Unchecked += OnCompileChanged;
             ChkNofacial.Checked += OnNofacialChanged;
             ChkNofacial.Unchecked += OnNofacialChanged;
+            ChkShadowLod.Checked += OnShadowLodChanged;
+            ChkShadowLod.Unchecked += OnShadowLodChanged;
             ChkSkipMain.Checked += OnSkipMainChanged;
             ChkSkipMain.Unchecked += OnSkipMainChanged;
             BtnPickSkip.Click += OnPickSkip;
+            TxtCollapseBones.LostKeyboardFocus += delegate { SaveCollapseBones(); };
+            TxtCollapseBones.KeyDown += OnCollapseBonesKeyDown;
+            BtnFillL4d2Hands.Click += OnFillL4d2Hands;
 
+            Win.AttachNumberBox(TxtShadowRatio, 5, 60,
+                () => ShadowRatioPercent, v => Settings.ShadowLodRatio = v / 100.0, false);
+            Win.AttachNumberBox(TxtShadowReuseLevel, 0, QcWriter.MaxVisibleLodsWithShadow,
+                () => Settings.ShadowLodReuseLevel, v => Settings.ShadowLodReuseLevel = v, false);
+            Win.AttachNumberBox(TxtNoFacialFrom, 1, LodPlan.MaxLevels,
+                () => Settings.NoFacialFromLevel, v => Settings.NoFacialFromLevel = v, false);
+            Win.AttachNumberBox(TxtCollapseFrom, 1, LodPlan.MaxLevels,
+                () => Settings.CollapseBonesFromLevel, v => Settings.CollapseBonesFromLevel = v, false);
+            Win.AttachNumberBox(TxtAutoTarget, 1000, 200000,
+                () => Settings.AutoTargetTriangles, v => Settings.AutoTargetTriangles = v, false);
+            Win.AttachNumberBox(TxtAutoMinSavings, 1, 50,
+                () => Settings.AutoMinSavingsPercent, v => Settings.AutoMinSavingsPercent = v, false);
             Win.AttachNumberBox(TxtWorkers, 0, 16,
                 delegate { return Settings.Workers; },
                 delegate (int v) { Settings.Workers = v; },
                 false);
         }
+
+        private int ShadowRatioPercent => (int)Math.Round(Settings.ShadowLodRatio * 100.0, MidpointRounding.AwayFromZero);
 
         public override void SyncFromSettings()
         {
@@ -53,14 +79,24 @@ namespace LodStudio.Views.Settings
             Syncing = true;
             try
             {
-                ChkQuality.IsChecked = Settings.QualityFirst;
+                SegProfile.SelectedIndex = Settings.EffectiveReductionProfile();
                 ChkAdaptiveBudget.IsChecked = Settings.AdaptiveTriangleBudget;
                 ChkVertexUpdates.IsChecked = Settings.AllowVertexUpdates;
                 TxtKeepOriginalModels.Text = Settings.KeepOriginalModels;
                 ChkForce.IsChecked = Settings.ForceOverwriteLod;
                 ChkCompile.IsChecked = Settings.CompileAfter;
                 ChkNofacial.IsChecked = Settings.NoFacial;
+                TxtNoFacialFrom.Text = Settings.NoFacialFromLevel.ToString(CultureInfo.InvariantCulture);
+                ChkShadowLod.IsChecked = Settings.GenerateShadowLod;
+                SegShadowMode.SelectedIndex = Settings.ShadowLodMode;
+                TxtShadowRatio.Text = ShadowRatioPercent.ToString(CultureInfo.InvariantCulture);
+                TxtShadowReuseLevel.Text = Settings.ShadowLodReuseLevel.ToString(CultureInfo.InvariantCulture);
+                RefreshShadowPanels();
                 ChkSkipMain.IsChecked = Settings.SkipMainModel;
+                TxtCollapseBones.Text = Settings.CollapseBones;
+                TxtCollapseFrom.Text = Settings.CollapseBonesFromLevel.ToString(CultureInfo.InvariantCulture);
+                TxtAutoTarget.Text = Settings.AutoTargetTriangles.ToString(CultureInfo.InvariantCulture);
+                TxtAutoMinSavings.Text = Settings.AutoMinSavingsPercent.ToString(CultureInfo.InvariantCulture);
                 TxtWorkers.Text = Settings.Workers.ToString(CultureInfo.InvariantCulture);
                 UpdateSkipUi();
             }
@@ -69,10 +105,11 @@ namespace LodStudio.Views.Settings
 
         // ─────────────────────────── 开关 ───────────────────────────
 
-        private void OnQualityChanged(object sender, RoutedEventArgs e)
+        private void OnProfileChanged(object sender, EventArgs e)
         {
             if (Syncing || Settings == null) return;
-            Settings.QualityFirst = ChkQuality.IsChecked == true;
+            Settings.ReductionProfile = SegProfile.SelectedIndex;
+            Settings.QualityFirst = Settings.ReductionProfile != 2;
             Apply(false);
         }
 
@@ -126,6 +163,50 @@ namespace LodStudio.Views.Settings
         {
             if (Syncing || Settings == null) return;
             Settings.NoFacial = ChkNofacial.IsChecked == true;
+            Apply(false);
+        }
+
+        private void OnShadowLodChanged(object sender, RoutedEventArgs e)
+        {
+            if (Syncing || Settings == null) return;
+            Settings.GenerateShadowLod = ChkShadowLod.IsChecked == true;
+            Apply(false);
+        }
+
+        private void OnShadowModeChanged(object sender, EventArgs e)
+        {
+            if (Syncing || Settings == null) return;
+            Settings.ShadowLodMode = SegShadowMode.SelectedIndex;
+            RefreshShadowPanels();
+            Apply(false);
+        }
+
+        private void RefreshShadowPanels()
+        {
+            bool reuse = Settings.ShadowLodMode == (int)ShadowLodMode.ReuseExistingLod;
+            PanelShadowRatio.Visibility = reuse ? Visibility.Collapsed : Visibility.Visible;
+            PanelShadowReuse.Visibility = reuse ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        private void OnCollapseBonesKeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key != Key.Enter) return;
+            e.Handled = true;
+            SaveCollapseBones();
+        }
+
+        private void OnFillL4d2Hands(object sender, RoutedEventArgs e)
+        {
+            TxtCollapseBones.Text = "ValveBiped.Bip01_L_Hand|ValveBiped.Bip01_R_Hand";
+            SaveCollapseBones();
+        }
+
+        private void SaveCollapseBones()
+        {
+            if (Syncing || Settings == null) return;
+            string bones = TxtCollapseBones.Text.Trim();
+            if (bones == Settings.CollapseBones) return;
+            Settings.CollapseBones = bones;
             Apply(false);
         }
 

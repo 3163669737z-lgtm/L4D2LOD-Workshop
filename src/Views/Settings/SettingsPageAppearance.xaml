@@ -13,15 +13,14 @@
         </ResourceDictionary>
     </settings:SettingsPageBase.Resources>
 
-    <StackPanel>
+    <StackPanel MinWidth="540">
         <TextBlock Text="外观" Style="{StaticResource Set.PageTitle}" />
-        <TextBlock Text="浅色「日测」与暗色「夜测」两套令牌；信号橙只给动作、当前与进度。"
+        <TextBlock Text="选一个看着舒服的主题，也可以调节界面动效。下方可以预览当前配色。"
                    Style="{StaticResource Set.PageSub}" Margin="0,3,0,0" />
-        <controls:Rule Margin="0,14,0,0" />
 
         <!-- ═══════════ 主题 ═══════════ -->
-        <TextBlock Text="主题" Style="{StaticResource Set.GroupTitle}" Margin="0,14,0,0" />
-        <settings:SettingRow Title="配色模式" Hint="「跟随系统」会读取 Windows 的应用模式（浅色 / 暗色）。">
+        <TextBlock Text="主题" Style="{StaticResource Set.GroupTitle}" Margin="0,10,0,0" />
+        <settings:SettingRow Title="配色模式" Hint="选「跟随系统」，主题就会随 Windows 的应用模式切换。">
             <Border Style="{StaticResource Set.FocusFrame}">
                 <controls:Segmented x:Name="SegTheme" Variant="Boxed" Height="30" FontSize="11.5" ItemPadding="14" />
             </Border>
@@ -31,18 +30,28 @@
             <StackPanel>
                 <TextBlock Text="界面动效" Style="{StaticResource Set.Label}" />
                 <TextBlock x:Name="TxtAnimHint" Style="{StaticResource Set.Hint}" Margin="0,2,0,0"
-                           Text="只用于状态反馈（hover、面板展开、Toast）；没有入场动画。" />
+                           Text="开启后会有玻璃高光、页面切换和控件动效。" />
             </StackPanel>
         </CheckBox>
 
         <!-- ═══════════ 主题示意 ═══════════ -->
-        <controls:Rule Margin="0,16,0,0" />
-        <TextBlock Text="主题示意" Style="{StaticResource Set.GroupTitle}" Margin="0,12,0,0" />
-        <TextBlock Text="下面是当前主题的真实令牌与控件状态，切换主题会立即跟着变。"
-                   Style="{StaticResource Set.Hint}" Margin="0,3,0,0" />
+        <controls:Rule Margin="0,6,0,0" />
+        <TextBlock Text="主题预览" Style="{StaticResource Set.GroupTitle}" Margin="0,7,0,0" />
 
-        <Border Style="{StaticResource Set.Card}" Margin="0,10,0,0">
+        <Border Style="{StaticResource Set.Card}" Margin="0,6,0,0" Padding="14,8">
             <StackPanel>
+                <Border Background="{DynamicResource Brush.GlassElevated}" BorderBrush="{DynamicResource Brush.PrismBorder}"
+                        BorderThickness="1" CornerRadius="7" Padding="9,0,9,1" Margin="0,0,0,7">
+                    <TextBlock Foreground="{DynamicResource Brush.InkSoft}" TextTrimming="CharacterEllipsis">
+                        <Run Text="远景曜境" FontFamily="{DynamicResource Font.ArtDisplay}" FontSize="15"
+                             FontWeight="SemiBold" Foreground="{DynamicResource Brush.Ink}" /><Run Text="&#160; · &#160;" />
+                        <Run Text="FARSIGHT ATELIER" FontFamily="{DynamicResource Font.ArtLatin}" FontSize="10"
+                             FontWeight="SemiBold" /><Run Text="&#160; · &#160;" />
+                        <Run Text="Precision Silhouette" FontFamily="{DynamicResource Font.Script}" FontSize="17"
+                             Foreground="{DynamicResource Brush.Signal}" />
+                    </TextBlock>
+                </Border>
+
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
@@ -66,7 +75,7 @@
                     </StackPanel>
                     <StackPanel Grid.Column="2" Margin="0,0,10,0">
                         <Border Style="{StaticResource Set.Swatch}" Background="{DynamicResource Brush.Line}" />
-                        <TextBlock Text="发丝线 Line" Style="{StaticResource Set.Hint}" Margin="0,3,0,0" />
+                        <TextBlock Text="分隔线 Line" Style="{StaticResource Set.Hint}" Margin="0,3,0,0" />
                         <TextBlock x:Name="HexLine" Style="{StaticResource Set.Mono}" FontSize="10.5"
                                    Foreground="{DynamicResource Brush.InkFaint}" Margin="0,0,0,0" />
                     </StackPanel>
@@ -84,37 +93,40 @@
                     </StackPanel>
                 </Grid>
 
-                <Border Height="1" Background="{DynamicResource Brush.Line}" Margin="0,10,0,0" />
+                <Grid Margin="0,5,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button Style="{StaticResource Btn.Primary}" Height="30" Padding="14,0,14,0" Content="开始生成"
+                                IsHitTestVisible="False" Focusable="False" />
+                        <Button Style="{StaticResource Btn.Secondary}" Height="30" Padding="14,0,14,0" Content="扫描预览"
+                                Margin="8,0,0,0" IsHitTestVisible="False" Focusable="False" />
+                        <TextBlock Text="实心突出主要操作，描边用于辅助操作" Style="{StaticResource Set.Hint}"
+                                   Margin="12,0,0,0" VerticalAlignment="Center" />
+                    </StackPanel>
+                    <CheckBox Grid.Column="1" Style="{StaticResource Set.Toggle}" IsChecked="True"
+                              IsHitTestVisible="False" Focusable="False">
+                        <TextBlock Text="已开启" Style="{StaticResource Set.Label}" />
+                    </CheckBox>
+                </Grid>
 
-                <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-                    <Button Style="{StaticResource Btn.Primary}" Height="30" Padding="14,0,14,0" Content="开始生成"
-                            IsHitTestVisible="False" Focusable="False" />
-                    <Button Style="{StaticResource Btn.Secondary}" Height="30" Padding="14,0,14,0" Content="扫描预览"
-                            Margin="8,0,0,0" IsHitTestVisible="False" Focusable="False" />
-                    <TextBlock Text="实心 = 主动作，描边 = 次要动作" Style="{StaticResource Set.Hint}"
-                               Margin="12,0,0,0" VerticalAlignment="Center" />
-                </StackPanel>
-
-                <CheckBox Style="{StaticResource Set.Toggle}" Margin="0,8,0,0" IsChecked="True"
-                          IsHitTestVisible="False" Focusable="False">
-                    <TextBlock Text="开关：信号色表示当前已开启" Style="{StaticResource Set.Label}" />
-                </CheckBox>
-
-                <controls:SegmentedProgress Height="4" Value="0.62" Margin="0,8,0,0" />
-
-                <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
-                    <Border Width="2" Background="{DynamicResource Brush.Signal}" Margin="0,1,0,0" />
-                    <TextBlock Text="信号色只给动作、当前与进度；其余用石墨中性色与语义色（成功绿 / 注意黄 / 错误红）。"
-                               Style="{StaticResource Set.Hint}" Margin="8,0,0,0" VerticalAlignment="Center" />
-                </StackPanel>
+                <Grid Margin="0,5,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <controls:SegmentedProgress Height="4" Value="0.62" VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="1" Text="强调色标记选中与进度，绿、黄、红分别提示成功、注意和错误"
+                               Style="{StaticResource Set.Hint}" Margin="12,0,0,0" VerticalAlignment="Center" />
+                </Grid>
             </StackPanel>
         </Border>
 
         <!-- ═══════════ 说明 ═══════════ -->
-        <TextBlock Text="· Windows 11 上窗口标题栏跟随应用主题；Windows 10 下窗口边框由系统绘制，保持系统外观。"
-                   Style="{StaticResource Set.Hint}" Margin="0,10,0,0" />
-        <TextBlock Text="· 切换立即生效：主窗口、设置窗口、对话框一起变色，不需要重启。"
-                   Style="{StaticResource Set.Hint}" Margin="0,2,0,0" />
+        <TextBlock Text="主题会立即切换。Windows 11 的标题栏随主题变化，Windows 10 的边框随系统变化。"
+                   Style="{StaticResource Set.Hint}" Margin="0,6,0,0" />
     </StackPanel>
 
 </settings:SettingsPageBase>

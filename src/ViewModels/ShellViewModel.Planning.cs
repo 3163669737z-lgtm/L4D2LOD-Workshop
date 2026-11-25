@@ -200,13 +200,21 @@ namespace LodStudio.ViewModels
             var mode = auto ? OutputMode.InPlace : (OutputMode)LodPlan.WriteMode;
             bool writesQc = mode != OutputMode.CollectionOnly;
             bool compile = !auto && writesQc && Settings.CompileAfter;
+            int profile = Settings.EffectiveReductionProfile();
             return new BatchRunOptions
             {
                 Plan = auto ? null : LodPlan.ClonePlan(),
                 PresetName = LodPlan.PresetDisplay,
                 Automatic = auto,
                 Workers = Settings.Workers,
-                QualityFirst = Settings.QualityFirst,
+                ReductionProfile = profile,
+                QualityFirst = profile != 2,
+                GenerateShadowLod = Settings.GenerateShadowLod,
+                ShadowLodRatio = Settings.ShadowLodRatio,
+                ShadowLodMode = (ShadowLodMode)Settings.ShadowLodMode,
+                ShadowLodReuseLevel = Settings.ShadowLodReuseLevel,
+                AutoTargetTriangles = Settings.AutoTargetTriangles,
+                AutoMinSavingsPercent = Settings.AutoMinSavingsPercent,
                 AdaptiveTriangleBudget = Settings.AdaptiveTriangleBudget,
                 AllowVertexUpdates = Settings.AllowVertexUpdates,
                 KeepOriginalModels = Settings.KeepOriginalModels,
@@ -214,6 +222,9 @@ namespace LodStudio.ViewModels
                 CompileAfter = compile,
                 NekomdlPath = compile ? Settings.NekomdlPath : null,
                 NoFacial = !auto && Settings.NoFacial,
+                NoFacialFromLevel = Settings.NoFacialFromLevel,
+                CollapseBones = Settings.CollapseBones,
+                CollapseBonesFromLevel = Settings.CollapseBonesFromLevel,
                 SkipMainModel = Settings.SkipMainModel,
                 SkipMainQcPaths = Settings.SkipMainModel
                     ? new HashSet<string>(Settings.SkipMainQcs, StringComparer.OrdinalIgnoreCase)
@@ -274,9 +285,15 @@ namespace LodStudio.ViewModels
                 return a.PresetName == b.PresetName && a.Automatic == b.Automatic &&
                        a.OutputMode == b.OutputMode && a.Force == b.Force && a.CompileAfter == b.CompileAfter &&
                        a.NekomdlPath == b.NekomdlPath && a.Workers == b.Workers && a.QualityFirst == b.QualityFirst &&
+                       a.ReductionProfile == b.ReductionProfile &&
+                       a.GenerateShadowLod == b.GenerateShadowLod && a.ShadowLodRatio == b.ShadowLodRatio &&
+                       a.ShadowLodMode == b.ShadowLodMode && a.ShadowLodReuseLevel == b.ShadowLodReuseLevel &&
+                       a.AutoTargetTriangles == b.AutoTargetTriangles && a.AutoMinSavingsPercent == b.AutoMinSavingsPercent &&
                        a.AdaptiveTriangleBudget == b.AdaptiveTriangleBudget && a.AllowVertexUpdates == b.AllowVertexUpdates &&
                        a.MinTriangles == b.MinTriangles && a.KeepOriginalModels == b.KeepOriginalModels &&
-                       a.NoFacial == b.NoFacial && a.SkipMainModel == b.SkipMainModel && a.SkipMainQcPaths.SetEquals(b.SkipMainQcPaths) &&
+                       a.NoFacial == b.NoFacial && a.NoFacialFromLevel == b.NoFacialFromLevel &&
+                       a.CollapseBones == b.CollapseBones && a.CollapseBonesFromLevel == b.CollapseBonesFromLevel &&
+                       a.SkipMainModel == b.SkipMainModel && a.SkipMainQcPaths.SetEquals(b.SkipMainQcPaths) &&
                        a.BackupEnabled == b.BackupEnabled && Locations.BackupLocation == other.Locations.BackupLocation &&
                        Locations.BackupCustomDir == other.Locations.BackupCustomDir &&
                        Locations.ReportLocation == other.Locations.ReportLocation && Locations.ReportCustomDir == other.Locations.ReportCustomDir &&

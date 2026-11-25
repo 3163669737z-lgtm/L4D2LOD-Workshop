@@ -69,7 +69,7 @@ namespace LodStudio.Views.Settings
         {
             bool on = ChkAnimations.IsChecked == true;
             TxtAnimHint.Text = on
-                ? "只用于状态反馈（hover、面板展开、Toast）；没有入场动画。"
+                ? "开启玻璃高光追踪、界面切换滑入、背景毛玻璃虚化与弹性控件动效。"
                 : "已关闭：系统关闭「显示动画效果」时也会自动减少动画。";
             TxtAnimHint.SetResourceReference(TextBlock.ForegroundProperty,
                 on ? "Brush.InkFaint" : "Brush.InkSoft");

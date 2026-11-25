@@ -8,6 +8,7 @@ namespace LodStudio.Engine
         public string DisplayDestination;
         /// <summary>目标面数比例 0..1</summary>
         public double Ratio;
+        public bool ShadowMode;
         /// <summary>LOD 切换距离，未指定时按目标比例使用原有预算。</summary>
         public double Distance;
         internal bool RequireFixedVertices;
@@ -36,6 +37,11 @@ namespace LodStudio.Engine
         public int VertexUpdateAccepted;
         public int VertexUpdateTrianglesSaved;
         public int WholePrimitiveTrianglesSaved;
+        /// <summary>最大表面偏差，以包围盒范围的百万分之一计；未测量时为 0。</summary>
+        public int MaxSurfaceDeviationPpm;
+        public int MeanSurfaceDeviationPpm;
+        public long DeviationSampleCount;
+        public bool HasDeviationMetrics => DeviationSampleCount > 0;
         /// <summary>成功但有需要提示的情况（实际面数明显超目标等）</summary>
         public string Warning;
         public string Error;

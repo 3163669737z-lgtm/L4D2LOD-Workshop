@@ -50,6 +50,7 @@ namespace LodStudio.Engine
         public List<string> RootQcs = new List<string>();
         /// <summary>每级一个减面任务（顺序 = LOD1..LODN）</summary>
         public List<ReductionJob> Jobs = new List<ReductionJob>();
+        public ReductionJob ShadowJob;
         /// <summary>该模型不生成替换网格时的原因</summary>
         public string SkipReason;
     }
@@ -92,6 +93,8 @@ namespace LodStudio.Engine
         public int ErrorCount { get { int n = 0; foreach (var q in QcPlans) if (q.Action == BatchQcAction.Error) n++; return n; } }
     }
 
+    public enum ShadowLodMode { Dedicated = 0, ReuseExistingLod = 1 }
+
     /// <summary>执行参数（界面设置 / CLI 解析后传入）。</summary>
     public sealed class BatchRunOptions
     {
@@ -103,6 +106,13 @@ namespace LodStudio.Engine
         public bool QualityFirst = true;
         public bool AdaptiveTriangleBudget = true;
         public bool AllowVertexUpdates;
+        public int ReductionProfile = 1;
+        public bool GenerateShadowLod;
+        public double ShadowLodRatio = 0.20;
+        public ShadowLodMode ShadowLodMode = ShadowLodMode.Dedicated;
+        public int ShadowLodReuseLevel = 0;
+        public int AutoTargetTriangles = 10000;
+        public int AutoMinSavingsPercent = 10;
         /// <summary>以 | 分隔的源模型路径。相对路径以计划根目录为准。</summary>
         public string KeepOriginalModels = "";
 
@@ -111,6 +121,9 @@ namespace LodStudio.Engine
         public bool CompileAfter;
         public string NekomdlPath;
         public bool NoFacial;
+        public int NoFacialFromLevel = 1;
+        public string CollapseBones = "";
+        public int CollapseBonesFromLevel = 3;
         public bool SkipMainModel;
         /// <summary>空引用表示所有 QC。界面传入明确选中的集合。</summary>
         public HashSet<string> SkipMainQcPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -143,6 +156,12 @@ namespace LodStudio.Engine
         public int ReusedLevels;
         public int UnreducedLevels;
         public int PublishedLods;
+        public int ShadowLodsPublished;
+        public int ShadowLodQcsWritten;
+        public int ShadowLodReusedQcs;
+        public int MaxSurfaceDeviationPpm;
+        public int MeanSurfaceDeviationPpm;
+        public long DeviationSampleCount;
         public int ModelsWithoutReduction;
         public int BalancedRegions;
         public int MaximumRegionalSpread;
@@ -172,6 +191,7 @@ namespace LodStudio.Engine
         public string SkipReason;
         /// <summary>$lod 工具块实际写入（或已存在）的文件：通常等于根 QC，模型声明在 include 文件时为该文件。</summary>
         public string LodBlockFile;
+        internal QcLodBlockInfo LodBlock;
         public List<string> Errors = new List<string>();
         public bool CompileTried;
         public bool CompileOk;
@@ -186,6 +206,7 @@ namespace LodStudio.Engine
         public double TargetRatio;
         public double EstimatedDistanceHu;
         public double SwitchPoint;
+        public int MaxSurfaceDeviationPpm;
         public string SkipReason;
     }
 

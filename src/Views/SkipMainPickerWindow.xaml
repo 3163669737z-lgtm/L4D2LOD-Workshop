@@ -14,7 +14,7 @@
         TextOptions.TextFormattingMode="Ideal" TextOptions.TextRenderingMode="ClearType">
 
     <shell:WindowChrome.WindowChrome>
-        <shell:WindowChrome CaptionHeight="44" ResizeBorderThickness="6"
+        <shell:WindowChrome CaptionHeight="48" ResizeBorderThickness="6"
                             CornerRadius="0" GlassFrameThickness="0"
                             UseAeroCaptionButtons="False" />
     </shell:WindowChrome.WindowChrome>
@@ -26,9 +26,9 @@
             </ResourceDictionary.MergedDictionaries>
 
             <DataTemplate x:Key="PickTemplate">
-                <Grid Height="30">
+                <Grid Height="32">
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="34" />
+                        <ColumnDefinition Width="36" />
                         <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
                     <CheckBox Grid.Column="0" Style="{StaticResource Set.Check}"
@@ -43,82 +43,90 @@
         </ResourceDictionary>
     </Window.Resources>
 
-    <Border x:Name="RootBorder" Background="{DynamicResource Brush.Canvas}"
-            BorderBrush="{DynamicResource Brush.WindowBorder}" BorderThickness="1">
-        <Grid>
-            <Grid.RowDefinitions>
-                <RowDefinition Height="44" />
-                <RowDefinition Height="50" />
-                <RowDefinition Height="*" />
-                <RowDefinition Height="56" />
-            </Grid.RowDefinitions>
-
-            <!-- ═══════════ 标题栏 ═══════════ -->
-            <Grid Grid.Row="0" Background="{DynamicResource Brush.Canvas}">
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Left" VerticalAlignment="Center"
-                            Margin="16,0,0,0">
-                    <Border Width="4" Height="18" Background="{DynamicResource Brush.Signal}" VerticalAlignment="Center" />
-                    <TextBlock Text="选择要跳过的 QC" Style="{StaticResource Text.PageTitle}" Margin="10,0,0,0"
-                               VerticalAlignment="Center" />
-                    <TextBlock Text="SKIP MAIN MODEL" FontFamily="{StaticResource Font.Latin}"
-                               FontSize="{StaticResource FS.BrandLatin}" Foreground="{DynamicResource Brush.InkFaint}"
-                               Margin="10,3,0,0" VerticalAlignment="Center" />
-                </StackPanel>
-                <Button x:Name="BtnCloseWindow" Style="{StaticResource WindowButtonClose}" Width="40" Height="40"
-                        HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,4,0"
-                        Click="OnCancelClick" ToolTip="关闭（Esc）"
-                        shell:WindowChrome.IsHitTestVisibleInChrome="True">
-                    <controls:Icon Kind="Close" Size="11" IconBrush="{DynamicResource Brush.InkSoft}" />
-                </Button>
-                <Border Height="1" VerticalAlignment="Bottom" Background="{DynamicResource Brush.Line}" />
-            </Grid>
-
-            <!-- ═══════════ 搜索 / 批量选择 ═══════════ -->
-            <Grid Grid.Row="1" Margin="16,10,16,10">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-                <TextBox x:Name="TxtSearch" Grid.Column="0" Style="{StaticResource Input.Text}" Width="320"
-                         Height="30" Tag="搜索路径 / QC 文件名…" VerticalContentAlignment="Center" />
-                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-                    <Button x:Name="BtnSelectAll" Style="{StaticResource Btn.Bare}" Content="全选" />
-                    <Button x:Name="BtnSelectNone" Style="{StaticResource Btn.Bare}" Content="全不选" Margin="4,0,0,0" />
-                </StackPanel>
-            </Grid>
-
-            <!-- ═══════════ 列表 ═══════════ -->
-            <Border Grid.Row="2" Margin="16,0,16,0" Background="{DynamicResource Brush.Panel}"
-                    BorderBrush="{DynamicResource Brush.Line}" BorderThickness="1">
-                <Grid>
-                    <ListBox x:Name="PickList" Style="{StaticResource List.Base}"
-                             ItemContainerStyle="{StaticResource Set.PickRow}"
-                             ItemTemplate="{StaticResource PickTemplate}" Margin="8,6,8,6"
-                             SelectionMode="Single" />
-                    <TextBlock x:Name="TxtEmpty" Text="正在收集队列里的 QC…" Style="{StaticResource Set.Hint}"
-                               HorizontalAlignment="Center" VerticalAlignment="Center" TextWrapping="Wrap"
-                               MaxWidth="440" TextAlignment="Center" />
-                </Grid>
-            </Border>
-
-            <!-- ═══════════ 底栏 ═══════════ -->
-            <Grid Grid.Row="3" Background="{DynamicResource Brush.Canvas}">
-                <Border Height="1" VerticalAlignment="Top" Background="{DynamicResource Brush.Line}" />
-                <StackPanel VerticalAlignment="Center" Margin="16,0,220,0">
-                    <TextBlock x:Name="TxtCount" Style="{StaticResource Text.Small}" Foreground="{DynamicResource Brush.Ink}"
-                               Text="已选 0 / 共 0" />
-                    <TextBlock x:Name="TxtRoot" Style="{StaticResource Set.Mono}" Margin="0,2,0,0"
-                               Foreground="{DynamicResource Brush.InkFaint}" TextTrimming="CharacterEllipsis" />
-                </StackPanel>
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center"
-                            Margin="0,0,16,0">
-                    <Button x:Name="BtnCancel" Style="{StaticResource Btn.Secondary}" Width="88" Height="30"
-                            Content="取消" Click="OnCancelClick" />
-                    <Button x:Name="BtnOk" Style="{StaticResource Btn.Primary}" Width="88" Height="30"
-                            Content="确定" Margin="8,0,0,0" Click="OnOkClick" IsEnabled="False" />
-                </StackPanel>
-            </Grid>
+    <Grid>
+        <Grid Background="{DynamicResource Brush.Canvas}" IsHitTestVisible="False" ClipToBounds="True">
+            <Ellipse Width="420" Height="340" HorizontalAlignment="Left" VerticalAlignment="Top"
+                     Margin="-140,-140,0,0" Fill="{DynamicResource Brush.AuroraPrimary}" />
+            <Ellipse Width="460" Height="360" HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                     Margin="0,0,-140,-140" Fill="{DynamicResource Brush.AuroraSecondary}" />
         </Grid>
-    </Border>
+
+        <Border x:Name="RootBorder" Background="{DynamicResource Brush.WindowGlass}"
+                BorderBrush="{DynamicResource Brush.WindowBorder}" BorderThickness="1">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="48" />
+                    <RowDefinition Height="54" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="58" />
+                </Grid.RowDefinitions>
+
+                <!-- ═══════════ 标题栏 ═══════════ -->
+                <Grid Grid.Row="0" Background="{DynamicResource Brush.GlassHeader}">
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Left" VerticalAlignment="Center"
+                                Margin="18,0,0,0">
+                        <Border Width="4" Height="18" CornerRadius="2" Background="{DynamicResource Brush.Signal}" VerticalAlignment="Center" />
+                        <TextBlock Text="选择要跳过的 QC" Style="{StaticResource Text.PageTitle}" Margin="10,0,0,0"
+                                   VerticalAlignment="Center" />
+                        <TextBlock Text="SKIP MAIN MODEL" FontFamily="{StaticResource Font.Latin}"
+                                   FontSize="{StaticResource FS.BrandLatin}" Foreground="{DynamicResource Brush.InkFaint}"
+                                   Margin="10,3,0,0" VerticalAlignment="Center" />
+                    </StackPanel>
+                    <Button x:Name="BtnCloseWindow" Style="{StaticResource WindowButtonClose}" Width="36" Height="34"
+                            HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,8,0"
+                            Click="OnCancelClick" ToolTip="关闭（Esc）"
+                            shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                        <controls:Icon Kind="Close" Size="11" IconBrush="{DynamicResource Brush.InkSoft}" />
+                    </Button>
+                    <Border Height="1" VerticalAlignment="Bottom" Background="{DynamicResource Brush.Line}" Opacity="0.65" />
+                </Grid>
+
+                <!-- ═══════════ 搜索 / 批量选择 ═══════════ -->
+                <Grid Grid.Row="1" Margin="16,10,16,10">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBox x:Name="TxtSearch" Grid.Column="0" Style="{StaticResource Input.Text}" Width="340"
+                             Height="32" Tag="搜索路径 / QC 文件名…" VerticalContentAlignment="Center" />
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button x:Name="BtnSelectAll" Style="{StaticResource Btn.Secondary}" Height="30" Padding="10,0" Content="全选" />
+                        <Button x:Name="BtnSelectNone" Style="{StaticResource Btn.Bare}" Height="30" Padding="10,0" Content="全不选" Margin="6,0,0,0" />
+                    </StackPanel>
+                </Grid>
+
+                <!-- ═══════════ 列表 ═══════════ -->
+                <Border Grid.Row="2" Margin="16,0,16,12" Style="{StaticResource Card.Glass}">
+                    <Grid>
+                        <ListBox x:Name="PickList" Style="{StaticResource List.Base}"
+                                 ItemContainerStyle="{StaticResource Set.PickRow}"
+                                 ItemTemplate="{StaticResource PickTemplate}" Margin="8,8,8,8"
+                                 SelectionMode="Single" />
+                        <TextBlock x:Name="TxtEmpty" Text="正在收集队列里的 QC…" Style="{StaticResource Set.Hint}"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center" TextWrapping="Wrap"
+                                   MaxWidth="440" TextAlignment="Center" />
+                    </Grid>
+                </Border>
+
+                <!-- ═══════════ 底栏 ═══════════ -->
+                <Grid Grid.Row="3" Background="{DynamicResource Brush.GlassHeader}">
+                    <Border Height="1" VerticalAlignment="Top" Background="{DynamicResource Brush.Line}" Opacity="0.65" />
+                    <StackPanel VerticalAlignment="Center" Margin="18,0,220,0">
+                        <TextBlock x:Name="TxtCount" Style="{StaticResource Text.Small}" Foreground="{DynamicResource Brush.Ink}"
+                                   Text="已选 0 / 共 0" />
+                        <TextBlock x:Name="TxtRoot" Style="{StaticResource Set.Mono}" Margin="0,2,0,0"
+                                   Foreground="{DynamicResource Brush.InkFaint}" TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                Margin="0,0,16,0">
+                        <Button x:Name="BtnCancel" Style="{StaticResource Btn.Secondary}" Width="92" Height="32"
+                                Content="取消" Click="OnCancelClick" />
+                        <Button x:Name="BtnOk" Style="{StaticResource Btn.Primary}" Width="92" Height="32"
+                                Content="确定" Margin="8,0,0,0" Click="OnOkClick" IsEnabled="False" />
+                    </StackPanel>
+                </Grid>
+            </Grid>
+        </Border>
+    </Grid>
 </Window>

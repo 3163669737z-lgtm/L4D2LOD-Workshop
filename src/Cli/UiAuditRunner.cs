@@ -30,6 +30,13 @@ namespace LodStudio.Cli
     {
         public static int Run(CommandLine cli)
         {
+            UiMotion.SuppressContinuousAmbient = true;
+            try { return RunCore(cli); }
+            finally { UiMotion.SuppressContinuousAmbient = false; }
+        }
+
+        private static int RunCore(CommandLine cli)
+        {
             string outDir = cli.OutDir;
             if (string.IsNullOrEmpty(outDir)) outDir = Path.Combine(AppInfo.TempRoot, "ui-audit");
             try { Directory.CreateDirectory(outDir); } catch { }

@@ -15,26 +15,26 @@
 
     <StackPanel>
         <TextBlock Text="LOD 高级" Style="{StaticResource Set.PageTitle}" />
-        <TextBlock Text="改变生成策略与写入内容。大多数情况保持默认即可；改动会立即影响下一次运行。"
+        <TextBlock Text="在这里调整怎么生成 LOD、哪些内容会写进 QC。大多数工程用默认设置就好，改动会在下次运行时用上。"
                    Style="{StaticResource Set.PageSub}" Margin="0,3,0,0" />
         <controls:Rule Margin="0,14,0,0" />
 
         <!-- ═══════════ 生成策略 ═══════════ -->
         <TextBlock Text="生成策略" Style="{StaticResource Set.GroupTitle}" Margin="0,18,0,0" />
 
-        <CheckBox x:Name="ChkQuality" Style="{StaticResource Set.Toggle}" Margin="0,6,0,2">
-            <StackPanel>
-                <TextBlock Text="更严几何预算" Style="{StaticResource Set.Label}" />
-                <TextBlock Style="{StaticResource Set.Hint}" Margin="0,2,0,0"
-                           Text="同时检查局部表面、法线、UV 和蒙皮。开启后进一步收紧几何误差。" />
-            </StackPanel>
-        </CheckBox>
+        <settings:SettingRow Title="减面保真档位" Margin="0,6,0,2"
+                             Hint="轮廓精保优先留住细节，均衡高效兼顾外形和面数，极致减面允许更大的外形变化。">
+            <Border Style="{StaticResource Set.FocusFrame}">
+                <controls:Segmented x:Name="SegProfile" Variant="Boxed" Height="30" FontSize="11.5" ItemPadding="10"
+                                    AutomationProperties.Name="减面保真档位" />
+            </Border>
+        </settings:SettingRow>
 
         <CheckBox x:Name="ChkAdaptiveBudget" Style="{StaticResource Set.Toggle}" Margin="0,8,0,2">
             <StackPanel>
                 <TextBlock Text="按部件面数均匀减面" Style="{StaticResource Set.Label}" />
                 <TextBlock Style="{StaticResource Set.Hint}" Margin="0,2,0,0"
-                           Text="高面部件多减，低面部件少减。同一连通部件的各区域限制减面比例差。" />
+                           Text="面数多的部件多减些，面数少的少减些。同一部件里各区域的减面比例也会尽量接近。" />
             </StackPanel>
         </CheckBox>
 
@@ -42,7 +42,7 @@
             <StackPanel>
                 <TextBlock Text="尝试顶点微调" Style="{StaticResource Set.Label}" />
                 <TextBlock Style="{StaticResource Set.Hint}" Margin="0,2,0,0"
-                           Text="锁定边界和接缝。微调通过外观检查且能进一步减面时采用。" />
+                           Text="会保留边界和接缝。微调后外观通过检查、面数也更少时，才会用上微调结果。" />
             </StackPanel>
         </CheckBox>
 
@@ -50,13 +50,13 @@
         <TextBox x:Name="TxtKeepOriginalModels" Style="{StaticResource Input.Mono}" Margin="0,5,0,0"
                  AutomationProperties.Name="保留原网格的模型" Tag="例如 SMD\Body.glb" />
         <TextBlock Style="{StaticResource Set.Hint}" Margin="0,4,0,0"
-                   Text="填写源 GLB、SMD 或 DMX 路径。指定的模型会在各级沿用原网格，多个路径用 | 分隔。" />
+                   Text="填入原始 GLB、SMD 或 DMX 文件的路径，各级 LOD 都会沿用这些模型的原网格。多个路径用 | 分隔。" />
 
         <CheckBox x:Name="ChkForce" Style="{StaticResource Set.Toggle}" Margin="0,8,0,2">
             <StackPanel>
                 <TextBlock Text="覆盖手写 $lod" Style="{StaticResource Set.Label}" />
                 <TextBlock Style="{StaticResource Set.Hint}" Margin="0,2,0,0"
-                           Text="把旧的 $lod / $shadowlod 逐行注释停用再写入，有备份；关闭时遇到手写 $lod 的 QC 会跳过。" />
+                           Text="开启后会把手写的 $lod 和 $shadowlod 注释掉，再写入新内容。备份开启时会先留好原件。关闭覆盖后会跳过含手写 $lod 的 QC。" />
             </StackPanel>
         </CheckBox>
 
@@ -64,7 +64,7 @@
             <StackPanel>
                 <TextBlock Text="生成后试编译" Style="{StaticResource Set.Label}" />
                 <TextBlock Style="{StaticResource Set.Hint}" Margin="0,2,0,0"
-                           Text="每个改动过的 QC 调一次编译器，会写游戏目录，较慢。需要先在「引擎」页指定 nekomdl.exe。" />
+                           Text="每个改过的 QC 都会试编译一次，并把结果写进游戏目录。会多花些时间，请先在「引擎」页选好 nekomdl.exe。" />
             </StackPanel>
         </CheckBox>
 
@@ -72,15 +72,54 @@
             <StackPanel>
                 <TextBlock Text="禁用远处表情" Style="{StaticResource Set.Label}" />
                 <TextBlock Style="{StaticResource Set.Hint}" Margin="0,2,0,0"
-                           Text="开启会写入 nofacial。关闭时保留 QC 表情模型的原网格，维持表情顶点映射。" />
+                           Text="开启后会写入 nofacial。关闭时会保留表情模型的原网格，让顶点继续对应原来的表情。" />
             </StackPanel>
         </CheckBox>
+
+        <settings:SettingRow x:Name="PanelNoFacialFrom" Title="禁用表情的起始档位"
+                             IsEnabled="{Binding IsChecked, ElementName=ChkNofacial}">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Text="从第" Style="{StaticResource Text.Small}" Margin="0,0,7,0" VerticalAlignment="Center" />
+                <TextBox x:Name="TxtNoFacialFrom" Style="{StaticResource Input.Num}" Width="64"
+                         AutomationProperties.Name="禁用表情的起始档位" />
+                <TextBlock Text="级起" Style="{StaticResource Text.Small}" Margin="7,0,0,0" VerticalAlignment="Center" />
+            </StackPanel>
+        </settings:SettingRow>
+
+        <CheckBox x:Name="ChkShadowLod" Style="{StaticResource Set.Toggle}" Margin="0,8,0,2">
+            <StackPanel>
+                <TextBlock Text="启用阴影优化（$shadowlod）" Style="{StaticResource Set.Label}" />
+                <TextBlock Style="{StaticResource Set.Hint}" Margin="0,2,0,0"
+                           Text="为实时投影指定更轻量的网格。最多保留 6 级可见 LOD，加上原模型和阴影共 8 级。" />
+            </StackPanel>
+        </CheckBox>
+        <settings:SettingRow Title="阴影网格来源" IsEnabled="{Binding IsChecked, ElementName=ChkShadowLod}">
+            <Border Style="{StaticResource Set.FocusFrame}">
+                <controls:Segmented x:Name="SegShadowMode" Variant="Boxed" Height="30" FontSize="11.5" ItemPadding="10"
+                                    AutomationProperties.Name="阴影网格来源" />
+            </Border>
+        </settings:SettingRow>
+        <settings:SettingRow x:Name="PanelShadowRatio" Title="阴影模型保留比例"
+                             IsEnabled="{Binding IsChecked, ElementName=ChkShadowLod}">
+            <StackPanel Orientation="Horizontal">
+                <TextBox x:Name="TxtShadowRatio" Style="{StaticResource Input.Num}" Width="64"
+                         AutomationProperties.Name="阴影模型保留比例" />
+                <TextBlock Text="%" Style="{StaticResource Text.Small}" Margin="7,0,0,0" VerticalAlignment="Center" />
+            </StackPanel>
+        </settings:SettingRow>
+
+        <settings:SettingRow x:Name="PanelShadowReuse" Title="复用的可见 LOD 档位" Visibility="Collapsed"
+                             Hint="0 表示最远一级，1–6 表示指定档位。档位不足时使用最远一级。"
+                             IsEnabled="{Binding IsChecked, ElementName=ChkShadowLod}">
+            <TextBox x:Name="TxtShadowReuseLevel" Style="{StaticResource Input.Num}" Width="64"
+                     AutomationProperties.Name="复用的可见 LOD 档位" />
+        </settings:SettingRow>
 
         <CheckBox x:Name="ChkSkipMain" Style="{StaticResource Set.Toggle}" Margin="0,8,0,2">
             <StackPanel>
                 <TextBlock Text="跳过主模型" Style="{StaticResource Set.Label}" />
                 <TextBlock Style="{StaticResource Set.Hint}" Margin="0,2,0,0"
-                           Text="$model 块里的模型不写 $lod；适合主模型必须保持原样的情况。" />
+                           Text="让 $model 块里的主模型保持原样，写入 $lod 时会跳过它。" />
             </StackPanel>
         </CheckBox>
 
@@ -101,11 +140,45 @@
             <TextBlock x:Name="TxtSkipHint" Style="{StaticResource Set.Hint}" Margin="0,7,0,0" />
         </StackPanel>
 
+        <controls:Rule Margin="0,22,0,0" />
+        <TextBlock Text="远景骨骼折叠 (bonetreecollapse)" Style="{StaticResource Set.GroupTitle}" Margin="0,18,0,0" />
+        <TextBlock Text="填入要在远处折叠的骨骼名称，多个名称用 | 分隔。" Style="{StaticResource Set.Hint}" Margin="0,4,0,0" />
+        <TextBox x:Name="TxtCollapseBones" Style="{StaticResource Input.Mono}" Margin="0,5,0,0"
+                 AutomationProperties.Name="要折叠的骨骼"
+                 Tag="例如 ValveBiped.Bip01_L_Hand|ValveBiped.Bip01_R_Hand" />
+        <Button x:Name="BtnFillL4d2Hands" Style="{StaticResource Set.SmallButton}" Content="填入 L4D2 手部骨骼"
+                HorizontalAlignment="Left" Margin="0,6,0,0" />
+        <settings:SettingRow Title="骨骼折叠的起始档位" Margin="0,4,0,0">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Text="从第" Style="{StaticResource Text.Small}" Margin="0,0,7,0" VerticalAlignment="Center" />
+                <TextBox x:Name="TxtCollapseFrom" Style="{StaticResource Input.Num}" Width="64"
+                         AutomationProperties.Name="骨骼折叠的起始档位" />
+                <TextBlock Text="级起折叠" Style="{StaticResource Text.Small}" Margin="7,0,0,0" VerticalAlignment="Center" />
+            </StackPanel>
+        </settings:SettingRow>
+
+        <controls:Rule Margin="0,22,0,0" />
+        <TextBlock Text="自动规划预算" Style="{StaticResource Set.GroupTitle}" Margin="0,18,0,0" />
+        <settings:SettingRow Title="目标三角面数" Margin="0,8,0,0">
+            <StackPanel Orientation="Horizontal">
+                <TextBox x:Name="TxtAutoTarget" Style="{StaticResource Input.Num}" Width="84"
+                         AutomationProperties.Name="目标三角面数" />
+                <TextBlock Text="面" Style="{StaticResource Text.Small}" Margin="7,0,0,0" VerticalAlignment="Center" />
+            </StackPanel>
+        </settings:SettingRow>
+        <settings:SettingRow Title="单档最小减面幅度">
+            <StackPanel Orientation="Horizontal">
+                <TextBox x:Name="TxtAutoMinSavings" Style="{StaticResource Input.Num}" Width="84"
+                         AutomationProperties.Name="单档最小减面幅度" />
+                <TextBlock Text="%" Style="{StaticResource Text.Small}" Margin="7,0,0,0" VerticalAlignment="Center" />
+            </StackPanel>
+        </settings:SettingRow>
+
         <!-- ═══════════ 并行 ═══════════ -->
         <controls:Rule Margin="0,22,0,0" />
         <TextBlock Text="并行" Style="{StaticResource Set.GroupTitle}" Margin="0,18,0,0" />
 
-        <settings:SettingRow Title="并行减面进程" Hint="0 表示按 CPU、可用内存和任务数自动选择。"
+        <settings:SettingRow Title="并行减面进程" Hint="填 0 时，会根据 CPU、可用内存和任务数自动决定开几个进程。"
                              Margin="0,8,0,0">
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                 <TextBox x:Name="TxtWorkers" Style="{StaticResource Input.Num}" Width="84" />

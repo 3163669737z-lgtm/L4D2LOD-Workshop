@@ -10,6 +10,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using LodStudio.Engine;
+using LodStudio.ViewModels;
 
 namespace LodStudio.Views
 {
@@ -52,6 +53,7 @@ namespace LodStudio.Views
     public partial class SkipMainPickerWindow : Window
     {
         private readonly SettingsWindow _owner;
+        private readonly ShellViewModel _shell;
         private readonly List<string> _preloaded;
         private readonly List<string> _preselected;
         private readonly List<SkipPickItem> _all = new List<SkipPickItem>();
@@ -74,6 +76,13 @@ namespace LodStudio.Views
             if (owner != null) Owner = owner;
         }
 
+        public SkipMainPickerWindow(Window owner, ShellViewModel shell, AppSettings settings) : this()
+        {
+            Owner = owner;
+            _shell = shell;
+            _preselected = settings?.SkipMainQcs != null ? new List<string>(settings.SkipMainQcs) : new List<string>();
+        }
+
         /// <summary>直接给数据（预览/测试用；不依赖 shell）。</summary>
         public SkipMainPickerWindow(IEnumerable<string> candidates, IEnumerable<string> selected) : this()
         {
@@ -88,6 +97,7 @@ namespace LodStudio.Views
         private SkipMainPickerWindow()
         {
             InitializeComponent();
+            Services.WindowGlass.Attach(this);
             PickList.ItemsSource = _view;
 
             TxtSearch.TextChanged += delegate { RebuildView(); };
@@ -124,8 +134,8 @@ namespace LodStudio.Views
             try
             {
                 List<string> candidates = null;
-                if (_owner != null && _owner.Shell != null)
-                    candidates = await _owner.Shell.CollectQcCandidatesAsync();
+                var shell = _shell ?? _owner?.Shell;
+                if (shell != null) candidates = await shell.CollectQcCandidatesAsync();
                 if (!IsVisible) return;
                 Populate(candidates ?? new List<string>());
             }

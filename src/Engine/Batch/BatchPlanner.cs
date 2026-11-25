@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 
 namespace LodStudio.Engine
@@ -14,6 +15,9 @@ namespace LodStudio.Engine
     /// </summary>
     public static class BatchPlanner
     {
+        private static readonly Regex ShadowProductName = new Regex(@"_shadowlod(?:_[0-9a-f]{16})?$",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
         public static BatchPlan Build(IReadOnlyList<TaskRef> tasks, string rootDir, BatchRunOptions options,
                                       IBatchObserver observer, CancellationToken cancel)
         {
@@ -58,6 +62,13 @@ namespace LodStudio.Engine
             var planLevels = plan.Plan;
             string perf = options.Automatic ? null : planLevels.Validate();
             if (perf != null) log(LogLevel.Error, "LOD 参数有误：" + perf);
+            if (!options.Automatic && options.GenerateShadowLod && planLevels.Count > QcWriter.MaxVisibleLodsWithShadow)
+            {
+                log(LogLevel.Warn, "Source 引擎最多支持 6 级可见 LOD 加 $shadowlod，本次将生成 6 级可见 LOD + $shadowlod。");
+                planLevels = new LodPlan { Levels = planLevels.Levels.Take(QcWriter.MaxVisibleLodsWithShadow)
+                    .Select(level => level.Clone()).ToList() };
+                plan.Plan = planLevels;
+            }
 
             // ── 1. 展开任务 ──
             observer.Stage(BatchStage.Planning, "── 1/5 展开任务 ──");
@@ -87,6 +98,7 @@ namespace LodStudio.Engine
                         if (roots.Count == 0)
                         {
                             var loose = ProjectScanner.FindLooseModels(path, 3, s => log(LogLevel.Detail, s));
+                            loose.RemoveAll(model => ShadowProductName.IsMatch(Path.GetFileNameWithoutExtension(model)));
                             if (loose.Count == 0)
                             {
                                 exp.Error = "没有 QC，也没有 GLB、SMD 或 DMX 模型";
@@ -355,7 +367,7 @@ namespace LodStudio.Engine
                     pm.SkipReason = "保留指定的原网格";
                     continue;
                 }
-                if ((options.Automatic || !options.NoFacial) && pm.Entries.Any(e => e.HasFacial))
+                if (!options.NoFacial && pm.Entries.Any(e => e.HasFacial))
                 {
                     pm.SkipReason = "保留 QC 表情模型的原始顶点";
                     keptForFacial++;
@@ -374,7 +386,8 @@ namespace LodStudio.Engine
                 foreach (var q in qcPlans.Where(x => x.Action == BatchQcAction.Process))
                 {
                     q.SourceTriangles = AutomaticLod.CountVisible(q, m => m.Triangles);
-                    q.Levels = AutomaticLod.Plan(q.SourceTriangles);
+                    q.Levels = AutomaticLod.Plan(q.SourceTriangles, options.AutoTargetTriangles,
+                        options.GenerateShadowLod ? QcWriter.MaxVisibleLodsWithShadow : LodPlan.MaxLevels);
                 }
                 planLevels = qcPlans.Where(q => q.Levels != null).OrderByDescending(q => q.Levels.Count)
                     .Select(q => q.Levels).FirstOrDefault() ?? new LodPlan();
@@ -390,10 +403,10 @@ namespace LodStudio.Engine
                         .OrderByDescending(q => q.SourceTriangles).Select(q => q.Levels).FirstOrDefault()
                     : planLevels;
                 if (modelLevels == null) continue;
+                string ext = Path.GetExtension(pm.Path).ToLowerInvariant();
                 for (int li = 0; li < modelLevels.Count; li++)
                 {
                     int level = li + 1;
-                    string ext = Path.GetExtension(pm.Path).ToLowerInvariant();
                     string finalPath = Path.Combine(pm.Dir, pm.BaseName + "_lod" + level + ext);
                     if (!dstSeen.Add(finalPath))
                     {
@@ -410,6 +423,25 @@ namespace LodStudio.Engine
                     });
                     jobCount++;
                 }
+                if (options.GenerateShadowLod && options.ShadowLodMode == ShadowLodMode.Dedicated && pm.Jobs.Count > 0)
+                {
+                    string finalPath = Path.Combine(pm.Dir, pm.BaseName + "_shadowlod" + ext);
+                    if (!dstSeen.Add(finalPath))
+                    {
+                        log(LogLevel.Warn, "输出路径重复，跳过：" + finalPath);
+                        continue;
+                    }
+                    pm.ShadowJob = new ReductionJob
+                    {
+                        Source = pm.Path,
+                        Destination = finalPath,
+                        Ratio = options.ShadowLodRatio,
+                        Distance = 80,
+                        ShadowMode = true,
+                        Weight = pm.Size
+                    };
+                    jobCount++;
+                }
             }
             if (options.Automatic)
                 foreach (var q in qcPlans.Where(x => x.Levels != null && x.SourceTriangles > 0))
@@ -423,7 +455,11 @@ namespace LodStudio.Engine
             plan.JobCount = jobCount;
             plan.TotalSourceTriangles = totalSource;
             log(LogLevel.Info, "要做 LOD 的模型：" + modelOrder.Count(x => x.Jobs.Count > 0) + " 个（原始共 " + totalSource + " 面）");
-            log(LogLevel.Info, "减面任务：" + jobCount + " 个（含 " + modelOrder.Count(x => x.Jobs.Count > 0) + " 个模型 × " + planLevels.Count + " 级）");
+            int shadowJobs = modelOrder.Count(m => m.ShadowJob != null);
+            string shadowTasks = !options.GenerateShadowLod ? "" : options.ShadowLodMode == ShadowLodMode.ReuseExistingLod
+                ? "，阴影模式为复用（0 个独立阴影任务）"
+                : "，" + shadowJobs + " 个独立阴影任务";
+            log(LogLevel.Info, "减面任务：" + (jobCount - shadowJobs) + " 个可见 LOD 任务" + shadowTasks);
             int smallSkip = modelOrder.Count(x => x.SkipReason != null && x.Triangles < options.MinTriangles &&
                                               !keepOriginalPaths.Contains(x.Path) &&
                                               (options.NoFacial || !x.Entries.Any(e => e.HasFacial)));
@@ -448,7 +484,9 @@ namespace LodStudio.Engine
                 else if (withJobs.Count == 0)
                 {
                     qp.Action = BatchQcAction.Skip;
-                    qp.Reason = options.Automatic && qp.Levels.Count == 0 ? "可见组合不超过 10,000 三角面，无需 LOD" : qp.Models.All(m => keepOriginalPaths.Contains(m.Path))
+                    qp.Reason = options.Automatic && qp.Levels.Count == 0
+                        ? "可见组合不超过 " + Math.Max(1000, options.AutoTargetTriangles).ToString("N0", CultureInfo.InvariantCulture) + " 三角面，无需 LOD"
+                        : qp.Models.All(m => keepOriginalPaths.Contains(m.Path))
                         ? "已选择保留原网格"
                         : "模型均已保留原网格或低于面数门槛 " + options.MinTriangles;
                 }

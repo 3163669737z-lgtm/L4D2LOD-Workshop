@@ -14,12 +14,19 @@ namespace LodStudio.Engine
 
         internal static LodPlan Plan(long sourceTriangles)
         {
+            return Plan(sourceTriangles, ReferenceTriangles, LodPlan.MaxLevels);
+        }
+
+        internal static LodPlan Plan(long sourceTriangles, int targetTriangles, int maxLevels = LodPlan.MaxLevels)
+        {
+            targetTriangles = Math.Max(1000, targetTriangles);
+            maxLevels = Math.Max(1, Math.Min(LodPlan.MaxLevels, maxLevels));
             var plan = new LodPlan();
-            int count = Math.Min(LodPlan.MaxLevels, (int)Math.Ceiling(Math.Log(Math.Max(1, sourceTriangles / (double)ReferenceTriangles), 2)));
+            int count = Math.Min(maxLevels, (int)Math.Ceiling(Math.Log(Math.Max(1, sourceTriangles / (double)targetTriangles), 2)));
             if (count == 0) return plan;
             // Approach the reference budget in equal proportional steps, while
             // keeping successive transitions within a practical reduction range.
-            double step = Math.Max(0.55, Math.Min(0.85, Math.Pow(ReferenceTriangles / (double)sourceTriangles, 1.0 / count)));
+            double step = Math.Max(0.55, Math.Min(0.85, Math.Pow(targetTriangles / (double)sourceTriangles, 1.0 / count)));
             for (int i = 0; i < count; ++i)
                 plan.Levels.Add(new LodLevel(15 + 15 * i, Math.Pow(step, i + 1)));
             return plan;
@@ -129,11 +136,17 @@ namespace LodStudio.Engine
                    (t == null ? Matrix4x4.Identity : Matrix4x4.CreateTranslation(t[0], t[1], t[2]));
         }
 
-        internal static void Estimate(AutomaticLodResult level, double extentHu, long sourceTriangles, double previousSwitch)
+        internal static void Estimate(AutomaticLodResult level, double extentHu, long sourceTriangles, double previousSwitch,
+                                      int measuredMaxDeviationPpm = 0)
         {
-            // Budget estimate until the reducer exposes measured surface and animation error.
             double reduction = 1 - level.Triangles / (double)sourceTriangles;
-            double errorHu = Math.Max(1, extentHu) * (0.005 + 0.015 * reduction);
+            double budgetErrorHu = Math.Max(1, extentHu) * (0.005 + 0.015 * reduction);
+            double errorHu = budgetErrorHu;
+            if (measuredMaxDeviationPpm > 0)
+            {
+                double measuredErrorHu = Math.Max(1, extentHu) * (measuredMaxDeviationPpm / 1_000_000.0);
+                errorHu = Math.Max(budgetErrorHu * 0.5, Math.Min(budgetErrorHu * 2.0, measuredErrorHu));
+            }
             double distance = Math.Max(150, Math.Min(1500, errorHu * FocalPixels / 2)); // two pixels at reference resolution
             // Source's switch point is the inverse projected size metric for a unit sphere.
             level.SwitchPoint = Math.Round(Math.Max(previousSwitch * 1.35, 100 * distance / (2 * FocalPixels)), 3);

@@ -151,8 +151,10 @@ namespace LodStudio.Cli.UiAudit
             if (fe is CornerBrackets) return true;
             if (fe is Rule) return true;
             if (fe is SegmentedProgress) return true;
+            if (fe is PrismRimOverlay || fe is CrystalGlintOverlay || fe is PrismRippleLayer ||
+                fe is HorizonAura || fe is LiquidVial) return true;
 
-            // 内置控件模板内部（TextBox/ComboBox/ScrollBar 的 PART_*/Ph/TextBoxView、AdornerLayer/AdornerDecorator）
+            // 内置控件模板内部（TextBox/ComboBox/ScrollBar/Slider 的 PART_*/Ph/TextBoxView、AdornerLayer/AdornerDecorator）
             // 不是我们的布局，而且模板内部本来就有"输入宿主 + 占位符 + 装饰层"的覆盖关系，整棵跳过。
             if (fe is System.Windows.Documents.AdornerLayer) return true;
             if (fe is System.Windows.Documents.AdornerDecorator) return true;
@@ -174,7 +176,7 @@ namespace LodStudio.Cli.UiAudit
             return false;
         }
 
-        /// <summary>是否位于 TextBox / ComboBox / ScrollBar 的模板内部（向上找祖先）。</summary>
+        /// <summary>是否位于 TextBox / ComboBox / ScrollBar / Slider 的模板内部（向上找祖先）。</summary>
         private static bool IsInsideBuiltInTemplate(FrameworkElement fe)
         {
             DependencyObject cur = UiTree.ParentOf(fe);
@@ -184,6 +186,7 @@ namespace LodStudio.Cli.UiAudit
                 if (cur is TextBox) return true;
                 if (cur is ComboBox) return true;
                 if (cur is ScrollBar) return true;
+                if (cur is Slider) return true;
                 if (cur is System.Windows.Documents.AdornerLayer) return true;
                 cur = UiTree.ParentOf(cur);
             }

@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading;
+using LodStudio.Cli;
 
 namespace LodStudio.Engine
 {
@@ -41,6 +43,27 @@ namespace LodStudio.Engine
             string path = Path.Combine(dir, name + ".smd");
             SmdCodec.Write(path, MakeSmd(triangles));
             return path;
+        }
+
+        private static SmdModel WriteGridGlb(string dir, int size)
+        {
+            SmdVertex Vertex(int x, int y) => new SmdVertex
+            {
+                X = x, Y = y, Nz = 1, U = x / (float)size, V = y / (float)size
+            };
+            var mesh = new SmdModel();
+            for (int y = 0; y < size; y++)
+                for (int x = 0; x < size; x++)
+                {
+                    var a = Vertex(x, y);
+                    var b = Vertex(x + 1, y);
+                    var c = Vertex(x + 1, y + 1);
+                    var d = Vertex(x, y + 1);
+                    mesh.Triangles.Add(new SmdTriangle { Material = "grid", V0 = a, V1 = b, V2 = c });
+                    mesh.Triangles.Add(new SmdTriangle { Material = "grid", V0 = a, V1 = c, V2 = d });
+                }
+            File.WriteAllBytes(Path.Combine(dir, "mesh.glb"), SmdGlbCodec.SmdToGlb(mesh));
+            return mesh;
         }
 
         private static string WriteQc(string dir, string name, string modelRef, string extra = null, string toolBlockBroken = null)
@@ -109,6 +132,352 @@ namespace LodStudio.Engine
             ctx.AssertEqual(sharedModel.Jobs[0].Ratio, smallPlan.Levels.Levels[0].Ratio, 0.0001, "预览显示实际分配给共享网格的目标");
             ctx.Assert(AutomaticLod.Plan(12000).Ratios[0] > AutomaticLod.Plan(18000).Ratios[0],
                 "同样只有一档时，高面数模型使用更低的目标保留比例");
+        }
+
+        [SelfTest("自动 LOD：自定义目标与最小减面比例影响候选和发布")]
+        public static void ConfigurableAutomaticBudgets(SelfTestContext ctx)
+        {
+            string dir = ctx.NewDir("batch_auto_custom");
+            const int size = 25;
+            var mesh = WriteGridGlb(dir, size);
+            string qc = WriteQc(dir, "actor", "mesh.glb");
+            var tasks = new List<TaskRef> { new TaskRef(TaskKind.Qc, qc) };
+            var options = Options();
+            options.Automatic = true;
+            options.WriteReport = false;
+            options.Workers = 1;
+            options.AutoTargetTriangles = 1500;
+            ctx.Assert(Plan(tasks, dir, options).QcPlans.Single().Action == BatchQcAction.Skip, "源面数低于自定义目标时跳过");
+
+            options.AutoTargetTriangles = 1000;
+            options.AutoMinSavingsPercent = 50;
+            var plan = Plan(tasks, dir, options);
+            ctx.AssertEqual(1, plan.JobCount, "降低目标后生成一个候选");
+            ctx.AssertEqual(0.8, plan.QcPlans.Single().Levels.Levels.Single().Ratio, 1e-9, "候选按自定义目标计算保留比例");
+            var rejected = BatchRunner.Run(plan, options, null, CancellationToken.None);
+            ctx.Assert(rejected.Ok, "候选减面运行应成功：" + string.Join("; ", rejected.Errors));
+            var rejectedLevel = rejected.QcOutcomes.Single().Levels.Single();
+            ctx.Assert(rejectedLevel.Triangles < mesh.TriangleCount, "候选确实减少了面数");
+            ctx.AssertContains(rejectedLevel.SkipReason, "50%", "严格的减面门槛应拒绝候选");
+            ctx.AssertEqual(0, rejected.Stats.PublishedLods, "拒绝的候选未发布");
+
+            string output = Path.Combine(dir, "out");
+            string settingsDir = Directory.CreateDirectory(Path.Combine(dir, "settings")).FullName;
+            File.WriteAllText(Path.Combine(settingsDir, "settings.ini"), "");
+            string previousSettingsDir = Environment.GetEnvironmentVariable(AppInfo.SettingsDirEnvVar);
+            try
+            {
+                Environment.SetEnvironmentVariable(AppInfo.SettingsDirEnvVar, settingsDir);
+                var cli = CommandLine.Parse(new[] { "--batch", qc, "--out", output, "--profile", "1", "--workers", "1",
+                    "--shadowlod", "--shadow-ratio=0.3", "--auto-target=1000", "--auto-min-savings=1",
+                    "--collapse-bones", "detail|toe", "--collapse-bones-from=1" });
+                ctx.AssertEqual(0, BatchCommand.RunBatch(cli), "CLI 使用宽松的减面门槛执行批量");
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable(AppInfo.SettingsDirEnvVar, previousSettingsDir);
+            }
+
+            var planJson = Json.ParseObjectSafe(File.ReadAllText(Path.Combine(output, "plan.json")));
+            ctx.Assert(Json.GetBool(planJson, "automatic"), "计划 JSON 标记自动模式");
+            ctx.AssertEqual(1, Json.GetInt(planJson, "reductionProfile", -1), "计划 JSON 保真档位");
+            ctx.Assert(Json.GetBool(planJson, "generateShadowLod"), "计划 JSON 标记生成阴影网格");
+            ctx.AssertEqual(0.3, Json.GetDouble(planJson, "shadowLodRatio"), 1e-9, "计划 JSON 阴影保留比例");
+            ctx.AssertEqual(0, Json.GetInt(planJson, "shadowLodMode", -1), "默认保持独立阴影模式");
+            ctx.AssertEqual(0, Json.GetInt(planJson, "shadowLodReuseLevel", -1), "默认复用档位为最远档");
+            ctx.AssertEqual(1000, Json.GetInt(planJson, "autoTargetTriangles"), "计划 JSON 目标面数");
+            ctx.AssertEqual(1, Json.GetInt(planJson, "autoMinSavingsPercent"), "计划 JSON 最小减面比例");
+
+            var batchJson = Json.ParseObjectSafe(File.ReadAllText(Path.Combine(output, "batch.json")));
+            var stats = (Dictionary<string, object>)batchJson["stats"];
+            ctx.AssertEqual(1, Json.GetInt(stats, "publishedLods"), "宽松的减面门槛应发布距离网格");
+            ctx.AssertEqual(1, Json.GetInt(stats, "shadowLodsPublished"), "结果 JSON 包含已发布阴影网格");
+            ctx.AssertEqual(1, Json.GetInt(stats, "shadowLodQcsWritten"), "独立阴影写入一个 QC");
+            ctx.AssertEqual(0, Json.GetInt(stats, "shadowLodReusedQcs", -1), "独立阴影未回退");
+            ctx.AssertContains(File.ReadAllText(qc), "$lod ", "自动模式的一档可见 LOD 仍然写入");
+            ctx.Assert(Json.GetDouble(stats, "deviationSampleCount") > 0, "结果 JSON 包含偏差采样数");
+            ctx.Assert(Json.GetInt(stats, "maxSurfaceDeviationPpm", -1) >= Json.GetInt(stats, "meanSurfaceDeviationPpm", -1) &&
+                Json.GetInt(stats, "meanSurfaceDeviationPpm", -1) >= 0, "结果 JSON 包含有效的峰值和平均偏差");
+            var qcJson = (Dictionary<string, object>)((List<object>)batchJson["qc"]).Single();
+            var levelJson = (Dictionary<string, object>)((List<object>)qcJson["levels"]).Single();
+            ctx.AssertEqual((int)rejectedLevel.Triangles, Json.GetInt(levelJson, "triangles"), "修改门槛时同一候选面数不变");
+            ctx.AssertEqual(rejectedLevel.MaxSurfaceDeviationPpm, Json.GetInt(levelJson, "maxSurfaceDeviationPpm", -1),
+                "自动档结果 JSON 包含候选峰值偏差");
+            ctx.Assert(Json.GetBool(qcJson, "injected"), "宽松的减面门槛应发布 QC");
+            string finalQc = File.ReadAllText(qc);
+            ctx.AssertContains(finalQc, "bonetreecollapse \"detail\"", "CLI 应传入第一个骨骼");
+            ctx.AssertContains(finalQc, "bonetreecollapse \"toe\"", "CLI 应传入第二个骨骼");
+        }
+
+        [SelfTest("CLI：保真档位优先级、参数范围及自动模式限制")]
+        public static void CliLodOptions(SelfTestContext ctx)
+        {
+            string dir = ctx.NewDir("batch_cli_options");
+            var settings = new AppSettings { ReductionProfile = 0, ShadowLodRatio = 0.32 };
+            var observer = new CollectingObserver();
+            BatchRunOptions Build(params string[] args) => BatchCommand.BuildOptions(CommandLine.Parse(args), dir, settings, observer);
+
+            var cli = CommandLine.Parse(new[] { "--plan", "--SHADOWLOD", dir, "--profile=-8", "--fast", "--shadow-ratio", "0.125",
+                "--nofacial-from=8", "--collapse-bones", "detail|toe", "--collapse-bones-from=-1",
+                "--auto-target", "5", "--auto-min-savings", "90", "--mode=0" });
+            ctx.AssertEqual(dir, cli.Paths.Single(), "阴影开关后仍可传入项目路径");
+            var culture = Thread.CurrentThread.CurrentCulture;
+            try
+            {
+                Thread.CurrentThread.CurrentCulture = CultureInfo.GetCultureInfo("fr-FR");
+                ctx.AssertEqual(0.125, cli.GetDoubleOption("shadow-ratio", -1), 1e-9, "浮点参数使用固定小数点");
+                ctx.AssertEqual(0.32, CommandLine.Parse(new[] { "--shadow-ratio=0,25" }).GetDoubleOption("shadow-ratio", 0.32),
+                    1e-9, "无效浮点参数使用回退值");
+            }
+            finally { Thread.CurrentThread.CurrentCulture = culture; }
+
+            var automatic = BatchCommand.BuildOptions(cli, dir, settings, observer);
+            ctx.Assert(automatic.Automatic && automatic.GenerateShadowLod, "自动模式允许启用阴影 LOD");
+            ctx.AssertEqual(0, automatic.ReductionProfile, "显式档位优先于 --fast，并限制下界");
+            ctx.Assert(automatic.QualityFirst, "严格档同步质量模式");
+            ctx.AssertEqual(0.125, automatic.ShadowLodRatio, 1e-9, "阴影比例");
+            ctx.AssertEqual(7, automatic.NoFacialFromLevel, "表情开始档位上界");
+            ctx.AssertEqual("detail|toe", automatic.CollapseBones, "骨骼列表");
+            ctx.AssertEqual(1, automatic.CollapseBonesFromLevel, "骨骼折叠开始档位下界");
+            ctx.AssertEqual(1000, automatic.AutoTargetTriangles, "自动目标下界");
+            ctx.AssertEqual(50, automatic.AutoMinSavingsPercent, "最小减面比例上界");
+
+            settings.GenerateShadowLod = true;
+            var manual = Build("--preset=1", "--nofacial", "--nofacial-from=0", "--no-shadowlod", "--shadow-ratio=0.01",
+                "--collapse-bones-from=9", "--profile=9", "--quality", "--auto-target=999999", "--auto-min-savings=0");
+            ctx.Assert(!manual.Automatic && manual.NoFacial && !manual.GenerateShadowLod, "手动表情开关与关闭阴影");
+            ctx.AssertEqual(1, manual.NoFacialFromLevel, "表情开始档位下界");
+            ctx.AssertEqual(7, manual.CollapseBonesFromLevel, "骨骼折叠开始档位上界");
+            ctx.AssertEqual(0.05, manual.ShadowLodRatio, 1e-9, "阴影比例下界");
+            ctx.AssertEqual(0.60, Build("--shadow-ratio=1").ShadowLodRatio, 1e-9, "阴影比例上界");
+            ctx.AssertEqual(0.20, Build("--shadow-ratio=NaN").ShadowLodRatio, 1e-9, "NaN 阴影比例恢复默认");
+            ctx.AssertEqual(200000, manual.AutoTargetTriangles, "自动目标上界");
+            ctx.AssertEqual(1, manual.AutoMinSavingsPercent, "最小减面比例下界");
+            ctx.AssertEqual(2, manual.ReductionProfile, "显式档位优先于 --quality，并限制上界");
+            ctx.Assert(!manual.QualityFirst, "高压缩档同步快速模式");
+
+            ctx.AssertEqual(0, Build("--quality").ReductionProfile, "--quality 保留设置中的严格档");
+            ctx.AssertEqual(2, Build("--fast").ReductionProfile, "--fast 选择高压缩档");
+            settings.ReductionProfile = 1;
+            settings.QualityFirst = false;
+            ctx.AssertEqual(2, Build().ReductionProfile, "无参数沿用设置中的有效档位");
+            ctx.AssertEqual(1, Build("--quality").ReductionProfile, "--quality 将高压缩有效档切到平衡档");
+            ctx.AssertEqual(1, Build("--profile=1", "--fast").ReductionProfile, "显式平衡档优先于 --fast");
+            ctx.Assert(Build("--profile=1", "--fast").QualityFirst, "显式平衡档同步质量模式");
+
+            foreach (string flag in new[] { "--nofacial", "--compile", "--force", "--no-backup", "--mode=1", "--mode=-1" })
+                ctx.Assert(Build(flag) == null, "自动模式应拒绝 " + flag);
+        }
+
+        [SelfTest("自动 LOD：报告按采样显示阴影统计与几何峰值偏差")]
+        public static void ReportShadowAndDeviation(SelfTestContext ctx)
+        {
+            string dir = ctx.NewDir("batch_report_deviation");
+            var outcome = new BatchOutcome();
+            var measured = new QcOutcome { QcPath = Path.Combine(dir, "measured.qc"), SourceTriangles = 2000, Injected = true };
+            measured.Levels.Add(new AutomaticLodResult { Candidate = 1, Triangles = 1600, TargetRatio = 0.8 });
+            measured.Levels.Add(new AutomaticLodResult { Candidate = 2, Triangles = 1200, TargetRatio = 0.6 });
+            var unmeasured = new QcOutcome { QcPath = Path.Combine(dir, "unmeasured.qc"), SourceTriangles = 2000, Injected = true };
+            unmeasured.Levels.Add(new AutomaticLodResult { Candidate = 1, Triangles = 1600, TargetRatio = 0.8 });
+            outcome.QcOutcomes.AddRange(new[] { measured, unmeasured });
+            var report = new ReportContext { RootDir = dir, Automatic = true, Outcome = outcome };
+            string ReadReport(string name)
+            {
+                string path = ReportWriter.WriteMarkdownReport(report, Path.Combine(dir, name));
+                ctx.Assert(File.Exists(path), "应写入 Markdown 报告");
+                return File.ReadAllText(path);
+            }
+
+            const string header = "| 候选档 | 目标保留 | 实际三角面 | 实际保留 | 估算距离 HU | Source 阈值 |";
+            string defaultTable = header + " 结果 |" + Environment.NewLine + "| --- | --- | --- | --- | --- | --- | --- |";
+            string empty = ReadReport("empty");
+            ctx.AssertContains(empty, defaultTable, "原始表头与分隔线");
+            ctx.AssertNotContains(empty, "阴影 LOD", "未发布时省略阴影统计");
+            ctx.AssertNotContains(empty, "表面几何偏差", "无采样时省略偏差统计");
+            ctx.AssertNotContains(empty, "几何峰值偏差", "无偏差时省略偏差列");
+
+            outcome.Stats.ShadowLodsPublished = 2;
+            outcome.Stats.ShadowLodQcsWritten = 2;
+            outcome.Stats.MeanSurfaceDeviationPpm = 12345;
+            outcome.Stats.MaxSurfaceDeviationPpm = 25000;
+            outcome.Stats.DeviationSampleCount = 42;
+            measured.Levels[0].MaxSurfaceDeviationPpm = 25000;
+            var culture = Thread.CurrentThread.CurrentCulture;
+            try
+            {
+                Thread.CurrentThread.CurrentCulture = CultureInfo.GetCultureInfo("fr-FR");
+                string text = ReadReport("measured");
+                ctx.AssertContains(text, "| 阴影 LOD | 发布 2 个独立网格 |", "阴影网格统计");
+                ctx.AssertContains(text, "| 含 $shadowlod 的 QC | 2 个 |", "阴影 QC 统计");
+                ctx.AssertContains(text, "| 表面几何偏差 | 平均 1.23% / 峰值 2.50%（采样 42 顶点） |", "偏差换算与固定小数点");
+                ctx.AssertContains(text, header + " 几何峰值偏差 | 结果 |" + Environment.NewLine +
+                    "| --- | --- | --- | --- | --- | --- | --- | --- |", "偏差表头及分隔线");
+                ctx.AssertContains(text, "| 2.50% | 已输出 |", "档位峰值偏差");
+                ctx.AssertContains(text, "| — | 已输出 |", "零偏差档位用破折号");
+                ctx.AssertContains(text, defaultTable, "同一报告中零偏差项目保留原表格");
+            }
+            finally { Thread.CurrentThread.CurrentCulture = culture; }
+        }
+
+        [SelfTest("批量：手动阴影档只在第七级占用可见档的槽位")]
+        public static void DedicatedShadowSlotPlanning(SelfTestContext ctx)
+        {
+            string dir = ctx.NewDir("batch_shadow_slots");
+            WriteSmdModel(dir, "mesh", 60);
+            string qc = WriteQc(dir, "actor", "mesh.smd");
+            var tasks = new List<TaskRef> { new TaskRef(TaskKind.Qc, qc) };
+            foreach (int requested in new[] { 2, 6, 7 })
+            {
+                var options = Options(0);
+                for (int level = 1; level <= requested; level++)
+                    options.Plan.Levels.Add(new LodLevel(level * 10, 1 - level * 0.1));
+                options.GenerateShadowLod = true;
+                var observer = new CollectingObserver();
+                var plan = Plan(tasks, dir, options, observer);
+                var model = plan.Models.Single();
+                int visibleCount = Math.Min(requested, 6);
+                ctx.AssertEqual(requested, options.Plan.Count, "只截断执行计划");
+                ctx.AssertEqual(visibleCount, plan.Plan.Count, "计划显示实际可见档数");
+                ctx.AssertEqual(visibleCount, model.Jobs.Count, "可见任务数");
+                ctx.Assert(model.Jobs.All(j => !j.Destination.Contains("_lod7")), "不计划 _lod7");
+                ctx.Assert(model.ShadowJob?.ShadowMode == true, "计划独立阴影任务");
+                ctx.AssertEqual(visibleCount + 1, plan.JobCount, "总任务数含独立阴影");
+                var blockOptions = new QcLodBlockOptions
+                {
+                    GenerateShadowLod = true, ShadowPublishedPath = _ => model.ShadowJob.Destination
+                };
+                string block = QcWriter.BuildLodBlock(plan.QcPlans.Single().Info, plan.Plan,
+                    new HashSet<string>(model.Jobs.Select(j => j.Destination)), false, false, blockOptions,
+                    false, null, null, null, out var emitted);
+                ctx.AssertEqual(visibleCount, emitted.EmittedVisibleLevels, "QC 输出实际可见档数");
+                ctx.Assert(emitted.HasShadowLod && emitted.UsesDedicatedShadow, "QC 输出独立阴影档");
+                ctx.AssertContains(block, "// Shadow LOD  条目 1\n$shadowlod\n{\n", "保留独立阴影格式");
+            }
+        }
+
+        [SelfTest("批量：复用最远或指定阴影档，档位不足时回退")]
+        public static void ReuseShadowLod(SelfTestContext ctx)
+        {
+            string dir = ctx.NewDir("batch_reuse_shadow");
+            foreach (int requested in new[] { 0, 2, 5 })
+            {
+                string project = Directory.CreateDirectory(Path.Combine(dir, requested.ToString())).FullName;
+                WriteGridGlb(project, 25);
+                string qc = WriteQc(project, "actor", "mesh.glb");
+                var tasks = new List<TaskRef> { new TaskRef(TaskKind.Qc, qc) };
+                var options = Options();
+                options.GenerateShadowLod = true;
+                options.ShadowLodMode = ShadowLodMode.ReuseExistingLod;
+                options.ShadowLodReuseLevel = requested;
+                options.OutputMode = requested == 2 ? OutputMode.CollectionOnly : OutputMode.InPlace;
+                options.Workers = 1;
+                options.WriteReport = true;
+                var plan = Plan(tasks, project, options);
+                ctx.Assert(plan.Models.All(m => m.ShadowJob == null), "复用不计划独立阴影任务");
+                ctx.AssertEqual(2, plan.JobCount, "只计划两个可见档");
+                var outcome = BatchRunner.Run(plan, options, null, CancellationToken.None);
+                ctx.Assert(outcome.Ok, "复用阴影运行成功：" + string.Join(" / ", outcome.Errors));
+                ctx.AssertEqual(0, Directory.GetFiles(project, "*_shadowlod*").Length, "复用不生成独立阴影文件");
+                ctx.AssertEqual(0, outcome.Stats.ShadowLodsPublished, "复用不发布独立阴影文件");
+                ctx.AssertEqual(1, outcome.Stats.ShadowLodQcsWritten, "写入一个阴影 QC");
+                ctx.AssertEqual(1, outcome.Stats.ShadowLodReusedQcs, "一个 QC 复用阴影");
+                var block = outcome.QcOutcomes.Single().LodBlock;
+                ctx.AssertEqual(2, block.EmittedVisibleLevels, "两个可见档都写入");
+                ctx.AssertEqual(2, block.ShadowReusedLevel, "选中第二个可见档");
+                string qcText = File.ReadAllText(options.OutputMode == OutputMode.CollectionOnly
+                    ? Path.Combine(project, options.CollectionName) : qc).Replace("\r\n", "\n");
+                ctx.AssertContains(qcText, "// Shadow LOD（复用 LOD2）  条目 1\n$shadowlod\n{\n\treplacemodel \"mesh.glb\" \"mesh_lod2.glb\"",
+                    "阴影引用实际写入的第二档");
+                if (requested == 5)
+                {
+                    ctx.AssertContains(qcText, "第 5 档未写入", "QC 说明回退原因");
+                    ctx.Assert(outcome.LogLines.Any(line => line.Contains("回退到最远档 LOD2")), "日志说明回退原因");
+                }
+                ctx.AssertContains(File.ReadAllText(outcome.ReportPath),
+                    "| 阴影 LOD | 复用已有 LOD 写入 1 个 QC（不额外生成阴影文件） |", "复用模式的报告统计");
+            }
+
+            string standalone = Directory.CreateDirectory(Path.Combine(dir, "standalone")).FullName;
+            WriteGridGlb(standalone, 25);
+            var standaloneTasks = new List<TaskRef> { new TaskRef(TaskKind.Glb, Path.Combine(standalone, "mesh.glb")) };
+            var automatic = Options();
+            automatic.Automatic = true;
+            automatic.GenerateShadowLod = true;
+            automatic.ShadowLodMode = ShadowLodMode.ReuseExistingLod;
+            automatic.AutoTargetTriangles = 1000;
+            automatic.AutoMinSavingsPercent = 1;
+            automatic.Workers = 1;
+            automatic.WriteReport = false;
+            var standalonePlan = Plan(standaloneTasks, standalone, automatic);
+            ctx.Assert(standalonePlan.QcPlans.Single().IsStandalone, "自动模式下独立模型无需 QC");
+            ctx.Assert(standalonePlan.Models.All(m => m.ShadowJob == null), "独立模型无阴影任务");
+            var standaloneOutcome = BatchRunner.Run(standalonePlan, automatic, null, CancellationToken.None);
+            ctx.Assert(standaloneOutcome.Ok && standaloneOutcome.GeneratedModels == 1,
+                "独立模型生成成功：" + string.Join(" / ", standaloneOutcome.LogLines));
+            ctx.AssertEqual(0, standaloneOutcome.Stats.ShadowLodQcsWritten, "独立模型无阴影 QC");
+            ctx.AssertEqual(0, Directory.GetFiles(standalone, "*_shadowlod*").Length, "独立模型无额外阴影网格");
+        }
+
+        [SelfTest("阴影设置：INI 默认值、往返保存、范围和 CLI 覆盖")]
+        public static void ShadowSettingsAndCli(SelfTestContext ctx)
+        {
+            string dir = ctx.NewDir("batch_shadow_ini");
+            string settingsDir = Directory.CreateDirectory(Path.Combine(dir, "settings")).FullName;
+            string oldDir = Environment.GetEnvironmentVariable(AppInfo.SettingsDirEnvVar);
+            try
+            {
+                Environment.SetEnvironmentVariable(AppInfo.SettingsDirEnvVar, settingsDir);
+                File.WriteAllText(SettingsStore.FilePath, "[Advanced]\nGenerateShadowLod=1\nShadowLodRatio=0.3\n");
+                var settings = SettingsStore.Load();
+                ctx.AssertEqual(0, settings.ShadowLodMode, "旧版设置默认独立阴影");
+                ctx.AssertEqual(0, settings.ShadowLodReuseLevel, "旧版设置末档默认");
+                settings.ShadowLodMode = 1;
+                settings.ShadowLodReuseLevel = 3;
+                SettingsStore.Save(settings);
+                settings = SettingsStore.Load();
+                ctx.AssertEqual(1, settings.ShadowLodMode, "保存复用模式");
+                ctx.AssertEqual(3, settings.ShadowLodReuseLevel, "保存指定档位");
+
+                var observer = new CollectingObserver();
+                BatchRunOptions Build(params string[] args) => BatchCommand.BuildOptions(CommandLine.Parse(args), dir, settings, observer);
+                ctx.Assert(Build().ShadowLodMode == ShadowLodMode.ReuseExistingLod, "CLI 默认采用设置中的复用模式");
+                ctx.AssertEqual(3, Build().ShadowLodReuseLevel, "CLI 默认采用设置中的指定档");
+                foreach (string alias in new[] { "dedicated", "INDEPENDENT", "0" })
+                    ctx.Assert(Build("--shadow-mode=" + alias).ShadowLodMode == ShadowLodMode.Dedicated, "独立阴影别名 " + alias);
+                settings.ShadowLodMode = 0;
+                foreach (string alias in new[] { "reuse", "EXISTING", "1" })
+                    ctx.Assert(Build("--shadow-mode=" + alias).ShadowLodMode == ShadowLodMode.ReuseExistingLod, "复用阴影别名 " + alias);
+                ctx.AssertEqual(0, Build("--shadow-reuse-level=LAST").ShadowLodReuseLevel, "last 对应末档");
+                ctx.AssertEqual(0, Build("--shadow-reuse-level=-1").ShadowLodReuseLevel, "档位下限");
+                ctx.AssertEqual(6, Build("--shadow-reuse-level=7").ShadowLodReuseLevel, "档位上限");
+                ctx.Assert(!Build("--shadow-mode=reuse", "--shadowlod", "--no-shadowlod").GenerateShadowLod, "关闭阴影优先");
+                settings.GenerateShadowLod = false;
+                ctx.Assert(!Build("--shadow-mode=reuse", "--shadow-reuse-level=2").GenerateShadowLod, "选择模式或档位不会打开开关");
+
+                settings.ShadowLodMode = 8;
+                settings.ShadowLodReuseLevel = 9;
+                settings.Normalize();
+                ctx.AssertEqual(1, settings.ShadowLodMode, "设置模式上界");
+                ctx.AssertEqual(6, settings.ShadowLodReuseLevel, "设置档位上界");
+
+                WriteGridGlb(dir, 25);
+                string qc = WriteQc(dir, "actor", "mesh.glb");
+                string output = Path.Combine(dir, "out");
+                var cli = CommandLine.Parse(new[] { "--plan", qc, "--out", output, "--shadowlod",
+                    "--shadow-mode=reuse", "--shadow-reuse-level=2", "--auto-target=1000" });
+                ctx.AssertEqual(0, BatchCommand.RunPlan(cli), "CLI 计划成功");
+                var json = Json.ParseObjectSafe(File.ReadAllText(Path.Combine(output, "plan.json")));
+                ctx.Assert(Json.GetBool(json, "generateShadowLod"), "CLI 计划标记阴影已启用");
+                ctx.AssertEqual(1, Json.GetInt(json, "shadowLodMode", -1), "CLI 计划标记复用模式");
+                ctx.AssertEqual(2, Json.GetInt(json, "shadowLodReuseLevel", -1), "CLI 计划标记指定档");
+                var counts = (Dictionary<string, object>)json["counts"];
+                ctx.AssertEqual(1, Json.GetInt(counts, "visibleJobs", -1), "CLI 计划只安排一档候选");
+                ctx.AssertEqual(0, Json.GetInt(counts, "shadowJobs", -1), "CLI 计划不安排阴影任务");
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable(AppInfo.SettingsDirEnvVar, oldDir);
+            }
         }
 
         [SelfTest("批量：基本计划（QC→模型→每级任务）")]

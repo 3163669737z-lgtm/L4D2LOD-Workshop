@@ -30,7 +30,9 @@ namespace LodStudio.ViewModels
             foreach (var qc in plan.QcPlans.OrderBy(q => q.Action))
             {
                 int maxJobs = plan.Automatic ? qc.Levels?.Count ?? 0 : int.MaxValue;
-                int jobs = qc.Models.Sum(m => System.Math.Min(m.Jobs.Count, maxJobs));
+                int visibleJobs = qc.Models.Sum(m => System.Math.Min(m.Jobs.Count, maxJobs));
+                int shadowJobs = qc.Models.Count(m => m.ShadowJob != null);
+                string jobSummary = DescribeJobs(visibleJobs, shadowJobs);
                 bool process = qc.Action == BatchQcAction.Process;
                 bool remove = RemovesOldBlock(plan, qc, options);
                 var action = process ? "生成" : remove ? "清理" : qc.Action == BatchQcAction.Skip ? "跳过" : "错误";
@@ -50,6 +52,9 @@ namespace LodStudio.ViewModels
                         detail.Add("有效档位、面数和切换距离以生成报告为准。");
                     }
                     if (qc.IsWrapperQc) detail.Add("将为源模型新建包装 QC。");
+                    detail.Add(jobSummary);
+                    if (options.GenerateShadowLod && !qc.IsStandalone)
+                        detail.Add(DescribeShadow(options));
                 }
                 foreach (var model in qc.Models)
                 {
@@ -58,7 +63,7 @@ namespace LodStudio.ViewModels
                         (reason ?? model.Triangles.ToString("N0", CultureInfo.InvariantCulture) + " 面") + "\n" + model.Path);
                 }
                 rows.Add(CreateRow(qc.QcPath, action, tone, summary,
-                    process ? qc.Models.Count(m => m.Jobs.Count > 0) + " 个减面模型 · " + jobs + " 个任务" : "", string.Join("\n", detail)));
+                    process ? qc.Models.Count(m => m.Jobs.Count > 0) + " 个减面模型 · " + jobSummary : "", string.Join("\n", detail)));
             }
             var failedTasks = plan.Tasks.Where(t => !string.IsNullOrEmpty(t.Error)).ToList();
             foreach (var task in failedTasks)
@@ -72,8 +77,9 @@ namespace LodStudio.ViewModels
             ModelCount = plan.Models.Count(m => m.Jobs.Count > 0);
             JobCount = plan.JobCount;
             HasWorkToStart = HasWork(plan, options);
+            int dedicatedJobs = plan.Models.Count(m => m.ShadowJob != null);
             Headline = CleanupOnly ? "可清理 " + CleanupCount + " 个旧 $lod 工具块" : HasWorkToStart
-                ? ProcessCount + " 项生成 · " + ModelCount + " 个模型参与减面 · " + JobCount + " 个减面任务"
+                ? ProcessCount + " 项生成 · " + ModelCount + " 个模型参与减面 · " + DescribeJobs(JobCount - dedicatedJobs, dedicatedJobs)
                 : "暂无可生成的作业";
             var breakdown = new List<string>();
             if (CleanupCount > 0) breakdown.Add(CleanupCount + " 项清理");
@@ -147,9 +153,25 @@ namespace LodStudio.ViewModels
             int standaloneCount = plan.QcPlans.Count(q => q.Action == BatchQcAction.Process && q.IsStandalone);
             if (qcCount > 0) parts.Add(qcCount + " 个 QC · " + DescribeQcWrite(options.OutputMode));
             if (standaloneCount > 0) parts.Add(standaloneCount + " 个独立模型 · 生成 LOD 网格");
+            if (options.GenerateShadowLod && qcCount > 0) parts.Add(DescribeShadow(options));
+            else if (plan.Models.Any(m => m.ShadowJob != null))
+                parts.Add("独立阴影网格 " + LodPlan.Pct(options.ShadowLodRatio) + "%");
+            if (qcCount > 0 && !string.IsNullOrWhiteSpace(options.CollapseBones))
+                parts.Add("从第 " + options.CollapseBonesFromLevel + " 级起应用 bonetreecollapse");
             int cleanupCount = plan.QcPlans.Count(q => RemovesOldBlock(plan, q, options));
             if (cleanupCount > 0) parts.Add(cleanupCount + " 个 QC · 清理旧工具块");
             return string.Join("，", parts);
+        }
+
+        private static string DescribeJobs(int visible, int dedicated) =>
+            visible + " 个可见 LOD 任务" + (dedicated > 0 ? " · " + dedicated + " 个独立阴影任务" : "");
+
+        private static string DescribeShadow(BatchRunOptions options)
+        {
+            if (options.ShadowLodMode == ShadowLodMode.Dedicated)
+                return "含 $shadowlod（独立阴影网格 " + LodPlan.Pct(options.ShadowLodRatio) + "%）";
+            return options.ShadowLodReuseLevel == 0 ? "含 $shadowlod（复用最远一级 LOD）"
+                : "含 $shadowlod（复用第 " + options.ShadowLodReuseLevel + " 级 LOD，缺档时用最远一级）";
         }
 
         private static string DescribeQcWrite(OutputMode mode)

@@ -25,7 +25,7 @@ namespace LodStudio.Cli
             }
             string outDir = EnsureOut(cli, "plan");
             var obs = new CollectingObserver(s => Console.WriteLine(s));
-            var options = BuildOptions(cli, root, out obs);
+            var options = BuildOptions(cli, root, SettingsStore.Load(), obs);
             if (options == null) return 2;
 
             var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -51,7 +51,7 @@ namespace LodStudio.Cli
             }
             string outDir = EnsureOut(cli, "batch");
             var obs = new CollectingObserver(s => Console.WriteLine(s));
-            var options = BuildOptions(cli, root, out obs);
+            var options = BuildOptions(cli, root, SettingsStore.Load(), obs);
             if (options == null) return 2;
             options.ReportDir = !string.IsNullOrEmpty(cli.GetOption("report-dir")) ? cli.GetOption("report-dir") : outDir;
 
@@ -72,6 +72,9 @@ namespace LodStudio.Cli
             Console.WriteLine("BATCH: " + (outcome.Ok ? "OK" : "FAILED") + " · " +
                               outcome.Stats.InjectedQcCount + " QC 写入 · " + outcome.GeneratedModels + " 个独立模型 · " + outcome.Stats.PublishedLods + " 个 LOD 网格 · " +
                               "用时 " + sw.Elapsed.TotalSeconds.ToString("0.0", CultureInfo.InvariantCulture) + "s");
+            if (outcome.Stats.ShadowLodQcsWritten > 0 || outcome.Stats.ShadowLodsPublished > 0)
+                Console.WriteLine("$shadowlod：写入 " + outcome.Stats.ShadowLodQcsWritten + " 个 QC（" +
+                    outcome.Stats.ShadowLodReusedQcs + " 个 QC 含复用），发布 " + outcome.Stats.ShadowLodsPublished + " 个独立阴影网格");
             if (!string.IsNullOrEmpty(outcome.ReportPath)) Console.WriteLine("报告: " + outcome.ReportPath);
             if (!string.IsNullOrEmpty(outcome.LogPath)) Console.WriteLine("日志: " + outcome.LogPath);
             foreach (var e in outcome.Errors.Take(20)) Console.WriteLine("  ERR " + e);
@@ -80,15 +83,39 @@ namespace LodStudio.Cli
 
         // ─────────────────────── 选项 ───────────────────────
 
-        private static BatchRunOptions BuildOptions(CommandLine cli, string rootDir, out CollectingObserver obs)
+        internal static BatchRunOptions BuildOptions(CommandLine cli, string rootDir, AppSettings settings, CollectingObserver obs)
         {
-            obs = new CollectingObserver(s => Console.WriteLine(s));
-            var settings = SettingsStore.Load();
+            int settingsProfile = settings.EffectiveReductionProfile();
+            int profile = settingsProfile;
+            if (cli.HasFlag("profile"))
+                profile = Math.Max(0, Math.Min(2, cli.GetIntOption("profile", settingsProfile)));
+            else if (cli.HasFlag("fast"))
+                profile = 2;
+            else if (cli.HasFlag("quality"))
+                profile = Math.Min(1, settingsProfile);
+
+            double shadowRatio = cli.GetDoubleOption("shadow-ratio", settings.ShadowLodRatio);
+            var shadowMode = cli.GetOption("shadow-mode")?.Trim().ToLowerInvariant() switch
+            {
+                "dedicated" or "independent" or "0" => ShadowLodMode.Dedicated,
+                "reuse" or "existing" or "1" => ShadowLodMode.ReuseExistingLod,
+                _ => (ShadowLodMode)Math.Max(0, Math.Min(1, settings.ShadowLodMode))
+            };
+            int reuseLevel = string.Equals(cli.GetOption("shadow-reuse-level")?.Trim(), "last", StringComparison.OrdinalIgnoreCase)
+                ? 0 : cli.GetIntOption("shadow-reuse-level", settings.ShadowLodReuseLevel);
+            int mode = cli.GetIntOption("mode", settings.OutputMode);
             var opts = new BatchRunOptions
             {
                 NekomdlPath = cli.GetOption("nekomdl", settings.NekomdlPath),
                 Workers = cli.GetIntOption("workers", settings.Workers),
-                QualityFirst = !cli.HasFlag("fast") && (cli.HasFlag("quality") || settings.QualityFirst),
+                QualityFirst = profile != 2,
+                ReductionProfile = profile,
+                GenerateShadowLod = !cli.HasFlag("no-shadowlod") && (cli.HasFlag("shadowlod") || settings.GenerateShadowLod),
+                ShadowLodRatio = double.IsNaN(shadowRatio) ? 0.20 : Math.Max(0.05, Math.Min(0.60, shadowRatio)),
+                ShadowLodMode = shadowMode,
+                ShadowLodReuseLevel = Math.Max(0, Math.Min(QcWriter.MaxVisibleLodsWithShadow, reuseLevel)),
+                AutoTargetTriangles = Math.Max(1000, Math.Min(200000, cli.GetIntOption("auto-target", settings.AutoTargetTriangles))),
+                AutoMinSavingsPercent = Math.Max(1, Math.Min(50, cli.GetIntOption("auto-min-savings", settings.AutoMinSavingsPercent))),
                 AdaptiveTriangleBudget = !cli.HasFlag("legacy-budget") &&
                                          (cli.HasFlag("density-budget") || settings.AdaptiveTriangleBudget),
                 AllowVertexUpdates = !cli.HasFlag("fixed-vertices") &&
@@ -97,8 +124,11 @@ namespace LodStudio.Cli
                 Force = cli.HasFlag("force"),
                 CompileAfter = cli.HasFlag("compile"),
                 NoFacial = !cli.HasFlag("facial") && (cli.HasFlag("nofacial") || settings.NoFacial),
+                NoFacialFromLevel = Math.Max(1, Math.Min(LodPlan.MaxLevels, cli.GetIntOption("nofacial-from", settings.NoFacialFromLevel))),
+                CollapseBones = cli.GetOption("collapse-bones", settings.CollapseBones),
+                CollapseBonesFromLevel = Math.Max(1, Math.Min(LodPlan.MaxLevels, cli.GetIntOption("collapse-bones-from", settings.CollapseBonesFromLevel))),
                 SkipMainModel = cli.HasFlag("skip-main"),
-                OutputMode = (OutputMode)Math.Max(0, Math.Min(2, cli.GetIntOption("mode", settings.OutputMode))),
+                OutputMode = (OutputMode)Math.Max(0, Math.Min(2, mode)),
                 BackupEnabled = !cli.HasFlag("no-backup"),
                 ProjectRoot = rootDir,
                 ReportDir = null,
@@ -122,14 +152,13 @@ namespace LodStudio.Cli
             if (opts.Automatic)
             {
                 if (manual || opts.CompileAfter || opts.Force || cli.HasFlag("nofacial") || cli.HasFlag("no-backup") ||
-                    (cli.HasFlag("mode") && opts.OutputMode != OutputMode.InPlace))
+                    (cli.HasFlag("mode") && mode != (int)OutputMode.InPlace))
                 {
                     Console.WriteLine("自动模式使用原 QC 写入、备份和表情保护。已有手工参数的脚本可显式指定 --preset 或 --dist 与 --ratio。");
                     return null;
                 }
                 opts.OutputMode = OutputMode.InPlace;
                 opts.NoFacial = false;
-                opts.QualityFirst = !cli.HasFlag("fast");
                 opts.AdaptiveTriangleBudget = !cli.HasFlag("legacy-budget");
                 opts.AllowVertexUpdates = cli.HasFlag("vertex-update") && !cli.HasFlag("fixed-vertices");
                 opts.KeepOriginalModels = cli.GetOption("keep-models", "");
@@ -238,12 +267,21 @@ namespace LodStudio.Cli
             w.Prop("automatic", plan.Automatic);
             w.Prop("mode", (int)opt.OutputMode);
             w.Prop("qualityFirst", opt.QualityFirst);
+            w.Prop("reductionProfile", opt.ReductionProfile);
+            w.Prop("generateShadowLod", opt.GenerateShadowLod);
+            w.Prop("shadowLodRatio", opt.ShadowLodRatio);
+            w.Prop("shadowLodMode", (int)opt.ShadowLodMode);
+            w.Prop("shadowLodReuseLevel", opt.ShadowLodReuseLevel);
+            int shadowJobs = plan.Models.Count(model => model.ShadowJob != null);
+            w.Prop("autoTargetTriangles", opt.AutoTargetTriangles);
+            w.Prop("autoMinSavingsPercent", opt.AutoMinSavingsPercent);
             w.Prop("adaptiveTriangleBudget", opt.AdaptiveTriangleBudget);
             w.Prop("allowVertexUpdates", opt.AllowVertexUpdates);
             w.Prop("force", opt.Force);
             w.Name("counts").BeginObject()
                 .Prop("qc", plan.QcPlans.Count).Prop("process", plan.ProcessCount).Prop("skip", plan.SkipCount)
                 .Prop("error", plan.ErrorCount).Prop("models", plan.Models.Count).Prop("jobs", plan.JobCount)
+                .Prop("visibleJobs", plan.JobCount - shadowJobs).Prop("shadowJobs", shadowJobs)
                 .Prop("sourceTriangles", plan.TotalSourceTriangles)
                 .EndObject();
             w.Name("qc").BeginArray();
@@ -267,6 +305,7 @@ namespace LodStudio.Cli
                     w.Prop("triangles", m.Triangles);
                     w.Prop("smd", m.IsSmd);
                     w.Prop("jobs", m.Jobs.Count);
+                    w.Prop("shadowJobs", m.ShadowJob == null ? 0 : 1);
                     w.Prop("skipReason", m.SkipReason ?? "");
                     w.EndObject();
                 }
@@ -282,6 +321,7 @@ namespace LodStudio.Cli
                 w.Prop("triangles", m.Triangles);
                 w.Prop("smd", m.IsSmd);
                 w.Prop("jobs", m.Jobs.Count);
+                w.Prop("shadowJobs", m.ShadowJob == null ? 0 : 1);
                 w.Prop("skipReason", m.SkipReason ?? "");
                 w.Name("outputs").BeginArray();
                 if (!plan.Automatic) foreach (var j in m.Jobs) w.Value(j.Destination);
@@ -311,6 +351,10 @@ namespace LodStudio.Cli
                     .Prop("retriedComponents", s.RetriedComponents).Prop("retainedComponents", s.RetainedComponents)
                     .Prop("protectedPrimitives", s.ProtectedPrimitives).Prop("reusedLevels", s.ReusedLevels)
                     .Prop("unreducedLevels", s.UnreducedLevels).Prop("publishedLods", s.PublishedLods)
+                    .Prop("shadowLodsPublished", s.ShadowLodsPublished)
+                    .Prop("shadowLodQcsWritten", s.ShadowLodQcsWritten).Prop("shadowLodReusedQcs", s.ShadowLodReusedQcs)
+                    .Prop("maxSurfaceDeviationPpm", s.MaxSurfaceDeviationPpm).Prop("meanSurfaceDeviationPpm", s.MeanSurfaceDeviationPpm)
+                    .Prop("deviationSampleCount", s.DeviationSampleCount)
                     .Prop("modelsWithoutReduction", s.ModelsWithoutReduction)
                     .Prop("vertexUpdateTrials", s.VertexUpdateTrials).Prop("vertexUpdateAccepted", s.VertexUpdateAccepted)
                     .Prop("vertexUpdateTrianglesSaved", s.VertexUpdateTrianglesSaved)
@@ -330,6 +374,9 @@ namespace LodStudio.Cli
                     w.BeginObject();
                     w.Prop("path", q.QcPath);
                     w.Prop("injected", q.Injected);
+                    w.Prop("emittedVisibleLevels", q.LodBlock.EmittedVisibleLevels);
+                    w.Prop("hasShadowLod", q.LodBlock.HasShadowLod);
+                    w.Prop("shadowReusedLevel", q.LodBlock.ShadowReusedLevel);
                     w.Prop("skipped", q.Skipped);
                     w.Prop("skipReason", q.SkipReason ?? "");
                     w.Prop("compileOk", q.CompileOk);
@@ -343,6 +390,7 @@ namespace LodStudio.Cli
                     foreach (var level in q.Levels)
                         w.BeginObject().Prop("candidate", level.Candidate).Prop("triangles", level.Triangles)
                             .Prop("targetRatio", level.TargetRatio).Prop("estimatedDistanceHu", level.EstimatedDistanceHu)
+                            .Prop("maxSurfaceDeviationPpm", level.MaxSurfaceDeviationPpm)
                             .Prop("switchPoint", level.SwitchPoint).Prop("skipReason", level.SkipReason ?? "").EndObject();
                     w.EndArray();
                     w.Name("errors").BeginArray();

@@ -173,6 +173,13 @@ namespace LodStudio.ViewModels
         public string EnvTip { get { return _envTip; } private set { Set(ref _envTip, value); } }
 
         public string AdvancedSummary { get { return _advancedSummary; } private set { Set(ref _advancedSummary, value); } }
+        public string AutoBudgetHint => "目标面数 " + Settings.AutoTargetTriangles.ToString("N0", CultureInfo.InvariantCulture) +
+            " 三角面 · 每级至少减面 " + Settings.AutoMinSavingsPercent.ToString(CultureInfo.InvariantCulture) + "%" +
+            (Settings.GenerateShadowLod ? " · " + ShadowLodSummary : "");
+
+        private string ShadowLodSummary => Settings.ShadowLodMode == (int)ShadowLodMode.ReuseExistingLod
+            ? Settings.ShadowLodReuseLevel == 0 ? "$shadowlod（复用最远档）" : "$shadowlod（复用第 " + Settings.ShadowLodReuseLevel + " 档）"
+            : "$shadowlod（独立 " + Engine.LodPlan.Pct(Settings.ShadowLodRatio) + "%）";
 
         public bool IsLogExpanded
         {
@@ -278,8 +285,15 @@ namespace LodStudio.ViewModels
 
         public void RefreshAdvancedSummary()
         {
-            var parts = new List<string>();
-            parts.Add(Settings.QualityFirst ? "严格几何预算" : "标准几何预算");
+            string profile = Settings.EffectiveReductionProfile() switch
+            {
+                0 => "轮廓精保",
+                2 => "极致减面",
+                _ => "均衡高效"
+            };
+            var parts = new List<string> { profile };
+            if (Settings.GenerateShadowLod) parts.Add(ShadowLodSummary);
+            if (!string.IsNullOrWhiteSpace(Settings.CollapseBones)) parts.Add("骨骼折叠");
             if (Settings.AdaptiveTriangleBudget) parts.Add("均匀减面");
             if (Settings.AllowVertexUpdates) parts.Add("顶点微调");
             parts.Add(Settings.Workers <= 0 ? "自动并行" : Settings.Workers.ToString(CultureInfo.InvariantCulture) + " 路并行");
@@ -287,10 +301,11 @@ namespace LodStudio.ViewModels
             {
                 if (!LodPlan.IsCollectionOnly && Settings.ForceOverwriteLod) parts.Add("覆盖手写");
                 if (!LodPlan.IsCollectionOnly && Settings.CompileAfter) parts.Add("试编译");
-                if (Settings.NoFacial) parts.Add("写入 nofacial");
+                if (Settings.NoFacial) parts.Add("nofacial(≥" + Settings.NoFacialFromLevel.ToString(CultureInfo.InvariantCulture) + ")");
             }
             if (Settings.SkipMainModel) parts.Add("跳过主模型");
             AdvancedSummary = string.Join(" · ", parts.ToArray());
+            Raise(nameof(AutoBudgetHint));
         }
 
         /// <summary>设置窗口改动后调用：写盘 + 刷新摘要/就绪 + 计划失效</summary>
@@ -870,6 +885,12 @@ namespace LodStudio.ViewModels
             if (stats.InjectedQcCount > 0) parts.Add((collection ? "汇总 " : "写入 ") + stats.InjectedQcCount + " 个 QC");
             if (generatedModels > 0) parts.Add("生成 " + generatedModels + " 个模型的 LOD");
             if (stats.PublishedLods > 0) parts.Add(stats.PublishedLods + " 个 LOD 网格");
+            if (stats.ShadowLodsPublished > 0) parts.Add(stats.ShadowLodsPublished + " 个独立阴影网格");
+            if (stats.ShadowLodQcsWritten > 0) parts.Add(stats.ShadowLodQcsWritten + " 个 QC 含 $shadowlod");
+            if (stats.ShadowLodReusedQcs > 0) parts.Add(stats.ShadowLodReusedQcs + " 个 QC 复用可见档作阴影");
+            if (stats.DeviationSampleCount > 0)
+                parts.Add(string.Format(CultureInfo.InvariantCulture, "平均偏差 {0:0.00}% / 峰值 {1:0.00}%",
+                    stats.MeanSurfaceDeviationPpm / 10000.0, stats.MaxSurfaceDeviationPpm / 10000.0));
             if (cleaned > 0) parts.Add("清理 " + cleaned + " 个旧工具块");
             if (stats.CompileOk + stats.CompileFail > 0) parts.Add("试编译 " + stats.CompileOk + "/" + (stats.CompileOk + stats.CompileFail));
             if (!automatic && stats.TotalSourceTriangles > 0)
@@ -1049,6 +1070,82 @@ namespace LodStudio.ViewModels
             catch (Exception ex) { text = "诊断失败：" + ex; }
             await _ui.ShowInfoAsync("环境诊断", "把下面的内容复制给开发者可以更快定位问题。", text);
             SetStatus("准备就绪", "环境诊断完成", "Normal", false);
+        }
+
+        public Task RestoreQcBackupsAsync() => RunQcMaintenanceAsync(deleteOrphans: false);
+
+        public Task CleanOrphanLodFilesAsync() => RunQcMaintenanceAsync(deleteOrphans: true);
+
+        private Task RunQcMaintenanceAsync(bool deleteOrphans)
+        {
+            if (!CanEdit) return Task.CompletedTask;
+            string title = deleteOrphans ? "清理未引用的冗余 LOD 文件" : "从 .lodbak 还原原始 QC";
+            return PerformOperationAsync(deleteOrphans ? "清理冗余 LOD 失败" : "还原原始 QC 失败", async token =>
+            {
+                var targets = Queue.Items.Select(t => t.Kind == TaskKind.Folder ? t.Path : Path.GetDirectoryName(FileUtil.Normalize(t.Path)))
+                    .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+                if (targets.Length == 0)
+                {
+                    string folder = await _ui.PickFolderAsync();
+                    if (string.IsNullOrEmpty(folder)) return;
+                    targets = new[] { folder };
+                }
+
+                SetStatus("正在扫描工程", title, "Signal", true);
+                Log.Append(LogLevel.Stage, title + " · 扫描 " + targets.Length + " 个目标目录");
+                foreach (string target in targets) Log.Append(LogLevel.Detail, "扫描目录 · " + target);
+                var scan = await Task.Run(() => QcBackupManager.Scan(targets), token);
+                token.ThrowIfCancellationRequested();
+
+                var files = deleteOrphans ? scan.OrphanLodFiles : scan.BackupFiles;
+                foreach (string reason in scan.SkippedReasons) Log.Append(LogLevel.Warn, reason);
+                string skipped = scan.SkippedReasons.Count > 0 ? "有 " + scan.SkippedReasons.Count + " 条扫描警告，详见日志。" : "";
+                if (files.Count == 0)
+                {
+                    string empty = deleteOrphans ? "未发现未引用的冗余 LOD 文件" : "未找到 .qc.lodbak 备份";
+                    string subtitle = skipped.Length > 0 ? skipped : "已扫描 " + targets.Length + " 个目标目录。";
+                    FinishActivity(empty, subtitle, skipped.Length > 0 ? "Warn" : "Normal");
+                    _ui.ShowToast(empty, subtitle, skipped.Length > 0 ? ToastTone.Warn : ToastTone.Info);
+                    return;
+                }
+
+                const int previewLimit = 15;
+                string detail = string.Join("\n", files.Take(previewLimit));
+                if (files.Count > previewLimit) detail += "\n… 另有 " + (files.Count - previewLimit) + " 个文件";
+                if (skipped.Length > 0)
+                    detail += "\n\n" + skipped + "\n" + string.Join("\n", scan.SkippedReasons.Take(5));
+                string message = deleteOrphans
+                    ? "将永久删除 " + files.Count + " 个未被 QC 引用的 LOD 文件。"
+                    : "将用 " + files.Count + " 份备份覆盖对应的 QC 文件。";
+                FinishActivity("等待确认", message, "Signal");
+                bool confirmed = await _ui.ConfirmAsync(title, message, deleteOrphans ? "删除" : "还原", "取消",
+                    danger: deleteOrphans, detail: detail);
+                token.ThrowIfCancellationRequested();
+                if (!confirmed)
+                {
+                    FinishActivity("已取消", title, "Normal");
+                    return;
+                }
+
+                SetStatus(deleteOrphans ? "正在清理 LOD 文件" : "正在还原 QC", files.Count + " 个文件", "Signal", true);
+                foreach (string file in files) Log.Append(LogLevel.Detail, "已确认处理 · " + file);
+                var result = await Task.Run(() =>
+                {
+                    List<string> errors;
+                    int count = deleteOrphans ? QcBackupManager.DeleteOrphanLodFiles(files, out errors)
+                        : QcBackupManager.RestoreOriginalQcs(files, out errors);
+                    return (Count: count, Errors: errors);
+                }, token);
+
+                if (result.Count > 0 && IsPlanVisible) PlanPreview?.MarkStale();
+                foreach (string error in result.Errors) Log.Append(LogLevel.Error, error);
+                string summary = deleteOrphans ? "已清理 " + result.Count + " 个冗余 LOD 文件" : "已还原 " + result.Count + " 份原始 QC";
+                string sub = result.Errors.Count > 0 ? "有 " + result.Errors.Count + " 个文件处理失败，详见日志。" : skipped;
+                bool hasWarnings = sub.Length > 0;
+                Log.Append(LogLevel.Stage, summary);
+                FinishActivity(summary, sub, hasWarnings ? "Warn" : "Ok");
+                _ui.ShowToast(summary, sub, hasWarnings ? ToastTone.Warn : ToastTone.Ok);
+            });
         }
 
         // ─────────────────────────── 给设置窗口的协作接口 ───────────────────────────
@@ -1364,19 +1461,20 @@ namespace LodStudio.ViewModels
         {
             const string text =
                 "F5            开始生成或按当前预览生成\n" +
-                "Esc           关闭对话框、返回队列、取消当前操作或清筛选\n" +
+                "Esc           关闭对话框、返回队列、取消当前操作或清除筛选\n" +
                 "Ctrl+O        导入文件（QC / GLB / SMD / DMX）\n" +
                 "Ctrl+Shift+O  导入工程文件夹\n" +
                 "Ctrl+F        搜索任务（Esc 清空）\n" +
                 "Ctrl+L        展开 / 折叠运行日志\n" +
-                "Ctrl+,        打开设置\n" +
+                "Ctrl+1~4      切换四大工作室页面\n" +
+                "Ctrl+,        打开策略中心的保真与减面\n" +
                 "Ctrl+A        全选任务\n" +
                 "Delete        移除选中任务\n" +
                 "Ctrl+↑ / ↓    调整任务顺序\n" +
                 "Enter         查看选中的队列或计划项\n" +
                 "↑↓ / Home / End / PgUp / PgDn   在任务列表里移动\n" +
-                "F1            本快捷键列表";
-            await _ui.ShowInfoAsync("快捷键", "这些键在主窗口里随时可用。", text);
+                "F1            查看快捷键";
+            await _ui.ShowInfoAsync("快捷键", "在主窗口里用键盘切换页面或操作任务。", text);
         }
 
         public async Task ShowAboutAsync()

@@ -15,7 +15,7 @@
 
     <StackPanel>
         <TextBlock Text="常规" Style="{StaticResource Set.PageTitle}" />
-        <TextBlock Text="启动行为、模型过滤、报告/备份位置。所有改动即时生效；主题与动效在「外观」页。"
+        <TextBlock Text="在这里设置启动习惯、模型筛选，以及日志、报告和备份的存放位置。改动会立即生效。"
                    Style="{StaticResource Set.PageSub}" Margin="0,3,0,0" />
         <controls:Rule Margin="0,14,0,0" />
 
@@ -26,23 +26,23 @@
             <StackPanel>
                 <TextBlock Text="启动时恢复上次任务列表" Style="{StaticResource Set.Label}" />
                 <TextBlock Style="{StaticResource Set.Hint}" Margin="0,2,0,0"
-                           Text="关闭后每次启动都是空队列；队列本身不会删除任何文件。" />
+                           Text="关闭后，下次打开工坊时任务列表会是空的，工程文件会保留。" />
             </StackPanel>
         </CheckBox>
 
         <CheckBox x:Name="ChkPopup" Style="{StaticResource Set.Toggle}" Margin="0,8,0,2">
             <StackPanel>
-                <TextBlock Text="全部成功时也弹窗" Style="{StaticResource Set.Label}" />
+                <TextBlock Text="全部成功时也弹窗提醒" Style="{StaticResource Set.Label}" />
                 <TextBlock Style="{StaticResource Set.Hint}" Margin="0,2,0,0"
-                           Text="失败或部分完成时总会弹窗；开启后全部成功也会提示一次。" />
+                           Text="失败或只完成一部分时会弹窗。开启后，全部成功时也会提醒你。" />
             </StackPanel>
         </CheckBox>
 
         <!-- ═══════════ 模型过滤 ═══════════ -->
         <controls:Rule Margin="0,20,0,0" />
-        <TextBlock Text="模型过滤" Style="{StaticResource Set.GroupTitle}" Margin="0,18,0,0" />
+        <TextBlock Text="模型筛选" Style="{StaticResource Set.GroupTitle}" Margin="0,18,0,0" />
 
-        <settings:SettingRow Title="旧策略面数门槛" Hint="使用旧分配策略时跳过低于此面数的模型。均匀减面会尝试所有符合条件的部件。">
+        <settings:SettingRow Title="旧策略的最低面数" Hint="用旧策略时会跳过面数低于这个值的模型。均匀减面会尝试处理所有符合条件的部件。">
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                 <TextBox x:Name="TxtMinTriangles" Style="{StaticResource Input.Num}" Width="104" />
                 <TextBlock Text="面" Style="{StaticResource Text.Small}" Margin="7,0,0,0" VerticalAlignment="Center" />
@@ -52,7 +52,7 @@
         <!-- ═══════════ 日志与报告位置 ═══════════ -->
         <controls:Rule Margin="0,20,0,0" />
         <TextBlock Text="日志与报告位置" Style="{StaticResource Set.GroupTitle}" Margin="0,18,0,0" />
-        <TextBlock Text="运行日志与 Markdown 总报告落盘的位置；目录不可写时自动回退到 QC 目录旁。"
+        <TextBlock Text="运行日志和 Markdown 报告会存到这里。如果写不进去，就存到 QC 所在目录旁。"
                    Style="{StaticResource Set.Hint}" Margin="0,3,0,0" />
 
         <settings:SettingRow Title="存放位置" Margin="0,8,0,0">
@@ -72,22 +72,22 @@
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <TextBox x:Name="TxtReportDir" Grid.Column="0" Style="{StaticResource Input.Mono}" Height="30"
-                         VerticalContentAlignment="Center" ToolTip="自定义报告/日志目录（绝对路径）" />
+                         VerticalContentAlignment="Center" ToolTip="填写存放报告和日志的完整路径" />
                 <Button x:Name="BtnBrowseReportDir" Grid.Column="1" Style="{StaticResource Set.SmallButton}"
                         Content="浏览…" Margin="8,0,0,0" />
             </Grid>
-            <TextBlock Text="留空或目录不可写时，会回退到 QC 目录旁。" Style="{StaticResource Set.Hint}" Margin="0,6,0,0" />
+            <TextBlock Text="留空或写不进去时，就存到 QC 所在目录旁。" Style="{StaticResource Set.Hint}" Margin="0,6,0,0" />
         </StackPanel>
 
         <!-- ═══════════ 备份副本 ═══════════ -->
         <controls:Rule Margin="0,20,0,0" />
-        <TextBlock Text="备份副本" Style="{StaticResource Set.GroupTitle}" Margin="0,18,0,0" />
+        <TextBlock Text="备份" Style="{StaticResource Set.GroupTitle}" Margin="0,18,0,0" />
 
         <CheckBox x:Name="ChkBackup" Style="{StaticResource Set.Toggle}" Margin="0,6,0,2">
             <StackPanel>
-                <TextBlock Text="修改 QC 前生成备份副本" Style="{StaticResource Set.Label}" />
+                <TextBlock Text="修改 QC 前先备份" Style="{StaticResource Set.Label}" />
                 <TextBlock Style="{StaticResource Set.Hint}" Margin="0,2,0,0"
-                           Text="备份名 &lt;qc&gt;.lodbak，永不覆盖已有备份；任何一个备份失败时该 QC 不会被修改。" />
+                           Text="会保留已有的 .lodbak 备份。只有所需的备份都成功，才会修改对应的 QC。" />
             </StackPanel>
         </CheckBox>
 
@@ -108,11 +108,11 @@
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <TextBox x:Name="TxtBackupDir" Grid.Column="0" Style="{StaticResource Input.Mono}" Height="30"
-                         VerticalContentAlignment="Center" ToolTip="自定义备份根目录（绝对路径）" />
+                         VerticalContentAlignment="Center" ToolTip="填写存放备份的完整路径" />
                 <Button x:Name="BtnBrowseBackupDir" Grid.Column="1" Style="{StaticResource Set.SmallButton}"
                         Content="浏览…" Margin="8,0,0,0" />
             </Grid>
-            <TextBlock Text="会按工程相对路径镜像到该目录，便于整包还原。" Style="{StaticResource Set.Hint}" Margin="0,6,0,0" />
+            <TextBlock Text="备份会保留工程里的文件夹结构，方便整包还原。" Style="{StaticResource Set.Hint}" Margin="0,6,0,0" />
         </StackPanel>
 
         <TextBlock x:Name="TxtBackupNote" Style="{StaticResource Set.Hint}" Margin="0,8,0,2" />

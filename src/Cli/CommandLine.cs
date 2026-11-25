@@ -17,7 +17,8 @@ namespace LodStudio.Cli
         IconSheet,
         WidgetPreview,
         SettingsPreview,
-        Help
+        Help,
+        PagesPreview
     }
 
     /// <summary>
@@ -25,6 +26,7 @@ namespace LodStudio.Cli
     ///   --version                     打印版本后退出
     ///   --selftest [--out DIR]        引擎自测（约 120 项断言），退出码 0/1
     ///   --ui-audit --out DIR          界面审计：截图 + 布局 + 对比度 + 主题往返
+    ///   --pages-preview --out DIR     工作台和功能页截图及布局检查
     ///   --plan  &lt;工程目录&gt;           只读扫描并输出作业计划（JSON/文本）
     ///   --batch &lt;工程目录&gt; [参数]    无界面执行一次完整批量（脚本/回归用）
     ///   --gui [路径...]               强制 GUI，并把路径加入队列（默认行为）
@@ -59,6 +61,7 @@ namespace LodStudio.Cli
                     case "--icon-sheet": c.Mode = CliMode.IconSheet; break;
                     case "--widget-preview": c.Mode = CliMode.WidgetPreview; break;
                     case "--settings-preview": c.Mode = CliMode.SettingsPreview; break;
+                    case "--pages-preview": c.Mode = CliMode.PagesPreview; break;
                     case "--help":
                     case "-h":
                     case "-?":
@@ -72,7 +75,9 @@ namespace LodStudio.Cli
                             string val = null;
                             int eq = key.IndexOf('=');
                             if (eq >= 0) { val = key.Substring(eq + 1); key = key.Substring(0, eq); }
-                            if (val == null && i + 1 < args.Length && !(args[i + 1] ?? "").StartsWith("--", StringComparison.Ordinal))
+                            bool shadowFlag = string.Equals(key, "shadowlod", StringComparison.OrdinalIgnoreCase) ||
+                                              string.Equals(key, "no-shadowlod", StringComparison.OrdinalIgnoreCase);
+                            if (val == null && !shadowFlag && i + 1 < args.Length && !(args[i + 1] ?? "").StartsWith("--", StringComparison.Ordinal))
                             {
                                 val = args[i + 1];
                                 i++;
@@ -103,6 +108,12 @@ namespace LodStudio.Cli
             return !string.IsNullOrEmpty(v) && int.TryParse(v, NumberStyles.Integer, CultureInfo.InvariantCulture, out n) ? n : fallback;
         }
 
+        public double GetDoubleOption(string name, double fallback)
+        {
+            return double.TryParse(GetOption(name), NumberStyles.Float, CultureInfo.InvariantCulture, out double value)
+                ? value : fallback;
+        }
+
         public bool HasFlag(string name) { return Options.ContainsKey(name); }
 
         public string Usage
@@ -116,20 +127,30 @@ namespace LodStudio.Cli
                 sb.AppendLine("  L4D2LOD远景工坊.exe <文件或文件夹>...   打开界面并加入队列");
                 sb.AppendLine("  L4D2LOD远景工坊.exe --selftest [--out 目录]   引擎自测");
                 sb.AppendLine("  L4D2LOD远景工坊.exe --ui-audit --out 目录     界面审计（截图/布局/对比度）");
+                sb.AppendLine("  L4D2LOD-cli.exe --pages-preview --out 目录  工作台和功能页截图及布局检查");
                 sb.AppendLine("  L4D2LOD-cli.exe --plan <路径>... [--out 目录]  只读预览，输出 plan.json");
                 sb.AppendLine("  L4D2LOD-cli.exe --batch <路径>... [--out 目录] 按自动计划生成 LOD");
                 sb.AppendLine("  路径支持工程目录、QC、GLB、SMD、DMX。独立模型只写模型 LOD。");
                 sb.AppendLine("  L4D2LOD远景工坊.exe --version          打印版本");
                 sb.AppendLine();
                 sb.AppendLine("预设: --preset 0|1|2|3|4（保守 / 平衡 / 激进 / 自定义 / 自动）");
+                sb.AppendLine("通用 LOD 选项:");
+                sb.AppendLine("              --profile 0|1|2（严格 / 平衡 / 高压缩，优先于 --quality 和 --fast）");
+                sb.AppendLine("              --shadowlod | --no-shadowlod（启用或关闭阴影 LOD）");
+                sb.AppendLine("              --shadow-mode=dedicated|reuse（阴影开关由 --shadowlod / --no-shadowlod 或设置控制）");
+                sb.AppendLine("              --shadow-ratio <0.05..0.60>（独立阴影）");
+                sb.AppendLine("              --shadow-reuse-level=last|0|1..6（复用最远档或指定可见档）");
+                sb.AppendLine("              --collapse-bones \"bone1|bone2\" --collapse-bones-from <1..7>");
+                sb.AppendLine("自动模式:     --auto-target <1000..200000> --auto-min-savings <1..50>（百分比）");
                 sb.AppendLine("手动兼容模式:");
                 sb.AppendLine("              --levels N --dist 10,15,25 --ratio 85,65,45");
-                sb.AppendLine("              --backend gltfpack（默认内置 meshoptimizer） --quality | --fast（选择几何预算）");
+                sb.AppendLine("              --backend gltfpack（默认内置 meshoptimizer）");
                 sb.AppendLine("              --density-budget | --legacy-budget（按源部件面数均匀分配，或沿用原策略）");
                 sb.AppendLine("              --vertex-update | --fixed-vertices（允许通过外观验收的顶点微调，或使用固定顶点）");
                 sb.AppendLine("              --keep-models <源 GLB/SMD/DMX 路径>（沿用原网格，多个路径用 | 分隔）");
-                sb.AppendLine("              --facial | --nofacial（保留或禁用远处表情） --skip-main（跳过各 QC 的主模型）");
-                sb.AppendLine("              --mode 0|1|2 --workers N --force --compile --facial --skip-main --no-backup");
+                sb.AppendLine("              --facial | --nofacial（保留或禁用远处表情） --nofacial-from <1..7>");
+                sb.AppendLine("              --skip-main（跳过各 QC 的主模型）");
+                sb.AppendLine("              --mode 0|1|2 --workers N --force --compile --no-backup");
                 sb.AppendLine("              --report-dir 目录 --nekomdl 路径 --min-triangles N");
                 sb.AppendLine();
                 sb.AppendLine("  --icon-sheet / --widget-preview / --settings-preview   设计/验收用截图（需 --out）");

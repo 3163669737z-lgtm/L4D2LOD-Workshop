@@ -20,6 +20,39 @@ namespace LodStudio.Engine
         public string HostFile;
     }
 
+    public sealed class QcLodBlockOptions
+    {
+        public int NoFacialFromLevel = 1;
+        public List<string> CollapseBones;
+        public int CollapseBonesFromLevel = 3;
+        public bool GenerateShadowLod;
+        public ShadowLodMode ShadowLodMode = ShadowLodMode.Dedicated;
+        public int ShadowLodReuseLevel = 0;
+        public Func<string, string> ShadowPublishedPath;
+    }
+
+    internal struct QcLodBlockInfo
+    {
+        public int EmittedVisibleLevels;
+        public bool HasShadowLod;
+        public bool UsesDedicatedShadow;
+        public int ShadowReusedLevel;
+        public int UnavailableShadowReuseLevel;
+
+        public string Describe()
+        {
+            string text = EmittedVisibleLevels + " 级 $lod";
+            if (!HasShadowLod) return text;
+            var shadow = new List<string>();
+            if (UsesDedicatedShadow) shadow.Add("独立阴影");
+            if (UnavailableShadowReuseLevel > 0)
+                shadow.Add("第 " + UnavailableShadowReuseLevel + " 档未写入，回退到最远档 LOD" + ShadowReusedLevel);
+            else if (ShadowReusedLevel > 0)
+                shadow.Add("复用 LOD" + ShadowReusedLevel);
+            return text + " + $shadowlod（" + string.Join("，", shadow) + "）";
+        }
+    }
+
     /// <summary>
     /// QC 写入：幂等注入/移除工具块、Force 停用旧 $lod、备份、原子写与失败回滚。
     /// 实现负责人：QC 模块。契约不可变。
@@ -42,6 +75,7 @@ namespace LodStudio.Engine
     {
         /// <summary>工具标记块缺结束标记时的可读错误（与旧版文案一致，便于用户/日志检索）。</summary>
         public const string BrokenBlockMessage = "工具标记块不完整（缺结束标记），请手动检查";
+        internal const int MaxVisibleLodsWithShadow = 6; // Source permits eight tiers including the base and shadow.
 
         private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
 
@@ -130,7 +164,29 @@ namespace LodStudio.Engine
                                            Func<string, int, string> publishedPath = null,
                                            IReadOnlyDictionary<int, AutomaticLodResult> automaticLevels = null)
         {
-            if (info == null || plan == null || plan.Levels == null || plan.Levels.Count == 0) return null;
+            return BuildLodBlock(info, plan, generatedLodFiles, skipMainModel, noFacial, null,
+                reuseEarlierLods, publishedPath, automaticLevels, null, out _);
+        }
+
+        public static string BuildLodBlock(QcInfo info, LodPlan plan, HashSet<string> generatedLodFiles,
+                                           bool skipMainModel, bool noFacial, QcLodBlockOptions extra,
+                                           bool reuseEarlierLods = false, Func<string, int, string> publishedPath = null,
+                                           IReadOnlyDictionary<int, AutomaticLodResult> automaticLevels = null)
+        {
+            return BuildLodBlock(info, plan, generatedLodFiles, skipMainModel, noFacial, extra,
+                reuseEarlierLods, publishedPath, automaticLevels, null, out _);
+        }
+
+        internal static string BuildLodBlock(QcInfo info, LodPlan plan, HashSet<string> generatedLodFiles,
+                                            bool skipMainModel, bool noFacial, QcLodBlockOptions extra,
+                                            bool reuseEarlierLods, Func<string, int, string> publishedPath,
+                                            IReadOnlyDictionary<int, AutomaticLodResult> automaticLevels,
+                                            HashSet<string> referencedPaths, out QcLodBlockInfo blockInfo)
+        {
+            blockInfo = default;
+            if (info == null || plan == null || plan.Levels == null) return null;
+            bool shadow = extra?.GenerateShadowLod == true;
+            if (plan.Levels.Count == 0 && !shadow) return null;
 
             HashSet<string> generated = NormalizeGenerated(generatedLodFiles);
 
@@ -144,12 +200,10 @@ namespace LodStudio.Engine
                 keyIndex.Add(new Dictionary<string, int>(StringComparer.Ordinal));
             }
 
-            foreach (StudioRef s in info.Studios)
+            var studios = info.Studios.Where(s => s != null && (!skipMainModel || !s.IsMainModel) &&
+                QcPathResolver.IneligibleReason(s) == null).ToList();
+            foreach (StudioRef s in studios)
             {
-                if (s == null) continue;
-                if (skipMainModel && s.IsMainModel) continue;          // 跳过主模型的 QC 不引用主模型
-                if (QcPathResolver.IneligibleReason(s) != null) continue;
-
                 string dir, baseName, ext;
                 try
                 {
@@ -179,14 +233,28 @@ namespace LodStudio.Engine
                 }
             }
 
-            bool any = false;
-            for (int i = 0; i < levelCount; i++) if (replacements[i].Count > 0) { any = true; break; }
-            if (!any) return null;
-
             var sb = new StringBuilder();
+            bool reuseShadow = shadow && extra.ShadowLodMode == ShadowLodMode.ReuseExistingLod;
+            var emittedVisibleMaps = reuseShadow ? new List<Dictionary<string, string>>() : null;
+            var lastVisible = shadow ? new Dictionary<string, string>(StringComparer.Ordinal) : null;
+            var bones = extra?.CollapseBones?.Select(b => b?.Trim()).Where(b => !string.IsNullOrEmpty(b) &&
+                b.IndexOfAny(new[] { '"', '\r', '\n' }) < 0).ToArray();
+            int noFacialFrom = Math.Max(1, extra?.NoFacialFromLevel ?? 1);
+            int collapseFrom = Math.Max(1, extra?.CollapseBonesFromLevel ?? 3);
+
+            void WriteReplacements(List<KeyValuePair<string, string>> list)
+            {
+                foreach (var kv in list)
+                {
+                    sb.Append("\treplacemodel \"").Append(kv.Key).Append("\" \"").Append(kv.Value).Append("\"\n");
+                    if (referencedPaths != null)
+                        referencedPaths.Add(Path.GetFullPath(Path.Combine(info.QcDir, kv.Value)));
+                }
+            }
+
             List<KeyValuePair<string, string>> previous = null;
             int emitted = 0;
-            for (int li = 0; li < levelCount; li++)
+            for (int li = 0; li < levelCount && (!shadow || emitted < MaxVisibleLodsWithShadow); li++)
             {
                 AutomaticLodResult automatic = null;
                 if (automaticLevels != null && !automaticLevels.TryGetValue(li + 1, out automatic)) continue;
@@ -196,7 +264,8 @@ namespace LodStudio.Engine
                 previous = list;
 
                 LodLevel lv = plan.Levels[li];
-                int level = automatic == null ? li + 1 : ++emitted;
+                emitted++;
+                int level = automatic == null && !reuseShadow ? li + 1 : emitted;
                 string distance = (automatic?.SwitchPoint ?? lv.Distance).ToString("0.###", Inv);
                 string percent = (lv.Ratio * 100.0).ToString("0.#", Inv);
 
@@ -206,12 +275,63 @@ namespace LodStudio.Engine
                   .Append("  条目 ").Append(list.Count.ToString(Inv)).Append('\n');
                 sb.Append("$lod ").Append(distance).Append('\n');
                 sb.Append("{\n");
-                foreach (var kv in list)
-                    sb.Append("\treplacemodel \"").Append(kv.Key).Append("\" \"").Append(kv.Value).Append("\"\n");
-                if (noFacial) sb.Append("\tnofacial\n");
+                WriteReplacements(list);
+                if (shadow)
+                {
+                    foreach (var kv in list) lastVisible[kv.Key] = kv.Value;
+                    if (reuseShadow)
+                        emittedVisibleMaps.Add(list.ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.Ordinal));
+                }
+                if (noFacial && emitted >= noFacialFrom) sb.Append("\tnofacial\n");
+                if (bones != null && emitted >= collapseFrom)
+                    foreach (string bone in bones) sb.Append("\tbonetreecollapse \"").Append(bone).Append("\"\n");
                 sb.Append("}\n");
             }
-            return sb.ToString();
+
+            blockInfo.EmittedVisibleLevels = emitted;
+            if (shadow && (!reuseShadow || emittedVisibleMaps.Count > 0))
+            {
+                int targetLevel = emitted;
+                Dictionary<string, string> targetMap = lastVisible;
+                if (reuseShadow)
+                {
+                    int requested = extra.ShadowLodReuseLevel;
+                    if (requested >= 1 && requested <= emittedVisibleMaps.Count) targetLevel = requested;
+                    targetMap = emittedVisibleMaps[targetLevel - 1];
+                    if (requested > emittedVisibleMaps.Count)
+                        blockInfo.UnavailableShadowReuseLevel = requested;
+                }
+
+                var list = new List<KeyValuePair<string, string>>();
+                var indices = new Dictionary<string, int>(StringComparer.Ordinal);
+                foreach (var studio in studios)
+                {
+                    string key = studio.RawFile ?? "";
+                    string path = reuseShadow ? null : extra.ShadowPublishedPath?.Invoke(studio.ResolvedPath);
+                    if (!string.IsNullOrEmpty(path))
+                    {
+                        path = FileUtil.MakeRelative(info.QcDir, path);
+                        blockInfo.UsesDedicatedShadow = true;
+                    }
+                    else if (targetMap.TryGetValue(key, out path) || (reuseShadow && lastVisible.TryGetValue(key, out path)))
+                        blockInfo.ShadowReusedLevel = targetLevel;
+                    else continue;
+                    AddReplacement(list, indices, key, path);
+                }
+                if (list.Count > 0)
+                {
+                    blockInfo.HasShadowLod = true;
+                    if (blockInfo.UnavailableShadowReuseLevel > 0)
+                        sb.Append("// 指定的第 ").Append(blockInfo.UnavailableShadowReuseLevel.ToString(Inv))
+                          .Append(" 档未写入，回退到最远的可见 LOD。\n");
+                    sb.Append("// Shadow LOD");
+                    if (reuseShadow) sb.Append("（复用 LOD").Append(targetLevel.ToString(Inv)).Append("）");
+                    sb.Append("  条目 ").Append(list.Count.ToString(Inv)).Append("\n$shadowlod\n{\n");
+                    WriteReplacements(list);
+                    sb.Append("}\n");
+                }
+            }
+            return sb.Length == 0 ? null : sb.ToString();
         }
 
         /// <summary>把 body 包进工具标记块（标记由调用方拼接；这里只生成头部注释 + body）。</summary>

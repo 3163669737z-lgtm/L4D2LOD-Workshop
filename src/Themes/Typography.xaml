@@ -6,9 +6,13 @@
         字号阶梯：一个角色一个号。控件里禁止随手写 FontSize，一律引用这里的资源或 Text.* 样式。
         WPF FontSize 单位是 DIP（1/96 英寸），12.5 DIP ≈ 9.4pt。
     -->
-    <FontFamily x:Key="Font.Cjk">Microsoft YaHei UI</FontFamily>
+    <FontFamily x:Key="Font.Cjk">Noto Sans SC, Microsoft YaHei UI</FontFamily>
     <FontFamily x:Key="Font.Latin">Bahnschrift</FontFamily>
-    <FontFamily x:Key="Font.Mono">Consolas</FontFamily>
+    <FontFamily x:Key="Font.Mono">Cascadia Code, Cascadia Mono, Consolas</FontFamily>
+    <FontFamily x:Key="Font.ArtDisplay">Source Han Serif SC, Noto Serif SC, KaiTi, FangSong, Microsoft YaHei UI</FontFamily>
+    <FontFamily x:Key="Font.ArtLatin">Palatino Linotype, Georgia, Cambria, Constantia</FontFamily>
+    <FontFamily x:Key="Font.Script">Gabriola, Segoe Script, Georgia</FontFamily>
+    <FontFamily x:Key="Font.Numeric">Bahnschrift, Segoe UI Variable Display, Consolas</FontFamily>
 
     <sys:Double x:Key="FS.Brand">15.5</sys:Double>
     <sys:Double x:Key="FS.BrandLatin">9</sys:Double>
@@ -54,6 +58,35 @@
         <Setter Property="FontWeight" Value="SemiBold" />
     </Style>
 
+    <Style x:Key="Text.ArtBrand" TargetType="TextBlock" BasedOn="{StaticResource Text.Base}">
+        <Setter Property="FontFamily" Value="{StaticResource Font.ArtDisplay}" />
+        <Setter Property="FontSize" Value="17" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Foreground" Value="{DynamicResource Brush.Ink}" />
+    </Style>
+
+    <Style x:Key="Text.ArtPageTitle" TargetType="TextBlock" BasedOn="{StaticResource Text.ArtBrand}">
+        <Setter Property="FontSize" Value="15.5" />
+    </Style>
+
+    <Style x:Key="Text.ArtHero" TargetType="TextBlock" BasedOn="{StaticResource Text.ArtBrand}">
+        <Setter Property="FontSize" Value="20" />
+    </Style>
+
+    <Style x:Key="Text.ArtLatinTag" TargetType="TextBlock" BasedOn="{StaticResource Text.Base}">
+        <Setter Property="FontFamily" Value="{StaticResource Font.ArtLatin}" />
+        <Setter Property="FontSize" Value="9.5" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Foreground" Value="{DynamicResource Brush.InkFaint}" />
+    </Style>
+
+    <Style x:Key="Text.ArtScript" TargetType="TextBlock" BasedOn="{StaticResource Text.Base}">
+        <Setter Property="FontFamily" Value="{StaticResource Font.Script}" />
+        <Setter Property="FontSize" Value="16" />
+        <Setter Property="FontStyle" Value="Italic" />
+        <Setter Property="Foreground" Value="{DynamicResource Brush.Signal}" />
+    </Style>
+
     <!-- 拉丁小标（面板头的英文对译）：字距 +0.6，全大写由文本内容决定 -->
     <Style x:Key="Text.LatinLabel" TargetType="TextBlock" BasedOn="{StaticResource Text.Base}">
         <Setter Property="FontFamily" Value="{StaticResource Font.Latin}" />
@@ -64,13 +97,13 @@
 
     <!-- 数字读值：Bahnschrift（Windows 10/11 自带） -->
     <Style x:Key="Text.Numeric" TargetType="TextBlock" BasedOn="{StaticResource Text.Base}">
-        <Setter Property="FontFamily" Value="{StaticResource Font.Latin}" />
+        <Setter Property="FontFamily" Value="{StaticResource Font.Numeric}" />
         <Setter Property="FontSize" Value="{StaticResource FS.Numeric}" />
         <Setter Property="FontWeight" Value="SemiBold" />
     </Style>
 
     <Style x:Key="Text.Readout" TargetType="TextBlock" BasedOn="{StaticResource Text.Base}">
-        <Setter Property="FontFamily" Value="{StaticResource Font.Latin}" />
+        <Setter Property="FontFamily" Value="{StaticResource Font.Numeric}" />
         <Setter Property="FontSize" Value="{StaticResource FS.Readout}" />
         <Setter Property="FontWeight" Value="SemiBold" />
     </Style>

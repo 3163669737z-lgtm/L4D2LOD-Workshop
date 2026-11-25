@@ -315,6 +315,65 @@ namespace LodStudio.Engine
             ctx.AssertEqual(1, reduced.Indices.Max(i => reduced.Positions[i * 3 + 2]), 1e-6, "保留顶部开口");
         }
 
+        [SelfTest("内置减面：保真档位与几何偏差指标")]
+        public static void FidelityProfilesAndMetrics(SelfTestContext ctx)
+        {
+            string dir = ctx.NewDir("gp_fidelity_profiles");
+            string src = Path.Combine(dir, "sphere.glb");
+            File.WriteAllBytes(src, SmdGlbCodec.SmdToGlb(ToSmd(BuildSphere(3, 1, 0, 0, 0), "sphere")));
+
+            var results = new ReductionResult[3];
+            for (int profile = 0; profile < results.Length; profile++)
+            {
+                string dst = Path.Combine(dir, "lod_" + profile + ".glb");
+                var result = GltfpackRunner.RunAll(new[]
+                {
+                    new ReductionJob { Source = src, Destination = dst, Ratio = 0.20, Distance = 60 }
+                }, new GltfpackRunner.RunOptions { ReductionProfile = profile }, CancellationToken.None, null).Single();
+                results[profile] = result;
+                ctx.Assert(result.Ok, "保真档位 " + profile + " 应生成 LOD：" + result.Error);
+                ctx.Assert(result.HasDeviationMetrics, "保真档位 " + profile + " 应报告几何偏差样本");
+                ctx.Assert(result.MaxSurfaceDeviationPpm >= result.MeanSurfaceDeviationPpm && result.MeanSurfaceDeviationPpm >= 0,
+                           "几何偏差应满足峰值 ≥ 均值 ≥ 0");
+                ctx.Log("保真档位 " + profile + "：" + result.BeforeTriangles + " → " + result.AfterTriangles +
+                        " 面，几何偏差 " + result.MeanSurfaceDeviationPpm + "/" + result.MaxSurfaceDeviationPpm + " ppm（均值/峰值）");
+            }
+            ctx.Assert(results[2].AfterTriangles <= results[0].AfterTriangles, "极致减面档面数应不高于轮廓精保档");
+        }
+
+        [SelfTest("内置减面：阴影 LOD 减面并保留包围盒轮廓")]
+        public static void ShadowLodMode(SelfTestContext ctx)
+        {
+            const double ratio = 0.15;
+            var sphere = ToSmd(BuildSphere(3, 1, 0, 0, 0), "sphere");
+            string dir = ctx.NewDir("gp_shadow");
+            string src = Path.Combine(dir, "sphere.glb");
+            string dst = Path.Combine(dir, "shadow.glb");
+            File.WriteAllBytes(src, SmdGlbCodec.SmdToGlb(sphere));
+
+            var result = GltfpackRunner.RunAll(new[]
+            {
+                new ReductionJob { Source = src, Destination = dst, Ratio = ratio, ShadowMode = true }
+            }, new GltfpackRunner.RunOptions { AdaptiveTriangleBudget = false }, CancellationToken.None, null).Single();
+            ctx.Assert(result.Ok, result.Error ?? "应生成阴影 LOD");
+            ctx.AssertEqual((int)Math.Round(sphere.TriangleCount * ratio), result.TargetTriangles, "阴影 LOD 应直接使用请求比例");
+            ctx.Assert(result.AfterTriangles <= sphere.TriangleCount * 0.60, "阴影 LOD 应至少减少 40% 的面数");
+
+            var original = GlbCodec.Read(src).Meshes.Single().Primitives.Single();
+            var reduced = GlbCodec.Read(dst).Meshes.Single().Primitives.Single();
+            for (int axis = 0; axis < 3; axis++)
+            {
+                int component = axis;
+                ctx.AssertEqual(original.Indices.Min(i => original.Positions[i * 3 + component]),
+                                reduced.Indices.Min(i => reduced.Positions[i * 3 + component]),
+                                0.02, "阴影 LOD 应保留轮廓下界");
+                ctx.AssertEqual(original.Indices.Max(i => original.Positions[i * 3 + component]),
+                                reduced.Indices.Max(i => reduced.Positions[i * 3 + component]),
+                                0.02, "阴影 LOD 应保留轮廓上界");
+            }
+            ctx.Log("阴影 LOD：" + result.BeforeTriangles + " → " + result.AfterTriangles + " 面");
+        }
+
         [SelfTest("内置减面：保留比例相同时远距离允许更多轮廓简化")]
         public static void DistanceBasedOutline(SelfTestContext ctx)
         {

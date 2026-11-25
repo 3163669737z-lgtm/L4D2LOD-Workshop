@@ -2,42 +2,33 @@
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
     <!-- ════════════════════════════════════════════════════════════════════
-         Widgets.xaml —— 自绘控件/浮层专用资源（由 ThemeService 在 Controls.xaml 之后并入全局资源）
-
-         约定：
-         · 这里只允许 DynamicResource（主题令牌 / 字号阶梯），不写死颜色，
-           也不做 BasedOn/StaticResource 跨字典引用 —— 该字典是被 ThemeService 动态合并的，
-           用 DynamicResource 才能在"浅→暗"切换时不重建控件。
-         · RangeCard / ToastHost 是纯自绘（OnRender），不需要样式；
-           本文件服务于 DialogHost 的程序化视觉树（面板/文字/详情框）。
+         Widgets.xaml —— 自绘控件/浮层专用资源（现代毛玻璃对话框样式）
          ════════════════════════════════════════════════════════════════════ -->
 
-    <!-- 遮罩：半透明，拦鼠标；颜色令牌 Brush.Mask 由主题给 -->
     <Style x:Key="Widget.Dialog.Mask" TargetType="Border">
         <Setter Property="Background" Value="{DynamicResource Brush.Mask}" />
     </Style>
 
-    <!-- 对话框面板：Panel 底 + 1px LineStrong 边（3px 硬偏移由代码里的阴影层负责） -->
     <Style x:Key="Widget.Dialog.Panel" TargetType="Border">
-        <Setter Property="Background" Value="{DynamicResource Brush.Panel}" />
-        <Setter Property="BorderBrush" Value="{DynamicResource Brush.LineStrong}" />
+        <Setter Property="Background" Value="{DynamicResource Brush.GlassElevated}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Brush.PrismBorder}" />
         <Setter Property="BorderThickness" Value="1" />
-        <Setter Property="Padding" Value="20" />
+        <Setter Property="CornerRadius" Value="16" />
+        <Setter Property="Padding" Value="24" />
         <Setter Property="SnapsToDevicePixels" Value="True" />
     </Style>
 
-    <!-- 详情区：凹槽底 + 1px 发丝 -->
     <Style x:Key="Widget.Dialog.DetailBox" TargetType="Border">
-        <Setter Property="Background" Value="{DynamicResource Brush.Sunken}" />
+        <Setter Property="Background" Value="{DynamicResource Brush.GlassSunken}" />
         <Setter Property="BorderBrush" Value="{DynamicResource Brush.Line}" />
         <Setter Property="BorderThickness" Value="1" />
-        <Setter Property="Padding" Value="10" />
+        <Setter Property="CornerRadius" Value="10" />
+        <Setter Property="Padding" Value="12" />
         <Setter Property="SnapsToDevicePixels" Value="True" />
     </Style>
 
-    <!-- 标题：15 SemiBold -->
     <Style x:Key="Widget.Dialog.Title" TargetType="TextBlock">
-        <Setter Property="FontFamily" Value="{DynamicResource Font.Cjk}" />
+        <Setter Property="FontFamily" Value="{DynamicResource Font.ArtDisplay}" />
         <Setter Property="FontSize" Value="{DynamicResource FS.PageTitle}" />
         <Setter Property="FontWeight" Value="SemiBold" />
         <Setter Property="Foreground" Value="{DynamicResource Brush.Ink}" />
@@ -45,17 +36,15 @@
         <Setter Property="TextOptions.TextFormattingMode" Value="Ideal" />
     </Style>
 
-    <!-- 正文：12.5 InkSoft -->
     <Style x:Key="Widget.Dialog.Body" TargetType="TextBlock">
         <Setter Property="FontFamily" Value="{DynamicResource Font.Cjk}" />
         <Setter Property="FontSize" Value="{DynamicResource FS.Body}" />
         <Setter Property="Foreground" Value="{DynamicResource Brush.InkSoft}" />
         <Setter Property="TextWrapping" Value="Wrap" />
-        <Setter Property="LineHeight" Value="19" />
+        <Setter Property="LineHeight" Value="20" />
         <Setter Property="TextOptions.TextFormattingMode" Value="Ideal" />
     </Style>
 
-    <!-- 输入标签：11.5 InkSoft -->
     <Style x:Key="Widget.Dialog.Label" TargetType="TextBlock">
         <Setter Property="FontFamily" Value="{DynamicResource Font.Cjk}" />
         <Setter Property="FontSize" Value="{DynamicResource FS.Small}" />
@@ -63,7 +52,6 @@
         <Setter Property="TextOptions.TextFormattingMode" Value="Ideal" />
     </Style>
 
-    <!-- 行内校验错误：11.5 Err -->
     <Style x:Key="Widget.Dialog.Error" TargetType="TextBlock">
         <Setter Property="FontFamily" Value="{DynamicResource Font.Cjk}" />
         <Setter Property="FontSize" Value="{DynamicResource FS.Small}" />
@@ -72,7 +60,6 @@
         <Setter Property="TextOptions.TextFormattingMode" Value="Ideal" />
     </Style>
 
-    <!-- 详情正文：等宽 11.5 -->
     <Style x:Key="Widget.Dialog.DetailText" TargetType="TextBlock">
         <Setter Property="FontFamily" Value="{DynamicResource Font.Mono}" />
         <Setter Property="FontSize" Value="{DynamicResource FS.Mono}" />
@@ -81,13 +68,12 @@
         <Setter Property="TextOptions.TextFormattingMode" Value="Ideal" />
     </Style>
 
-    <!-- 对话框里的按钮：34 高、最小 92 宽；外观继承全局 Btn.Base（由代码从 Btn.* 派生并套用） -->
     <Style x:Key="Widget.Dialog.Button" TargetType="Button">
         <Setter Property="Height" Value="34" />
         <Setter Property="MinWidth" Value="92" />
         <Setter Property="FontFamily" Value="{DynamicResource Font.Cjk}" />
         <Setter Property="FontSize" Value="{DynamicResource FS.Body}" />
-        <Setter Property="Padding" Value="14,0,14,0" />
+        <Setter Property="Padding" Value="16,0,16,0" />
         <Setter Property="Cursor" Value="Hand" />
         <Setter Property="FocusVisualStyle" Value="{x:Null}" />
     </Style>

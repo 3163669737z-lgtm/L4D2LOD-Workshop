@@ -30,6 +30,20 @@ namespace LodStudio.Views
             Width = w; Height = h;
             UpdateLayout();
         }
+        internal void TestSelectMainPage(int pageIndex, int subPageIndex = 0)
+        {
+            SelectMainPage(pageIndex, subPageIndex, animate: false);
+            UpdateLayout();
+        }
+
+        internal void TestSetAuditRevealAllChildren(bool expand)
+        {
+            StrategyView.SetAuditRevealAllChildren(expand);
+            ToolkitView.SetAuditRevealAllChildren(expand);
+            PrismView.SetAuditRevealAllChildren(expand);
+        }
+
+        internal int TestCurrentMainPage => _currentMainPage;
         internal Visual RootVisual { get { return RootBorder; } }
         internal ScrollViewer QueueScroll { get { return FindChild<ScrollViewer>(QueueList); } }
         internal Window WindowSelf { get { return this; } }

@@ -69,11 +69,17 @@ namespace LodStudio.Engine
         // ── 外观 ──
         /// <summary>0=浅色 1=暗色 2=跟随系统</summary>
         public int ThemeMode = 2;
+        /// <summary>0=关闭 1=轻柔 2=标准 3=极光满血</summary>
+        public int MotionTier = 3;
+        /// <summary>0=棱镜幻彩 1=炽焰暖岩 2=钴蓝电光 3=鸢尾星紫 4=琥珀流金</summary>
+        public int PrismAccent = 0;
 
         // ── 行为 ──
         public bool RestoreTasks = true;
         /// <summary>界面动效（跟随系统"显示动画效果"之外的手动开关）</summary>
         public bool Animations = true;
+        private bool _syncedAnimations = true;
+        private int _lastEnabledMotionTier = 3;
         public bool PopupOnSuccess = false;
         public int MinTriangles = 200;
 
@@ -101,6 +107,16 @@ namespace LodStudio.Engine
 
         // ── 高级 ──
         public bool QualityFirst = true;
+        public int ReductionProfile = 1; // 0 = Strict, 1 = Balanced, 2 = High Compression
+        public bool GenerateShadowLod = false;
+        public double ShadowLodRatio = 0.20;
+        public int ShadowLodMode = 0; // 0 = Dedicated, 1 = ReuseExistingLod
+        public int ShadowLodReuseLevel = 0; // 0 = 最远可见档，1..6 = 指定档
+        public int NoFacialFromLevel = 1;
+        public string CollapseBones = "";
+        public int CollapseBonesFromLevel = 3;
+        public int AutoTargetTriangles = 10000;
+        public int AutoMinSavingsPercent = 10;
         public bool AdaptiveTriangleBudget = true;
         public bool AllowVertexUpdates;
         public string KeepOriginalModels = "";
@@ -172,16 +188,40 @@ namespace LodStudio.Engine
             CustomRatios = plan.Ratios.Select(r => Math.Round(r * 100, 4)).ToList();
         }
 
+        public int EffectiveReductionProfile()
+        {
+            int profile = Math.Max(0, Math.Min(2, ReductionProfile));
+            return profile == 1 && !QualityFirst ? 2 : profile;
+        }
+
         public void Normalize()
         {
             Levels = Math.Max(LodPlan.MinLevels, Math.Min(LodPlan.MaxLevels, Levels));
             Workers = Math.Max(0, Math.Min(16, Workers));
             OutputMode = Math.Max(0, Math.Min(2, OutputMode));
             ThemeMode = Math.Max(0, Math.Min(2, ThemeMode));
+            MotionTier = Math.Max(0, Math.Min(3, MotionTier));
+            PrismAccent = Math.Max(0, Math.Min(4, PrismAccent));
+            // The existing checkbox writes Animations directly before saving.
+            if (Animations != _syncedAnimations)
+            {
+                if (!Animations) MotionTier = 0;
+                else if (MotionTier == 0) MotionTier = _lastEnabledMotionTier;
+            }
+            Animations = _syncedAnimations = MotionTier > 0;
+            if (Animations) _lastEnabledMotionTier = MotionTier;
             MinTriangles = Math.Max(0, Math.Min(2000000, MinTriangles));
             ReportLocation = Math.Max(0, Math.Min(2, ReportLocation));
             BackupLocation = Math.Max(0, Math.Min(2, BackupLocation));
             LastAddKind = Math.Max(0, Math.Min(3, LastAddKind));
+            ReductionProfile = Math.Max(0, Math.Min(2, ReductionProfile));
+            ShadowLodRatio = double.IsNaN(ShadowLodRatio) ? 0.20 : Math.Max(0.05, Math.Min(0.60, ShadowLodRatio));
+            ShadowLodMode = Math.Max(0, Math.Min(1, ShadowLodMode));
+            ShadowLodReuseLevel = Math.Max(0, Math.Min(QcWriter.MaxVisibleLodsWithShadow, ShadowLodReuseLevel));
+            NoFacialFromLevel = Math.Max(1, Math.Min(LodPlan.MaxLevels, NoFacialFromLevel));
+            CollapseBonesFromLevel = Math.Max(1, Math.Min(LodPlan.MaxLevels, CollapseBonesFromLevel));
+            AutoTargetTriangles = Math.Max(2000, Math.Min(100000, AutoTargetTriangles));
+            AutoMinSavingsPercent = Math.Max(1, Math.Min(50, AutoMinSavingsPercent));
 
             while (Distances.Count < Levels) Distances.Add(Levels == 1 ? 40 : Math.Max(1, Distances.Count == 0 ? 40 : Distances[Distances.Count - 1] * 2));
             while (Ratios.Count < Levels) Ratios.Add(Math.Max(5, (Ratios.Count == 0 ? 90 : Ratios[Ratios.Count - 1]) * 0.5));
@@ -271,6 +311,8 @@ namespace LodStudio.Engine
             sb.AppendLine("ThemeMode=" + s.ThemeMode);
             sb.AppendLine("RestoreTasks=" + B(s.RestoreTasks));
             sb.AppendLine("Animations=" + B(s.Animations));
+            sb.AppendLine("MotionTier=" + s.MotionTier);
+            sb.AppendLine("PrismAccent=" + s.PrismAccent);
             sb.AppendLine("PopupOnSuccess=" + B(s.PopupOnSuccess));
             sb.AppendLine("MinTriangles=" + s.MinTriangles);
             sb.AppendLine("ReportLocation=" + s.ReportLocation);
@@ -291,6 +333,16 @@ namespace LodStudio.Engine
             sb.AppendLine();
             sb.AppendLine("[Advanced]");
             sb.AppendLine("QualityFirst=" + B(s.QualityFirst));
+            sb.AppendLine("ReductionProfile=" + s.ReductionProfile.ToString(CultureInfo.InvariantCulture));
+            sb.AppendLine("GenerateShadowLod=" + B(s.GenerateShadowLod));
+            sb.AppendLine("ShadowLodRatio=" + s.ShadowLodRatio.ToString("R", CultureInfo.InvariantCulture));
+            sb.AppendLine("ShadowLodMode=" + s.ShadowLodMode);
+            sb.AppendLine("ShadowLodReuseLevel=" + s.ShadowLodReuseLevel);
+            sb.AppendLine("NoFacialFromLevel=" + s.NoFacialFromLevel.ToString(CultureInfo.InvariantCulture));
+            sb.AppendLine("CollapseBones=" + s.CollapseBones);
+            sb.AppendLine("CollapseBonesFromLevel=" + s.CollapseBonesFromLevel.ToString(CultureInfo.InvariantCulture));
+            sb.AppendLine("AutoTargetTriangles=" + s.AutoTargetTriangles.ToString(CultureInfo.InvariantCulture));
+            sb.AppendLine("AutoMinSavingsPercent=" + s.AutoMinSavingsPercent.ToString(CultureInfo.InvariantCulture));
             sb.AppendLine("AdaptiveTriangleBudget=" + B(s.AdaptiveTriangleBudget));
             sb.AppendLine("AllowVertexUpdates=" + B(s.AllowVertexUpdates));
             sb.AppendLine("KeepOriginalModels=" + s.KeepOriginalModels);
@@ -320,6 +372,8 @@ namespace LodStudio.Engine
         private static void ParseIni(AppSettings s, string[] lines)
         {
             string section = "";
+            bool hasReductionProfile = false;
+            bool hasMotionTier = false;
             foreach (var raw in lines)
             {
                 string line = (raw ?? "").Trim();
@@ -353,6 +407,15 @@ namespace LodStudio.Engine
                         case "nekomdlpath": s.NekomdlPath = v; break;
                         case "thememode": s.ThemeMode = I(v, s.ThemeMode); break;
                         case "restoretasks": s.RestoreTasks = B(v, s.RestoreTasks); break;
+                        case "animations": s.Animations = B(v, s.Animations); break;
+                        case "motiontier":
+                            if (int.TryParse(v, NumberStyles.Integer, CultureInfo.InvariantCulture, out int tier))
+                            {
+                                s.MotionTier = tier;
+                                hasMotionTier = true;
+                            }
+                            break;
+                        case "prismaccent": s.PrismAccent = I(v, s.PrismAccent); break;
                         case "popuponsuccess": s.PopupOnSuccess = B(v, s.PopupOnSuccess); break;
                         case "mintriangles": s.MinTriangles = I(v, s.MinTriangles); break;
                         case "reportlocation": s.ReportLocation = I(v, s.ReportLocation); break;
@@ -369,6 +432,22 @@ namespace LodStudio.Engine
                         case "customratios": s.CustomRatios = Doubles(v); break;
                         case "outputmode": s.OutputMode = I(v, s.OutputMode); break;
                         case "qualityfirst": s.QualityFirst = B(v, s.QualityFirst); break;
+                        case "reductionprofile":
+                            hasReductionProfile = true;
+                            s.ReductionProfile = I(v, s.ReductionProfile);
+                            break;
+                        case "generateshadowlod": s.GenerateShadowLod = B(v, s.GenerateShadowLod); break;
+                        case "shadowlodmode": s.ShadowLodMode = I(v, s.ShadowLodMode); break;
+                        case "shadowlodreuselevel": s.ShadowLodReuseLevel = I(v, s.ShadowLodReuseLevel); break;
+                        case "shadowlodratio":
+                            if (double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out double shadowRatio))
+                                s.ShadowLodRatio = shadowRatio;
+                            break;
+                        case "nofacialfromlevel": s.NoFacialFromLevel = I(v, s.NoFacialFromLevel); break;
+                        case "collapsebones": s.CollapseBones = v; break;
+                        case "collapsebonesfromlevel": s.CollapseBonesFromLevel = I(v, s.CollapseBonesFromLevel); break;
+                        case "autotargettriangles": s.AutoTargetTriangles = I(v, s.AutoTargetTriangles); break;
+                        case "autominsavingspercent": s.AutoMinSavingsPercent = I(v, s.AutoMinSavingsPercent); break;
                         case "adaptivetrianglebudget": s.AdaptiveTriangleBudget = B(v, s.AdaptiveTriangleBudget); break;
                         case "allowvertexupdates": s.AllowVertexUpdates = B(v, s.AllowVertexUpdates); break;
                         case "keeporiginalmodels": s.KeepOriginalModels = v; break;
@@ -388,6 +467,8 @@ namespace LodStudio.Engine
                 }
                 catch { }
             }
+            if (!hasReductionProfile && !s.QualityFirst) s.ReductionProfile = 2;
+            if (hasMotionTier) s.Animations = s.MotionTier > 0;
         }
 
         // ── 旧版设置导入（只读；失败静默） ──

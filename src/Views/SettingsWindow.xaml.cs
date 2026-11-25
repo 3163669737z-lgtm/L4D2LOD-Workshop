@@ -6,6 +6,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Threading.Tasks;
+using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
@@ -61,6 +62,7 @@ namespace LodStudio.Views
 
             _settings = settings ?? (shell != null ? shell.Settings : new AppSettings());
             _shell = shell;
+            WindowGlass.Attach(this);
             if (_shell != null) WindowWorkArea.Track(this);
 
             try { Icon = BitmapFrame.Create(new Uri("pack://application:,,,/Assets/app.ico", UriKind.Absolute)); }
@@ -192,10 +194,14 @@ namespace LodStudio.Views
         private void ShowPage(int index)
         {
             if (index < 0 || index >= _pages.Count) return;
+            bool switching = IsLoaded && index != _lastPageIndex;
+            double offsetY = index >= _lastPageIndex ? 14 : -14;
             for (int i = 0; i < _pages.Count; i++)
                 _pages[i].Visibility = i == index ? Visibility.Visible : Visibility.Collapsed;
             try { PageScroll.ScrollToTop(); } catch { }
             _pages[index].OnPageShown();
+            if (switching)
+                UiMotion.PlayViewEnter(_pages[index], AnimationsEnabled, 0, offsetY, 220);
             _lastPageIndex = index;
         }
 
@@ -289,26 +295,35 @@ namespace LodStudio.Views
             SavedIcon.Kind = warn ? IconKind.Warning : IconKind.Check;
             SavedIcon.SetResourceReference(LodStudio.Controls.Icon.IconBrushProperty, warn ? "Brush.Warn" : "Brush.Ok");
 
-            SavedPill.BeginAnimation(OpacityProperty, null);
-            if (AnimationsEnabled)
+            SavedPill.Opacity = 1;
+            if (AnimationsEnabled && !UiMotion.SuppressContinuousAmbient)
+            {
                 SavedPill.BeginAnimation(OpacityProperty,
-                    new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(90)));
+                    new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(90)) { FillBehavior = FillBehavior.Stop });
+                var pop = new DoubleAnimation(0.84, 1, TimeSpan.FromMilliseconds(220))
+                {
+                    EasingFunction = new BackEase { Amplitude = 0.35, EasingMode = EasingMode.EaseOut },
+                    FillBehavior = FillBehavior.Stop
+                };
+                SavedScale.BeginAnimation(ScaleTransform.ScaleXProperty, pop);
+                SavedScale.BeginAnimation(ScaleTransform.ScaleYProperty, pop);
+            }
             else
-                SavedPill.Opacity = 1;
+            {
+                SavedPill.BeginAnimation(OpacityProperty, null);
+                SavedScale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
+                SavedScale.BeginAnimation(ScaleTransform.ScaleYProperty, null);
+            }
             _savedTimer.Start();
         }
 
         private void OnSavedTimerTick(object sender, EventArgs e)
         {
             _savedTimer.Stop();
-            if (!AnimationsEnabled) { SavedPill.Opacity = 0; return; }
-            var fade = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(140));
-            fade.Completed += delegate
-            {
-                SavedPill.BeginAnimation(OpacityProperty, null);
-                SavedPill.Opacity = 0;
-            };
-            SavedPill.BeginAnimation(OpacityProperty, fade);
+            SavedPill.Opacity = 0;
+            if (AnimationsEnabled && !UiMotion.SuppressContinuousAmbient)
+                SavedPill.BeginAnimation(OpacityProperty,
+                    new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(140)) { FillBehavior = FillBehavior.Stop });
         }
 
         // ─────────────────────────── 数字输入框（各页共用） ───────────────────────────

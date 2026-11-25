@@ -50,6 +50,8 @@ namespace LodStudio
                         return WidgetPreviewRunner.Run(cli);
                     case CliMode.SettingsPreview:
                         return SettingsPreviewRunner.Run(cli);
+                    case CliMode.PagesPreview:
+                        return PagesPreviewRunner.Run(cli);
                     case CliMode.Plan:
                     case CliMode.Batch:
                         return RunCliWithInstanceMutex(cli);

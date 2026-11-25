@@ -15,7 +15,7 @@
 
     <StackPanel>
         <TextBlock Text="诊断" Style="{StaticResource Set.PageTitle}" />
-        <TextBlock Text="检查权限、目录可写性、引擎与设置位置。把报告复制给开发者，可以更快定位问题。"
+        <TextBlock Text="遇到问题时，可以检查引擎和文件夹权限。把报告发给开发者，方便一起查找原因。"
                    Style="{StaticResource Set.PageSub}" Margin="0,3,0,0" />
         <controls:Rule Margin="0,14,0,0" />
 
@@ -38,7 +38,7 @@
                     Padding="12,0,12,0" IsEnabled="False">
                 <StackPanel Orientation="Horizontal">
                     <controls:Icon Kind="Copy" Size="13" IconBrush="{DynamicResource Brush.InkSoft}" />
-                    <TextBlock Text="复制" Margin="7,0,0,0" VerticalAlignment="Center" />
+                    <TextBlock Text="复制报告" Margin="7,0,0,0" VerticalAlignment="Center" />
                 </StackPanel>
             </Button>
         </Grid>
@@ -47,11 +47,11 @@
                  IsReadOnly="True" AcceptsReturn="True" Height="216" Padding="10,8,10,8"
                  VerticalContentAlignment="Top" TextWrapping="Wrap"
                  VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
-                 Text="还没有运行诊断。&#10;&#10;点左上角「运行诊断」检查权限、目录可写性、引擎与设置位置。" />
+                 Text="诊断报告会显示在这里。&#10;&#10;点「运行诊断」，就能看看引擎是否就绪、文件夹能不能写入，以及设置文件存在哪儿。" />
 
         <!-- ═══════════ 环境 ═══════════ -->
         <controls:Rule Margin="0,14,0,0" />
-        <TextBlock Text="环境" Style="{StaticResource Set.GroupTitle}" Margin="0,12,0,0" />
+        <TextBlock Text="运行环境" Style="{StaticResource Set.GroupTitle}" Margin="0,12,0,0" />
 
         <Grid Margin="0,8,0,0">
             <Grid.ColumnDefinitions>
@@ -85,7 +85,7 @@
                 <ColumnDefinition Width="92" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
-            <TextBlock Text="减面后端" Style="{StaticResource Set.Hint}" VerticalAlignment="Center" />
+            <TextBlock Text="减面引擎" Style="{StaticResource Set.Hint}" VerticalAlignment="Center" />
             <TextBlock x:Name="TxtReductionEngine" Grid.Column="1" Style="{StaticResource Set.Mono}"
                        VerticalAlignment="Center" />
         </Grid>
@@ -97,7 +97,7 @@
                     <TextBlock Text="打开设置文件夹" Margin="7,0,0,0" VerticalAlignment="Center" />
                 </StackPanel>
             </Button>
-            <TextBlock Text="诊断只读取环境信息，不会修改任何工程文件。" Style="{StaticResource Set.Hint}"
+            <TextBlock Text="诊断只检查运行环境，工程文件会保留原样。" Style="{StaticResource Set.Hint}"
                        Margin="10,0,0,0" VerticalAlignment="Center" />
         </StackPanel>
     </StackPanel>

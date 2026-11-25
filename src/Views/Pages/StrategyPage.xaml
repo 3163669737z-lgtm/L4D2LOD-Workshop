@@ -1,0 +1,321 @@
+<pages:StudioPageBase x:Class="LodStudio.Views.Pages.StrategyPage"
+                      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                      xmlns:pages="clr-namespace:LodStudio.Views.Pages"
+                      FontFamily="{DynamicResource Font.Cjk}" FontSize="{DynamicResource FS.Body}"
+                      UseLayoutRounding="True" SnapsToDevicePixels="True">
+    <pages:StudioPageBase.Resources>
+        <Style x:Key="Studio.NumberLabel" TargetType="Label" BasedOn="{StaticResource Studio.FieldLabel}">
+            <Setter Property="Margin" Value="0,0,10,0" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style x:Key="Studio.Unit" TargetType="TextBlock" BasedOn="{StaticResource Studio.PageSub}">
+            <Setter Property="Margin" Value="6,0,0,0" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+    </pages:StudioPageBase.Resources>
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+        <StackPanel Margin="0,0,0,14">
+            <TextBlock Style="{StaticResource Studio.PageEyebrow}" Text="STRATEGY" />
+            <TextBlock Style="{StaticResource Studio.PageTitle}" Margin="0,3,0,4" Text="策略中心" />
+            <TextBlock Style="{StaticResource Studio.PageSub}" Text="把减面策略和游戏引擎特化分成三组清晰选项。绝大多数模型直接保持默认就能获得稳妥效果，每次调整都会即时保存。" />
+            <Border Style="{StaticResource Studio.SubTabHost}" HorizontalAlignment="Left" Margin="0,14,0,0">
+                <Grid x:Name="SubTabTrack" ClipToBounds="True">
+                    <Border x:Name="SubTabIndicator" Style="{StaticResource Studio.SubTabIndicator}" />
+                    <StackPanel x:Name="SubTabButtons" Orientation="Horizontal">
+                        <Button Style="{StaticResource Studio.SubTabButton}" Content="保真与减面" />
+                        <Button Style="{StaticResource Studio.SubTabButton}" Margin="4,0,0,0" Content="游戏引擎特化" />
+                        <Button Style="{StaticResource Studio.SubTabButton}" Margin="4,0,0,0" Content="并行与写入行为" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+        </StackPanel>
+        <ScrollViewer x:Name="SubPageScroll" Grid.Row="1" HorizontalScrollBarVisibility="Disabled"
+                      VerticalScrollBarVisibility="Auto">
+            <Grid Margin="0,0,8,0">
+                <StackPanel x:Name="QualityPanel">
+                    <Border x:Name="ReductionCard" Style="{StaticResource Studio.SectionCard}">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource Studio.SectionTitle}" Text="减面精细度" />
+                            <UniformGrid x:Name="ProfileChoices" Columns="3" Margin="0,10,0,0">
+                                <Button Style="{StaticResource Studio.ChoiceCard}" Margin="0,0,6,0" Click="OnProfileClick">
+                                    <StackPanel>
+                                        <TextBlock Style="{StaticResource Studio.SectionTitle}" Text="精细优先" />
+                                        <TextBlock Style="{StaticResource Studio.PageSub}" Margin="0,5,0,0"
+                                                   Text="死守原模型轮廓、接缝与细节，适合人物头部、枪械等近距离特写部位。" />
+                                    </StackPanel>
+                                </Button>
+                                <Button Style="{StaticResource Studio.ChoiceCard}" Margin="3,0" Click="OnProfileClick">
+                                    <StackPanel>
+                                        <WrapPanel>
+                                            <TextBlock Style="{StaticResource Studio.SectionTitle}" Text="平衡推荐" />
+                                            <Border Style="{StaticResource Studio.RecommendTag}" Margin="8,0,0,0">
+                                                <TextBlock FontSize="{DynamicResource FS.Micro}" Foreground="{DynamicResource Brush.Signal}"
+                                                           FontWeight="SemiBold" Text="推荐" />
+                                            </Border>
+                                        </WrapPanel>
+                                        <TextBlock Style="{StaticResource Studio.PageSub}" Margin="0,5,0,0"
+                                                   Text="在画面观感和减面幅度间取最稳妥的平衡，绝大多数模型选这一档就好。" />
+                                    </StackPanel>
+                                </Button>
+                                <Button Style="{StaticResource Studio.ChoiceCard}" Margin="6,0,0,0" Click="OnProfileClick">
+                                    <StackPanel>
+                                        <TextBlock Style="{StaticResource Studio.SectionTitle}" Text="极限省面" />
+                                        <TextBlock Style="{StaticResource Studio.PageSub}" Margin="0,5,0,0"
+                                                   Text="放宽细微形状误差换取更低面数，适合超大场景道具或极高面数模型。" />
+                                    </StackPanel>
+                                </Button>
+                            </UniformGrid>
+                        </StackPanel>
+                    </Border>
+
+                    <Border x:Name="AdaptiveCard" Style="{StaticResource Studio.SectionCard}">
+                        <StackPanel>
+                            <CheckBox x:Name="AdaptiveToggle" Style="{StaticResource Studio.ToggleSwitch}"
+                                      Content="按部件大小智能分配减面" Click="OnAdaptiveClick" />
+                            <TextBlock Style="{StaticResource Studio.PageSub}"
+                                       Text="复杂的高面部件多减一点，本来就很简单的小零件少减一点，避免配件被减糊。" />
+                            <Border x:Name="AutomaticBudget" Style="{StaticResource Studio.TreeChildContainer}" Visibility="Collapsed">
+                                <Grid>
+                                    <Control Style="{StaticResource Studio.TreeBranch}" />
+                                    <StackPanel>
+                                        <WrapPanel>
+                                            <Label Target="{Binding ElementName=AutoTargetBox}" Style="{StaticResource Studio.NumberLabel}"
+                                                   Content="自动规划目标总面数" />
+                                            <TextBox x:Name="AutoTargetBox" Style="{StaticResource Studio.NumberBox}" />
+                                            <TextBlock Style="{StaticResource Studio.Unit}" Text="三角面" />
+                                        </WrapPanel>
+                                        <TextBlock Style="{StaticResource Studio.PageSub}" Margin="0,4,0,10"
+                                                   Text="自动规划模式会尽量把最远一档减到接近这个面数。" />
+                                        <WrapPanel>
+                                            <Label Target="{Binding ElementName=AutoSavingsBox}" Style="{StaticResource Studio.NumberLabel}"
+                                                   Content="每档至少减掉的面数比例" />
+                                            <TextBox x:Name="AutoSavingsBox" Style="{StaticResource Studio.NumberBox}" />
+                                            <TextBlock Style="{StaticResource Studio.Unit}" Text="%" />
+                                        </WrapPanel>
+                                        <TextBlock Style="{StaticResource Studio.PageSub}" Margin="0,4,0,0"
+                                                   Text="如果相邻两档面数差别太小，系统会自动合并档位避免白占体积。" />
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                            <Border x:Name="SmallModelBudget" Style="{StaticResource Studio.TreeChildContainer}" Visibility="Collapsed">
+                                <Grid>
+                                    <Control Style="{StaticResource Studio.TreeBranch}" />
+                                    <StackPanel>
+                                        <WrapPanel>
+                                            <Label Target="{Binding ElementName=MinTrianglesBox}" Style="{StaticResource Studio.NumberLabel}"
+                                                   Content="跳过过小模型的面数门槛" />
+                                            <TextBox x:Name="MinTrianglesBox" Style="{StaticResource Studio.NumberBox}" />
+                                            <TextBlock Style="{StaticResource Studio.Unit}" Text="三角面" />
+                                        </WrapPanel>
+                                        <TextBlock Style="{StaticResource Studio.PageSub}" Margin="0,4,0,0"
+                                                   Text="低于这个面数的简单小模型会直接沿用原样，不再强行减面。" />
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                        </StackPanel>
+                    </Border>
+
+                    <Border x:Name="VertexCard" Style="{StaticResource Studio.SectionCard}">
+                        <StackPanel>
+                            <CheckBox x:Name="VertexToggle" Style="{StaticResource Studio.ToggleSwitch}"
+                                      Content="允许微调顶点换取更顺滑的减面" Click="OnVertexClick" />
+                            <TextBlock Style="{StaticResource Studio.PageSub}" Text="让减面后的表面过渡更自然。" />
+                            <Border x:Name="VertexDetails" Style="{StaticResource Studio.TreeChildContainer}" Visibility="Collapsed">
+                                <Grid>
+                                    <Control Style="{StaticResource Studio.TreeBranch}" />
+                                    <TextBlock Style="{StaticResource Studio.PageSub}"
+                                               Text="减面时会锁住模型边界和贴图接缝，只微调其余顶点。生成后可以在游戏里近看接缝、远看轮廓，确认各档切换自然。" />
+                                </Grid>
+                            </Border>
+                        </StackPanel>
+                    </Border>
+
+                    <Border x:Name="KeepCard" Style="{StaticResource Studio.SectionCard}">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource Studio.SectionTitle}" Text="原样保留指定模型" />
+                            <Label Target="{Binding ElementName=KeepModelsBox}" Style="{StaticResource Studio.NumberLabel}" Margin="0,6,0,4"
+                                   Content="完全不做减面的模型文件（可选）" />
+                            <TextBox x:Name="KeepModelsBox" Style="{StaticResource Input.Mono}"
+                                     Tag="例如 SMD\Head.glb|SMD\Eyes.smd" />
+                            <TextBlock Style="{StaticResource Studio.PageSub}" Margin="0,5,0,0"
+                                       Text="可以填相对于 QC 的模型路径。要保留多个文件时，用竖线（|）隔开。" />
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+
+                <StackPanel x:Name="EnginePanel" Visibility="Collapsed">
+                    <Border x:Name="ShadowCard" Style="{StaticResource Studio.SectionCard}">
+                        <StackPanel>
+                            <CheckBox x:Name="ShadowToggle" Style="{StaticResource Studio.ToggleSwitch}"
+                                      Content="启用阴影优化（$shadowlod）" Click="OnShadowClick" />
+                            <TextBlock Style="{StaticResource Studio.PageSub}"
+                                       Text="为实时投影指定更轻量的阴影网格；未满 7 级时可见 LOD 数量不受减少，最多可与 6 级可见 LOD 共存（含原模型共 8 级）。" />
+                            <Border x:Name="ShadowDetails" Style="{StaticResource Studio.TreeChildContainer}" Visibility="Collapsed">
+                                <Grid>
+                                    <Control Style="{StaticResource Studio.TreeBranch}" />
+                                    <StackPanel>
+                                        <WrapPanel x:Name="ShadowModeChoices">
+                                            <Button Style="{StaticResource Studio.QuickChoice}" Content="生成独立阴影网格" Click="OnShadowModeClick" />
+                                            <Button Style="{StaticResource Studio.QuickChoice}" Content="复用已有 LOD" Click="OnShadowModeClick" />
+                                        </WrapPanel>
+                                        <StackPanel x:Name="ShadowDedicatedPanel">
+                                            <Label Target="{Binding ElementName=ShadowRatioBox}" Style="{StaticResource Studio.NumberLabel}"
+                                                   Content="阴影模型保留比例" />
+                                            <DockPanel Margin="0,5,0,0">
+                                                <TextBlock DockPanel.Dock="Right" Style="{StaticResource Studio.Unit}" Text="%" />
+                                                <TextBox DockPanel.Dock="Right" x:Name="ShadowRatioBox" Style="{StaticResource Studio.NumberBox}" />
+                                                <Slider x:Name="ShadowSlider" Style="{StaticResource Studio.Slider}"
+                                                        Minimum="5" Maximum="60" TickFrequency="1"
+                                                        IsSnapToTickEnabled="True" Margin="0,0,12,0"
+                                                        AutomationProperties.Name="阴影模型保留比例" />
+                                            </DockPanel>
+                                        </StackPanel>
+                                        <StackPanel x:Name="ShadowReusePanel" Visibility="Collapsed" Margin="0,6,0,0">
+                                            <TextBlock Style="{StaticResource Studio.PageSub}" Text="复用的可见 LOD 档位" />
+                                            <WrapPanel x:Name="ShadowReuseChoices" Margin="0,5,0,0">
+                                                <Button Style="{StaticResource Studio.QuickChoice}" Content="最远一级（自动）" Click="OnShadowReuseClick" />
+                                                <Button Style="{StaticResource Studio.QuickChoice}" Content="第 1 档" Click="OnShadowReuseClick" />
+                                                <Button Style="{StaticResource Studio.QuickChoice}" Content="第 2 档" Click="OnShadowReuseClick" />
+                                                <Button Style="{StaticResource Studio.QuickChoice}" Content="第 3 档" Click="OnShadowReuseClick" />
+                                            </WrapPanel>
+                                            <WrapPanel>
+                                                <Label Target="{Binding ElementName=ShadowReuseLevelBox}" Style="{StaticResource Studio.NumberLabel}"
+                                                       Content="指定档位 (1–6)" />
+                                                <TextBox x:Name="ShadowReuseLevelBox" Style="{StaticResource Studio.NumberBox}" Margin="8,0,0,0" />
+                                            </WrapPanel>
+                                        </StackPanel>
+                                        <TextBlock x:Name="ShadowReadout" Style="{StaticResource Studio.PageSub}" Margin="0,6,0,0" />
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                        </StackPanel>
+                    </Border>
+
+                    <Border x:Name="FacialCard" Style="{StaticResource Studio.SectionCard}">
+                        <StackPanel>
+                            <CheckBox x:Name="FacialToggle" Style="{StaticResource Studio.ToggleSwitch}"
+                                      Content="远距离自动关闭面部表情（nofacial）" Click="OnFacialClick" />
+                            <Border x:Name="FacialDetails" Style="{StaticResource Studio.TreeChildContainer}" Visibility="Collapsed">
+                                <Grid>
+                                    <Control Style="{StaticResource Studio.TreeBranch}" />
+                                    <StackPanel>
+                                        <Label Target="{Binding ElementName=FacialLevelBox}" Style="{StaticResource Studio.NumberLabel}"
+                                               Content="从哪一档开始关闭表情" />
+                                        <WrapPanel x:Name="FacialChoices" Margin="0,6,0,4">
+                                            <Button Style="{StaticResource Studio.QuickChoice}" Content="从第 1 档起" Click="OnFacialChoiceClick" />
+                                            <Button Style="{StaticResource Studio.QuickChoice}" Content="从第 2 档起" Click="OnFacialChoiceClick" />
+                                            <Button Style="{StaticResource Studio.QuickChoice}" Content="仅更远档位" Click="OnFacialChoiceClick"
+                                                    ToolTip="从第 3 档起关闭表情，可在右边细调。" />
+                                            <TextBox x:Name="FacialLevelBox" Style="{StaticResource Studio.NumberBox}"
+                                                     Margin="3,0,0,6" ToolTip="可填写第 1 到第 6 档" />
+                                        </WrapPanel>
+                                        <TextBlock Style="{StaticResource Studio.PageSub}"
+                                                   Text="角色离玩家很远时看不清眨眼和嘴型，关掉远处表情能明显节省计算；关闭开关则全程保留表情。" />
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                        </StackPanel>
+                    </Border>
+
+                    <Border x:Name="BonesCard" Style="{StaticResource Studio.SectionCard}">
+                        <StackPanel>
+                            <CheckBox x:Name="BonesToggle" Style="{StaticResource Studio.ToggleSwitch}"
+                                      Content="远距离自动合并细碎骨骼（bonetreecollapse）" Click="OnBonesClick" />
+                            <Border x:Name="BonesDetails" Style="{StaticResource Studio.TreeChildContainer}" Visibility="Collapsed">
+                                <Grid>
+                                    <Control Style="{StaticResource Studio.TreeBranch}" />
+                                    <StackPanel>
+                                        <Label Target="{Binding ElementName=BonesBox}" Style="{StaticResource Studio.NumberLabel}"
+                                               Margin="0,0,0,5" Content="骨骼名称（用竖线 | 隔开）" />
+                                        <DockPanel>
+                                            <Button DockPanel.Dock="Right" Style="{StaticResource Btn.Secondary}" Margin="8,0,0,0"
+                                                    Content="填入求生之路 2 双手骨骼" Click="OnFillBonesClick" />
+                                            <TextBox x:Name="BonesBox" Style="{StaticResource Input.Mono}" />
+                                        </DockPanel>
+                                        <WrapPanel Margin="0,8,0,0">
+                                            <Label Target="{Binding ElementName=BonesLevelBox}" Style="{StaticResource Studio.NumberLabel}"
+                                                   Content="从第几档开始合并" />
+                                            <TextBox x:Name="BonesLevelBox" Style="{StaticResource Studio.NumberBox}"
+                                                     ToolTip="可填写第 1 到第 6 档" />
+                                        </WrapPanel>
+                                        <TextBlock Style="{StaticResource Studio.PageSub}" Margin="0,5,0,0"
+                                                   Text="把远处的十根手指等细碎骨骼合并到主骨骼上，肉眼几乎看不出差别但能显著减轻蒙皮负担。" />
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                        </StackPanel>
+                    </Border>
+
+                    <Border x:Name="SkipCard" Style="{StaticResource Studio.SectionCard}">
+                        <StackPanel>
+                            <CheckBox x:Name="SkipToggle" Style="{StaticResource Studio.ToggleSwitch}"
+                                      Content="跳过角色主模型（$model）" Click="OnSkipClick" />
+                            <Border x:Name="SkipDetails" Style="{StaticResource Studio.TreeChildContainer}" Visibility="Collapsed">
+                                <Grid>
+                                    <Control Style="{StaticResource Studio.TreeBranch}" />
+                                    <StackPanel>
+                                        <WrapPanel>
+                                            <TextBlock x:Name="SkipReadout" Style="{StaticResource Studio.SectionTitle}"
+                                                       VerticalAlignment="Center" Margin="0,0,12,0" />
+                                            <Button Style="{StaticResource Btn.Secondary}" Content="选择要跳过的 QC 清单…" Click="OnPickSkipClick" />
+                                        </WrapPanel>
+                                        <TextBlock Style="{StaticResource Studio.PageSub}" Margin="0,6,0,0"
+                                                   Text="只保护清单里 QC 的核心主模型（如头部或主躯干），其余配饰与服装部件仍照常减面。" />
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+
+                <StackPanel x:Name="WritingPanel" Visibility="Collapsed">
+                    <Border x:Name="WorkersCard" Style="{StaticResource Studio.SectionCard}">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource Studio.SectionTitle}" Text="同时处理的任务数量" />
+                            <DockPanel Margin="0,8,0,0">
+                                <TextBox DockPanel.Dock="Right" x:Name="WorkersBox" Style="{StaticResource Studio.NumberBox}"
+                                         AutomationProperties.Name="同时处理的任务数量" />
+                                <Slider x:Name="WorkersSlider" Style="{StaticResource Studio.Slider}"
+                                        Minimum="0" Maximum="16" TickFrequency="1"
+                                        IsSnapToTickEnabled="True" Margin="0,0,12,0"
+                                        AutomationProperties.Name="同时处理的任务数量" />
+                            </DockPanel>
+                            <Border HorizontalAlignment="Left" CornerRadius="8" Margin="0,8,0,0" Padding="8,3"
+                                    Background="{DynamicResource Brush.SignalSoft}">
+                                <TextBlock x:Name="WorkersReadout" Style="{StaticResource Studio.PageSub}"
+                                           Foreground="{DynamicResource Brush.Ink}" />
+                            </Border>
+                        </StackPanel>
+                    </Border>
+
+                    <Border x:Name="WriteCard" Style="{StaticResource Studio.SectionCard}">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource Studio.SectionTitle}" Margin="0,0,0,5" Text="写入与编译保护" />
+                            <CheckBox x:Name="OverwriteToggle" Style="{StaticResource Studio.ToggleSwitch}"
+                                      Content="允许替换 QC 中已有的手写 $lod" Click="OnOverwriteClick" />
+                            <TextBlock Style="{StaticResource Studio.PageSub}"
+                                       Text="写入新档位前会先把旧的手写段落注释起来。自动备份开启时，还能用备份恢复整份原始 QC。" />
+                            <CheckBox x:Name="CompileToggle" Style="{StaticResource Studio.ToggleSwitch}" Margin="0,8,0,0"
+                                      Content="生成后自动调用编译器试编译" Click="OnCompileClick" />
+                            <TextBlock Style="{StaticResource Studio.PageSub}"
+                                       Text="生成后用 nekomdl.exe 试编译，提前发现 QC 和模型的问题。编译器路径可在「维护与环境」里设置。" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border x:Name="PopupCard" Style="{StaticResource Studio.SectionCard}">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource Studio.SectionTitle}" Margin="0,0,0,5" Text="完成提醒" />
+                            <CheckBox x:Name="SuccessToggle" Style="{StaticResource Studio.ToggleSwitch}"
+                                      Content="全部顺利完成时也弹出提醒" Click="OnSuccessClick" />
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </Grid>
+        </ScrollViewer>
+    </Grid>
+</pages:StudioPageBase>

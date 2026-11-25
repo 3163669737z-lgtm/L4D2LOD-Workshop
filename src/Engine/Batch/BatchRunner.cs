@@ -152,9 +152,8 @@ namespace LodStudio.Engine
 
             foreach (var pm in workModels)
             {
-                for (int li = 0; li < pm.Jobs.Count; li++)
+                void QueueJob(ReductionJob planned, int level)
                 {
-                    var planned = pm.Jobs[li];
                     string stagePath = Path.Combine(stageDir, runKey + "_" + jobs.Count + "_candidate.glb");
                     temporaryModels.Add(stagePath);
                     jobs.Add(new ReductionJob
@@ -164,12 +163,16 @@ namespace LodStudio.Engine
                         DisplayDestination = planned.Destination,
                         Ratio = planned.Ratio,
                         Distance = planned.Distance,
+                        ShadowMode = planned.ShadowMode,
                         RequireFixedVertices = pm.DmxSource != null,
                         Weight = planned.Weight
                     });
                     jobOwners.Add(pm);
-                    jobLevels.Add(li + 1);
+                    jobLevels.Add(level);
                 }
+                for (int li = 0; li < pm.Jobs.Count; li++) QueueJob(pm.Jobs[li], li + 1);
+                if (options.GenerateShadowLod && options.ShadowLodMode == ShadowLodMode.Dedicated && pm.ShadowJob != null)
+                    QueueJob(pm.ShadowJob, 0);
             }
             stats.JobCount = jobs.Count;
             stats.UniqueModelCount = plan.Models.Count;
@@ -184,6 +187,7 @@ namespace LodStudio.Engine
                     QualityFirst = options.QualityFirst,
                     AdaptiveTriangleBudget = options.AdaptiveTriangleBudget,
                     AllowVertexUpdates = options.AllowVertexUpdates,
+                    ReductionProfile = options.ReductionProfile,
                     OmitUnchangedOutputs = true,
                     Log = message => obs.Log(LogLevel.Info, message)
                 };
@@ -203,16 +207,33 @@ namespace LodStudio.Engine
             obs.Stage(BatchStage.ConvertingSmd, "── 汇总减面结果 ──");
             var okDst = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var previousLods = new Dictionary<PlannedModel, (string Path, int Triangles)>();
-            var candidates = new Dictionary<(string Source, int Level), (string Path, int Triangles)>();
+            var candidates = new Dictionary<(string Source, int Level), (string Path, int Triangles, int MaxDeviationPpm)>();
+            var shadowPublished = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var usedCandidates = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var newCandidates = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var triangleChangeByLevel = new long[plan.Plan.Count];
             int jobFail = 0;
+            decimal weightedDeviation = 0;
             for (int i = 0; i < jobs.Count; i++)
             {
                 var job = jobs[i];
                 var pm = jobOwners[i];
                 int level = jobLevels[i];
+                string lodName = job.ShadowMode ? "Shadow LOD" : "LOD" + level;
+                void LogJobFailure(string message)
+                {
+                    string detail = "模型 " + pm.BaseName + " 的 " + lodName + " " + message;
+                    if (job.ShadowMode)
+                    {
+                        outcome.Warnings.Add(detail);
+                        obs.Log(LogLevel.Warn, detail);
+                    }
+                    else
+                    {
+                        foreach (var q in pm.RootQcs) QcErr(q, detail);
+                        obs.Log(LogLevel.Error, detail);
+                    }
+                }
                 var r = (results != null && i < results.Count) ? results[i] : null;
                 if (r == null || !r.Ok || (r.AfterTriangles < r.BeforeTriangles && !File.Exists(job.Destination)))
                 {
@@ -223,18 +244,29 @@ namespace LodStudio.Engine
                         // 用户取消：LOD 没生成是预期结果，不写进 QC 错误（界面/报告里已经有"已停止"状态）
                         continue;
                     }
-                    foreach (var q in pm.RootQcs) QcErr(q, "模型 " + pm.BaseName + " 的 LOD" + level + " 简化失败：" + err);
-                    obs.Log(LogLevel.Error, pm.BaseName + " LOD" + level + " 失败：" + err);
+                    LogJobFailure("简化失败：" + err);
                     continue;
                 }
                 if (!string.IsNullOrEmpty(r.Warning))
                     obs.Log(LogLevel.Warn, Path.GetFileName(job.DisplayDestination) + "：" + r.Warning);
 
+                if (r.HasDeviationMetrics)
+                {
+                    stats.MaxSurfaceDeviationPpm = Math.Max(stats.MaxSurfaceDeviationPpm, r.MaxSurfaceDeviationPpm);
+                    if (r.DeviationSampleCount <= long.MaxValue - stats.DeviationSampleCount)
+                    {
+                        weightedDeviation += (decimal)r.MeanSurfaceDeviationPpm * r.DeviationSampleCount;
+                        stats.DeviationSampleCount += r.DeviationSampleCount;
+                    }
+                }
+
                 string finalPath = job.DisplayDestination;
                 try
                 {
-                    bool hasPrevious = previousLods.TryGetValue(pm, out var previous);
-                    int inheritedTriangles = hasPrevious ? previous.Triangles : pm.Triangles;
+                    previousLods.TryGetValue(pm, out var previous);
+                    bool hasPrevious = !job.ShadowMode && previous.Path != null;
+                    int inheritedTriangles = hasPrevious ? previous.Triangles :
+                        job.ShadowMode ? r.BeforeTriangles : pm.Triangles;
                     int triangles = r.AfterTriangles;
                     SmdModel converted = null;
                     if (pm.IsSmd && triangles < inheritedTriangles)
@@ -250,7 +282,11 @@ namespace LodStudio.Engine
                     stats.VertexUpdateTrials += r.VertexUpdateTrials;
                     if (triangles >= inheritedTriangles)
                     {
-                        if (hasPrevious)
+                        if (job.ShadowMode)
+                        {
+                            obs.Log(LogLevel.Info, Path.GetFileName(finalPath) + "：没有合格的独立 Shadow LOD");
+                        }
+                        else if (hasPrevious)
                         {
                             stats.ReusedLevels++;
                             obs.Log(LogLevel.Info, Path.GetFileName(finalPath) + "：QC 沿用 " +
@@ -273,16 +309,22 @@ namespace LodStudio.Engine
                         if (pm.DmxSource != null) pm.DmxSource.WriteLod(job.Destination, output);
                         else if (pm.IsSmd) SmdCodec.Write(output, converted);
                         if (plan.Automatic)
-                        {
-                            finalPath = PublishCandidate(pm.Dir, pm.BaseName, Path.GetExtension(finalPath), level,
+                            finalPath = PublishCandidate(finalPath,
                                 pm.IsSmd || pm.DmxSource != null ? output : job.Destination, newCandidates);
-                            candidates[(pm.Path, level)] = (finalPath, triangles);
-                        }
                         else if (!pm.IsSmd && pm.DmxSource == null) FileUtil.CopyAtomic(job.Destination, finalPath);
-                        previousLods[pm] = (finalPath, triangles);
-                        triangleChangeByLevel[level - 1] += triangles - (long)inheritedTriangles;
-                        okDst.Add(finalPath);
-                        stats.PublishedLods++;
+                        if (job.ShadowMode)
+                        {
+                            shadowPublished[pm.Path] = finalPath;
+                            stats.ShadowLodsPublished++;
+                        }
+                        else
+                        {
+                            if (plan.Automatic) candidates[(pm.Path, level)] = (finalPath, triangles, r.MaxSurfaceDeviationPpm);
+                            previousLods[pm] = (finalPath, triangles);
+                            triangleChangeByLevel[level - 1] += triangles - (long)inheritedTriangles;
+                            okDst.Add(finalPath);
+                            stats.PublishedLods++;
+                        }
                         stats.VertexUpdateAccepted += r.VertexUpdateAccepted;
                         stats.VertexUpdateTrianglesSaved += r.VertexUpdateTrianglesSaved;
                         stats.BalancedRegions += r.BalancedRegions;
@@ -294,16 +336,18 @@ namespace LodStudio.Engine
                 catch (Exception ex)
                 {
                     jobFail++;
-                    foreach (var q in pm.RootQcs) QcErr(q, "模型 " + pm.BaseName + " 的 LOD" + level + " 写入失败：" + ex.Message);
-                    obs.Log(LogLevel.Error, pm.BaseName + " LOD" + level + " 写入失败：" + ex.Message);
+                    LogJobFailure("写入失败：" + ex.Message);
                 }
             }
             stats.JobFail = jobFail;
-            stats.ModelsWithoutReduction = workModels.Count(pm => !previousLods.ContainsKey(pm));
+            if (stats.DeviationSampleCount > 0)
+                stats.MeanSurfaceDeviationPpm = (int)Math.Round(weightedDeviation / stats.DeviationSampleCount);
+            stats.ModelsWithoutReduction = workModels.Count(pm => !previousLods.ContainsKey(pm) && !shadowPublished.ContainsKey(pm.Path));
             if (jobs.Count > 0)
-                obs.Log(LogLevel.Info, "简化结果：发布 " + stats.PublishedLods + " 个新网格，沿用已减网格 " +
+                obs.Log(LogLevel.Info, "简化结果：发布 " + stats.PublishedLods + " 个可见 LOD、" +
+                                       stats.ShadowLodsPublished + " 个独立阴影网格，沿用已减网格 " +
                                        stats.ReusedLevels + " 档，沿用源网格 " + stats.UnreducedLevels + " 档");
-            foreach (var pm in workModels.Where(m => !previousLods.ContainsKey(m)))
+            foreach (var pm in workModels.Where(m => !previousLods.ContainsKey(m) && !shadowPublished.ContainsKey(m.Path)))
                 obs.Log(LogLevel.Info, FileUtil.RelativeDisplay(plan.RootDir, pm.Path) + "：没有找到合格的减面档");
 
             stats.TotalSourceTriangles = plan.TotalSourceTriangles;
@@ -319,6 +363,11 @@ namespace LodStudio.Engine
             if (outcome.Cancelled)
             {
                 foreach (string path in newCandidates) FileUtil.TryDelete(path);
+                if (plan.Automatic)
+                {
+                    stats.PublishedLods = 0;
+                    stats.ShadowLodsPublished = 0;
+                }
                 obs.Log(LogLevel.Warn, "已停止：不注入任何 QC（已生成的 LOD 文件保留）。");
                 FinishQcOutcomes(plan, outcome, qcOutcomes, 0, 0);
                 WriteReports(plan, options, outcome, obs, obs, sw.Elapsed);
@@ -344,6 +393,17 @@ namespace LodStudio.Engine
             int injected = 0, skipped = 0;
             var injectedPaths = new List<string>();
             var sharedHostBlocks = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var blockOptions = new QcLodBlockOptions
+            {
+                NoFacialFromLevel = options.NoFacialFromLevel,
+                CollapseBones = (options.CollapseBones ?? "").Split('|').Select(b => b.Trim())
+                    .Where(b => b.Length > 0).Distinct(StringComparer.Ordinal).ToList(),
+                CollapseBonesFromLevel = options.CollapseBonesFromLevel,
+                GenerateShadowLod = options.GenerateShadowLod,
+                ShadowLodMode = options.ShadowLodMode,
+                ShadowLodReuseLevel = options.ShadowLodReuseLevel,
+                ShadowPublishedPath = source => shadowPublished.TryGetValue(source, out var path) ? path : null
+            };
             foreach (var qp in plan.QcPlans)
             {
                 if (cancel.IsCancellationRequested) { outcome.Cancelled = true; break; }
@@ -409,6 +469,7 @@ namespace LodStudio.Engine
                 }
                 catch { }
                 string block;
+                QcLodBlockInfo blockInfo;
                 var qcLevels = qp.Levels ?? plan.Plan;
                 Dictionary<int, AutomaticLodResult> accepted = null;
                 var referenced = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -417,17 +478,11 @@ namespace LodStudio.Engine
                 try
                 {
                     if (plan.Automatic)
-                    {
-                        accepted = SelectLevels(qp, qo, candidates);
-                        foreach (int level in accepted.Keys)
-                            foreach (var model in qp.Models)
-                                for (int prior = level; prior > 0; --prior)
-                                    if (candidates.TryGetValue((model.Path, prior), out var candidate))
-                                    { referenced.Add(candidate.Path); break; }
-                    }
-                    block = QcWriter.BuildLodBlock(qp.Info, qcLevels, okDst, skipMain, !plan.Automatic && options.NoFacial,
+                        accepted = SelectLevels(qp, qo, candidates, options.AutoMinSavingsPercent);
+                    block = QcWriter.BuildLodBlock(qp.Info, qcLevels, okDst, skipMain, options.NoFacial, blockOptions,
                         reuseEarlierLods: true, publishedPath: !plan.Automatic ? null : (Func<string, int, string>)((source, level) =>
-                            candidates.TryGetValue((source, level), out var candidate) ? candidate.Path : null), automaticLevels: accepted);
+                            candidates.TryGetValue((source, level), out var candidate) ? candidate.Path : null),
+                        automaticLevels: accepted, referencedPaths: referenced, blockInfo: out blockInfo);
                 }
                 catch (Exception ex)
                 {
@@ -464,7 +519,7 @@ namespace LodStudio.Engine
                         qo.OutputFiles.AddRange(referenced.OrderBy(p => p, StringComparer.OrdinalIgnoreCase));
                         outcome.GeneratedModels++;
                         outcome.GeneratedModelPaths.Add(qp.QcPath);
-                        obs.Log(LogLevel.Info, Path.GetFileName(qp.QcPath) + " → 生成 " + accepted.Count + " 级模型 LOD");
+                        obs.Log(LogLevel.Info, Path.GetFileName(qp.QcPath) + " → 生成 " + referenced.Count + " 个 LOD 网格");
                         continue;
                     }
                     switch (options.OutputMode)
@@ -474,7 +529,6 @@ namespace LodStudio.Engine
                             injected++;
                             injectedPaths.Add(qp.QcPath);
                             qo.Injected = true;
-                            obs.Log(LogLevel.Info, "  · " + Path.GetFileName(qp.QcPath) + " → 写入合集");
                             break;
 
                         case OutputMode.SeparateQc:
@@ -503,12 +557,14 @@ namespace LodStudio.Engine
                                     injectedPaths.Add(qp.QcPath);
                                     qo.Injected = true;
                                     qo.LodBlockFile = qp.QcPath;
-                                    obs.Log(LogLevel.Info, "  ✔ " + Path.GetFileName(qp.QcPath) + " → 生成 " + Path.GetFileName(lodQc) + "，原 QC 加一行 $include");
+                                    obs.Log(LogLevel.Info, "  ✔ " + Path.GetFileName(qp.QcPath) + " → 写入 " + blockInfo.Describe() +
+                                            " 到 " + Path.GetFileName(lodQc) + "，原 QC 加一行 $include");
                                 }
                                 else
                                 {
                                     qo.Errors.Add(res.Error ?? "写入失败");
                                     if (!lodExisted) TryDeleteFile(lodQc);   // 根 QC 没写成：回滚本次新建的 _LOD.qc
+                                    if (File.Exists(lodQc)) usedCandidates.UnionWith(referenced);
                                 }
                                 break;
                             }
@@ -534,20 +590,10 @@ namespace LodStudio.Engine
                                     qo.LodBlockFile = res.HostFile;
                                     string hostName = string.IsNullOrEmpty(res.HostFile) ? "" : Path.GetFileName(res.HostFile);
                                     bool sharedHost = !PathsEqual(res.HostFile, qp.QcPath);
-                                    if (res.NoChange)
-                                    {
-                                        obs.Log(LogLevel.Info, "  ✔ " + Path.GetFileName(qp.QcPath) + " → $lod 已是最新（未改动）" +
-                                                (sharedHost ? "，块在 " + hostName : ""));
-                                    }
-                                    else if (sharedHost)
-                                    {
-                                        obs.Log(LogLevel.Info, "  ✔ " + Path.GetFileName(qp.QcPath) + " → " + (accepted?.Count ?? qcLevels.Count) +
-                                                " 级 $lod 写入 " + hostName + "（共享 include，根 QC 未改动）");
-                                    }
-                                    else
-                                    {
-                                        obs.Log(LogLevel.Info, "  ✔ " + Path.GetFileName(qp.QcPath) + " → 追加 " + (accepted?.Count ?? qcLevels.Count) + " 级 $lod");
-                                    }
+                                    string writeSummary = res.NoChange ? "已有 " + blockInfo.Describe() + "（内容已是最新）" :
+                                        (sharedHost ? "写入 " : "追加 ") + blockInfo.Describe();
+                                    obs.Log(LogLevel.Info, "  ✔ " + Path.GetFileName(qp.QcPath) + " → " + writeSummary +
+                                            (sharedHost ? "，块在 " + hostName : ""));
                                     // 多个 QC 共享同一 include 文件时，块内容必须一致；不一致只保留最后写入者，明确提示
                                     if (sharedHost && !string.IsNullOrEmpty(res.HostFile))
                                     {
@@ -573,6 +619,7 @@ namespace LodStudio.Engine
                     }
                     if (qo.Injected)
                     {
+                        qo.LodBlock = blockInfo;
                         usedCandidates.UnionWith(referenced);
                         qo.OutputFiles.AddRange(referenced.OrderBy(p => p, StringComparer.OrdinalIgnoreCase));
                     }
@@ -583,18 +630,17 @@ namespace LodStudio.Engine
                 }
             }
 
-            if (plan.Automatic)
-            {
-                foreach (string path in newCandidates.Except(usedCandidates, StringComparer.OrdinalIgnoreCase)) FileUtil.TryDelete(path);
-                stats.PublishedLods = usedCandidates.Count;
-            }
-
+            bool collectionWritten = false;
             if (collectionMode && !outcome.Cancelled)
             {
                 try
                 {
                     string colPath = Path.Combine(plan.RootDir, options.CollectionName);
                     QcTextFile.WriteAllText(colPath, collection.ToString(), new UTF8Encoding(false), true);
+                    collectionWritten = true;
+                    foreach (string qcPath in injectedPaths)
+                        obs.Log(LogLevel.Info, "  · " + Path.GetFileName(qcPath) + " → 写入合集 " +
+                                qcOutcomes[FileUtil.Normalize(qcPath)].LodBlock.Describe());
                     obs.Log(LogLevel.Info, "合集已写出：" + colPath);
                     obs.Log(LogLevel.Info, "（原 QC 一个都没有改动）");
                 }
@@ -605,6 +651,29 @@ namespace LodStudio.Engine
                 }
             }
 
+            if (collectionMode && !collectionWritten)
+            {
+                foreach (string qcPath in injectedPaths)
+                {
+                    var qo = qcOutcomes[FileUtil.Normalize(qcPath)];
+                    qo.Injected = false;
+                    qo.LodBlock = default;
+                    qo.OutputFiles.Clear();
+                }
+                injectedPaths.Clear();
+                injected = 0;
+                usedCandidates.Clear();
+            }
+
+            if (plan.Automatic)
+            {
+                foreach (string path in newCandidates.Except(usedCandidates, StringComparer.OrdinalIgnoreCase)) FileUtil.TryDelete(path);
+                stats.ShadowLodsPublished = shadowPublished.Values.Count(usedCandidates.Contains);
+                stats.PublishedLods = usedCandidates.Count - stats.ShadowLodsPublished;
+            }
+
+            stats.ShadowLodQcsWritten = qcOutcomes.Values.Count(q => q.Injected && q.LodBlock.HasShadowLod);
+            stats.ShadowLodReusedQcs = qcOutcomes.Values.Count(q => q.Injected && q.LodBlock.ShadowReusedLevel > 0);
             stats.InjectedQcCount = injected;
             stats.SkippedQcCount = skipped;
             outcome.InjectedQcPaths = injectedPaths;
@@ -669,7 +738,7 @@ namespace LodStudio.Engine
             WriteReports(plan, options, outcome, obs, obs, sw.Elapsed);
         }
 
-        private static string PublishCandidate(string directory, string model, string extension, int level, string source, HashSet<string> created)
+        private static string PublishCandidate(string finalPath, string source, HashSet<string> created)
         {
             using (var sha = SHA256.Create())
             {
@@ -679,7 +748,8 @@ namespace LodStudio.Engine
                         return BitConverter.ToString(sha.ComputeHash(input)).Replace("-", "").ToLowerInvariant();
                 }
                 string hash = Hash(source);
-                string destination = Path.Combine(directory, model + "_lod" + level + "_" + hash.Substring(0, 16) + extension);
+                string destination = Path.Combine(Path.GetDirectoryName(finalPath), Path.GetFileNameWithoutExtension(finalPath) +
+                    "_" + hash.Substring(0, 16) + Path.GetExtension(finalPath));
                 if (File.Exists(destination))
                 {
                     if (Hash(destination) != hash) throw new IOException("现有 LOD 文件内容已改变：" + destination);
@@ -712,10 +782,14 @@ namespace LodStudio.Engine
         }
 
         private static Dictionary<int, AutomaticLodResult> SelectLevels(BatchQcPlan qc, QcOutcome outcome,
-            Dictionary<(string Source, int Level), (string Path, int Triangles)> candidates)
+            Dictionary<(string Source, int Level), (string Path, int Triangles, int MaxDeviationPpm)> candidates,
+            int minSavingsPercent)
         {
+            double minimumSavings = minSavingsPercent > 0 && minSavingsPercent <= 100
+                ? minSavingsPercent / 100.0 : AutomaticLod.MinimumSavings;
             var accepted = new Dictionary<int, AutomaticLodResult>();
             var activeCounts = qc.Models.ToDictionary(m => m, m => m.Triangles);
+            var activeDeviations = qc.Models.ToDictionary(m => m, m => 0);
             long previousTriangles = qc.SourceTriangles;
             double previousSwitch = 0;
             var modelExtents = qc.Models.ToDictionary(m => m.Path, m => m.Extent, StringComparer.OrdinalIgnoreCase);
@@ -727,20 +801,25 @@ namespace LodStudio.Engine
             {
                 int level = i + 1;
                 foreach (var model in qc.Models)
-                    if (candidates.TryGetValue((model.Path, level), out var candidate)) activeCounts[model] = candidate.Triangles;
+                    if (candidates.TryGetValue((model.Path, level), out var candidate))
+                    {
+                        activeCounts[model] = candidate.Triangles;
+                        activeDeviations[model] = candidate.MaxDeviationPpm;
+                    }
                 var result = new AutomaticLodResult
                 {
                     Candidate = level,
                     Triangles = AutomaticLod.CountVisible(qc, m => activeCounts[m]),
-                    TargetRatio = qc.Levels.Levels[i].Ratio
+                    TargetRatio = qc.Levels.Levels[i].Ratio,
+                    MaxSurfaceDeviationPpm = activeDeviations.Values.Max()
                 };
                 outcome.Levels.Add(result);
-                if (result.Triangles > previousTriangles * (1 - AutomaticLod.MinimumSavings))
+                if (result.Triangles > previousTriangles * (1 - minimumSavings))
                 {
-                    result.SkipReason = "相对上一有效档减面不足 10%";
+                    result.SkipReason = "相对上一有效档减面不足 " + minimumSavings.ToString("0%", CultureInfo.InvariantCulture);
                     continue;
                 }
-                AutomaticLod.Estimate(result, extent, qc.SourceTriangles, previousSwitch);
+                AutomaticLod.Estimate(result, extent, qc.SourceTriangles, previousSwitch, result.MaxSurfaceDeviationPpm);
                 previousTriangles = result.Triangles;
                 previousSwitch = result.SwitchPoint;
                 accepted.Add(level, result);

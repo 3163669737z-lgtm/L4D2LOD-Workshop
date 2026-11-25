@@ -1,3 +1,83 @@
+diff --git a/gltf/gltfpack.cpp b/gltf/gltfpack.cpp
+index 31dd40b..68acdfd 100644
+--- a/gltf/gltfpack.cpp
++++ b/gltf/gltfpack.cpp
+@@ -1253,6 +1253,8 @@ int gltfpack(const char* input, const char* output, const char* report, Settings
+ Settings defaults()
+ {
+ 	Settings settings = {};
++	settings.simplify_lod_progress = -1.f;
++	settings.simplify_lod_quality = 1;
+ 	settings.quantize = true;
+ 	settings.pos_bits = 14;
+ 	settings.tex_bits = 12;
+@@ -1455,6 +1457,36 @@ int main(int argc, char** argv)
+ 		{
+ 			settings.simplify_lock_borders = true;
+ 		}
++		else if (strcmp(arg, "-lodb") == 0)
++		{
++			settings.simplify_density_budget = true;
++		}
++		else if (strcmp(arg, "-lodp") == 0 && i + 1 < argc && isdigit(argv[i + 1][0]))
++		{
++			settings.simplify_lod_progress = clamp(float(atof(argv[++i])), 0.f, 1.f);
++		}
++		else if (strcmp(arg, "-lodq") == 0)
++		{
++			if (i + 1 >= argc || argv[i + 1][0] < '0' || argv[i + 1][0] > '2' || argv[i + 1][1] != 0)
++			{
++				fprintf(stderr, "Error: -lodq requires 0, 1, or 2\n");
++				return 1;
++			}
++			settings.simplify_lod_quality = argv[++i][0] - '0';
++			settings.simplify_lock_borders = true;
++		}
++		else if (strcmp(arg, "-lodsh") == 0)
++		{
++			settings.simplify_shadow_lod = true;
++		}
++		else if (strcmp(arg, "-lodfw") == 0)
++		{
++			settings.lod_float_weights = true;
++		}
++		else if (strcmp(arg, "-lodvu") == 0)
++		{
++			settings.simplify_guarded_update = true;
++		}
+ 		else if (strcmp(arg, "-sv") == 0)
+ 		{
+ 			settings.simplify_update = true;
+@@ -1685,6 +1717,10 @@ int main(int argc, char** argv)
+ 			fprintf(stderr, "\nSimplification:\n");
+ 			fprintf(stderr, "\t-si R: simplify meshes targeting triangle/point count ratio R (default: 1; R should be between 0 and 1)\n");
+ 			fprintf(stderr, "\t-se E: limit simplification error to E (default: 0.01 = 1%% deviation; E should be between 0 and 1)\n");
++			fprintf(stderr, "\t-lodp R: distance-based appearance budget R (0 = near, 1 = far; with -lodb)\n");
++			fprintf(stderr, "\t-lodq M: guarded LOD fidelity (0 = strict, 1 = balanced [default], 2 = high compression)\n");
++			fprintf(stderr, "\t-lodsh: simplify shadow LODs with silhouette and skin-weight validation\n");
++			fprintf(stderr, "\t-lodvu: try validated vertex updates with locked borders (-slb)\n");
+ 			fprintf(stderr, "\t-sv: simplify with vertex position and attribute optimization\n");
+ 			fprintf(stderr, "\t-sp: use permissive simplification mode to allow simplification across attribute discontinuities\n");
+ 			fprintf(stderr, "\t-sa: aggressively simplify to the target ratio disregarding quality\n");
+diff --git a/gltf/gltfpack.h b/gltf/gltfpack.h
+index 1a99fc6..0f860ac 100644
+--- a/gltf/gltfpack.h
++++ b/gltf/gltfpack.h
+@@ -156,6 +156,12 @@ struct Settings
+ 	bool simplify_lock_borders;
+ 	bool simplify_permissive;
+ 	bool simplify_update;
++	bool simplify_guarded_update;
++	bool simplify_density_budget;
++	float simplify_lod_progress;
++	int simplify_lod_quality;
++	bool simplify_shadow_lod;
++	bool lod_float_weights;
+ 
+ 	bool texture_ktx2;
+ 	bool texture_webp;
+diff --git a/gltf/mesh.cpp b/gltf/mesh.cpp
+index 0956e87..6ff7e65 100644
 --- a/gltf/mesh.cpp
 +++ b/gltf/mesh.cpp
 @@ -10,6 +10,7 @@
@@ -8,7 +88,7 @@
  
  static float inverseTranspose(float* result, const float* transform)
  {
-@@ -202,13 +203,7 @@
+@@ -202,13 +203,7 @@ static bool canMergeMeshNodes(cgltf_node* lhs, cgltf_node* rhs, const Settings&
  		return false;
  
  	if (settings.keep_nodes)
@@ -23,7 +103,7 @@
  
  	// we can merge nodes that don't have transforms of their own and have the same parent
  	// this is helpful when instead of splitting mesh into primitives, DCCs split mesh into mesh nodes
-@@ -1061,7 +1056,499 @@
+@@ -1061,7 +1056,524 @@ static void simplifyUvSplit(Mesh& mesh, std::vector<unsigned int>& remap)
  	}
  }
  
@@ -152,7 +232,8 @@
 +
 +static void simplifyIslands(std::vector<unsigned int>& result, std::vector<unsigned int>& uvremap,
 +	Mesh& mesh, const Stream& positions, const std::vector<float>& attributes, const float* weights,
-+	size_t stride, float ratio, float error, unsigned int options, bool allow_vertex_updates, bool density_budget, float lod_progress)
++	size_t stride, float ratio, float error, unsigned int options, bool allow_vertex_updates, bool density_budget,
++	float lod_progress, int fidelity_mode, bool shadow_mode)
 +{
 +	struct Region
 +	{
@@ -182,7 +263,7 @@
 +	float far_strength = density_budget ? lodstudio::farStrength(lod_progress) : 0.f;
 +
 +	// A primitive boundary can be stitched to a neighboring material.
-+	bool shared_material_borders = density_budget && std::any_of(mesh.nodes.begin(), mesh.nodes.end(), [](const cgltf_node* node) {
++	bool shared_material_borders = (density_budget || shadow_mode) && std::any_of(mesh.nodes.begin(), mesh.nodes.end(), [](const cgltf_node* node) {
 +		return node && node->mesh && node->mesh->primitives_count > 1;
 +	});
 +
@@ -208,7 +289,7 @@
 +			float fraction = bounds.extent() / mesh_scale;
 +			detail_strength = far_strength * std::max(0.f, std::min(1.f, (0.09f - fraction) / 0.07f));
 +		}
-+		for (auto& indices : lodstudio::partitionIsland(island, positions.data, density_budget))
++		for (auto& indices : lodstudio::partitionIsland(island, positions.data, density_budget && !shadow_mode))
 +		{
 +			if (indices.empty())
 +				continue;
@@ -219,7 +300,9 @@
 +			double retention = density_budget ? lodstudio::islandRetention(weight, ratio)
 +				: 1 - (1 - ratio) * legacy_strength;
 +			region.target = triangles <= (density_budget ? 1 : 32) ? triangles : size_t(ceil(triangles * retention));
-+			if (density_budget)
++			if (shadow_mode)
++				region.target = triangles <= 8 ? triangles : size_t(ceil(triangles * ratio));
++			else if (density_budget)
 +			{
 +				region.stage_minimum = size_t(ceil(triangles * lodstudio::islandRetentionFloor(weight, ratio)));
 +				if (ratio < 1 && triangles > 1)
@@ -231,7 +314,7 @@
 +					region.stage_minimum = std::min(region.stage_minimum, first_reduce);
 +				}
 +			}
-+			if (detail_strength > 0 && triangles > 1)
++			if (!shadow_mode && detail_strength > 0 && triangles > 1)
 +			{
 +				// Detail budget is derived from size, independent of tessellation.
 +				double detail_retention = 1 - (1 - ratio) * (0.60 + 0.39 * detail_strength);
@@ -240,7 +323,7 @@
 +				region.stage_minimum = std::min(region.stage_minimum, detail_target);
 +			}
 +			region.detail_strength = detail_strength;
-+			region.density_priority = density_budget ? lodstudio::islandDensityPriority(island.size() / 3, ratio) : 0;
++			region.density_priority = density_budget && !shadow_mode ? lodstudio::islandDensityPriority(island.size() / 3, ratio) : 0;
 +			region.indices.swap(indices);
 +			total_target += region.target;
 +			regions.push_back(std::move(region));
@@ -352,8 +435,9 @@
 +		if (std::isfinite(scale) && scale > 0)
 +		{
 +			lodstudio::Geometry geometry = {local_positions, local_attributes, local_joints, local_weights,
-+				region.source_vertices, color, tangents, additional_uvs, stride, normals != NULL, uv != NULL,
-+				mesh.material && mesh.material->normal_texture.texture, bounds.low, 1.f / scale, region.density_priority, 0, 0, false};
++				region.source_vertices, color, tangents, additional_uvs, stride, normals != NULL, uv != NULL && !shadow_mode,
++				mesh.material && mesh.material->normal_texture.texture, bounds.low, 1.f / scale,
++				region.density_priority, 0, 0, false, fidelity_mode, shadow_mode};
 +			auto outline_locks = lockOutlineSupports(local_positions);
 +			std::vector<unsigned char> hard_locks(local_positions.size());
 +			for (size_t i = 0; i < region.source_vertices.size(); ++i)
@@ -490,8 +574,11 @@
 +		retained += candidate.keptOriginal ? 1 : 0;
 +		update_trials += candidate.triedUpdate ? 1 : 0;
 +	}
-+	if (far_strength > 0.6f && ratio < 0.55f && updates_accepted == 0 && mesh.indices.size() >= 64 * 3 &&
-+		std::isfinite(mesh_scale) && mesh_scale > 0)
++	bool high_compression_whole = fidelity_mode == 2 && far_strength > 0.20f &&
++		ratio < 0.65f && (!shared_material_borders || independent_material_borders);
++	bool balanced_whole = fidelity_mode == 1 && far_strength > 0.6f && ratio < 0.55f;
++	if (!shadow_mode && (balanced_whole || high_compression_whole) &&
++		updates_accepted == 0 && mesh.indices.size() >= 64 * 3 && std::isfinite(mesh_scale) && mesh_scale > 0)
 +	{
 +		std::vector<unsigned int> identity(positions.data.size());
 +		for (size_t i = 0; i < identity.size(); ++i)
@@ -501,7 +588,7 @@
 +		lodstudio::Geometry geometry = {positions.data, attributes, skinned ? joints->data : empty,
 +			skinned ? skin_weights->data : empty, identity, color, tangents, additional_uvs, stride,
 +			normals != NULL, uv != NULL, mesh.material && mesh.material->normal_texture.texture,
-+			mesh_bounds.low, 1.f / mesh_scale, 0, 0, 0, false};
++			mesh_bounds.low, 1.f / mesh_scale, 0, 0, 0, false, fidelity_mode, false};
 +		size_t regular_triangles = result.size() / 3;
 +		bool opaque = !mesh.material || mesh.material->alpha_mode == cgltf_alpha_mode_opaque;
 +		lodstudio::tryWholePrimitive(result, mesh.indices, islands, geometry, weights, ratio, error, options, far_strength, opaque);
@@ -509,6 +596,23 @@
 +			fprintf(stderr, "lodstudio-whole-primitive %zu %zu\n", regular_triangles, result.size() / 3);
 +	}
 +
++	if (result.size() < mesh.indices.size())
++	{
++		lodstudio::Bounds bounds;
++		for (unsigned int vertex : mesh.indices)
++			bounds.include(lodstudio::xyz(positions.data[vertex]));
++		float extent = bounds.extent();
++		if (std::isfinite(extent) && extent > 0)
++		{
++			const std::vector<Attr> empty;
++			const std::vector<unsigned int> no_remap;
++			const lodstudio::Geometry geometry = {positions.data, attributes, empty, empty, no_remap,
++				NULL, NULL, additional_uvs, stride, false, false, false, bounds.low, 1.f / extent,
++				0, 0, 0, false, fidelity_mode, shadow_mode};
++			auto deviation = lodstudio::measureSurfaceDeviation(geometry, mesh.indices, result);
++			fprintf(stderr, "lodstudio-metrics %u %u %zu\n", deviation.maxPpm, deviation.meanPpm, deviation.sampleCount);
++		}
++	}
 +	if (retried || retained)
 +		fprintf(stderr, "lodstudio-appearance %zu %zu 0\n", retried, retained);
 +	if (update_trials)
@@ -520,24 +624,25 @@
 +}
 +
 +static void simplifyMesh(Mesh& mesh, float threshold, float error, bool aggressive, bool lock_borders,
-+	bool permissive, bool update, bool allow_vertex_updates, bool density_budget, float lod_progress)
++	bool permissive, bool update, bool allow_vertex_updates, bool density_budget, float lod_progress,
++	int fidelity_mode, bool shadow_mode)
  {
  	assert(mesh.type == cgltf_primitive_type_triangles);
  
-@@ -1073,6 +1560,23 @@
- 		return;
+@@ -1074,8 +1586,27 @@ static void simplifyMesh(Mesh& mesh, float threshold, float error, bool aggressi
  
  	size_t presplit_vertices = positions->data.size();
-+
+ 
++	const bool guarded = shadow_mode || (lock_borders && !permissive && !aggressive);
 +	// Keep authored channels that are outside the validator's correspondence model.
-+	if (lock_borders && !permissive && !aggressive && !update)
++	if (guarded && (shadow_mode || !update))
 +	{
 +		const bool validate_extra_uvs = density_budget && lodstudio::farStrength(lod_progress) > 0;
-+		bool extra_channels = std::any_of(mesh.streams.begin(), mesh.streams.end(), [validate_extra_uvs](const Stream& stream) {
++		bool extra_channels = std::any_of(mesh.streams.begin(), mesh.streams.end(), [validate_extra_uvs, shadow_mode](const Stream& stream) {
 +			return stream.type == cgltf_attribute_type_custom || stream.target != 0 ||
-+				(stream.index > 0 && ((stream.type == cgltf_attribute_type_texcoord && !validate_extra_uvs) ||
-+				 stream.type == cgltf_attribute_type_joints || stream.type == cgltf_attribute_type_weights ||
-+				 stream.type == cgltf_attribute_type_color));
++				(stream.index > 0 && (stream.type == cgltf_attribute_type_joints || stream.type == cgltf_attribute_type_weights ||
++				 (!shadow_mode && (stream.type == cgltf_attribute_type_color ||
++				  (stream.type == cgltf_attribute_type_texcoord && !validate_extra_uvs)))));
 +		});
 +		if (mesh.targets || extra_channels)
 +		{
@@ -545,30 +650,71 @@
 +			return;
 +		}
 +	}
- 
++
  	std::vector<unsigned int> uvremap;
- 	simplifyUvSplit(mesh, uvremap);
-@@ -1099,7 +1603,8 @@
+-	simplifyUvSplit(mesh, uvremap);
++	if (!shadow_mode)
++		simplifyUvSplit(mesh, uvremap);
+ 
+ 	size_t vertex_count = positions->data.size();
+ 
+@@ -1084,12 +1615,12 @@ static void simplifyMesh(Mesh& mesh, float threshold, float error, bool aggressi
+ 	float target_error_aggressive = 1e-1f;
+ 
+ 	unsigned int options = 0;
+-	if (lock_borders)
++	if (lock_borders || shadow_mode)
+ 		options |= meshopt_SimplifyLockBorder;
+ 	else
+ 		options |= meshopt_SimplifyPrune;
+ 
+-	if (permissive)
++	if (permissive && !shadow_mode)
+ 		options |= meshopt_SimplifyPermissive;
+ 
+ 	if (mesh.targets || getStream(mesh, cgltf_attribute_type_weights))
+@@ -1099,20 +1630,28 @@ static void simplifyMesh(Mesh& mesh, float threshold, float error, bool aggressi
  
  	float attrw[8] = {};
  	std::vector<float> attrs;
 -	simplifyAttributes(attrs, attrw, sizeof(attrw) / sizeof(attrw[0]), mesh, update ? 1.f : 0.f);
-+	simplifyAttributes(attrs, attrw, sizeof(attrw) / sizeof(attrw[0]), mesh,
-+		update ? 1.f : (lock_borders && !permissive && !aggressive ? 2.0f : 0.f));
++	if (shadow_mode)
++		attrs.resize(vertex_count * (sizeof(attrw) / sizeof(attrw[0])));
++	else
++		simplifyAttributes(attrs, attrw, sizeof(attrw) / sizeof(attrw[0]), mesh,
++			update ? 1.f : (guarded ? 2.0f : 0.f));
  
  	std::vector<unsigned char> locks;
- 	if (permissive)
-@@ -1113,6 +1618,9 @@
+-	if (permissive)
++	if (permissive && !shadow_mode)
+ 		simplifyProtect(locks, mesh, presplit_vertices);
+ 
+ 	// for now we disable simplify-with-update if the mesh has a second texture coordinate since we don't currently update it and moving vertices may create UV distortion
+-	if (update && !mesh.targets && !getStream(mesh, cgltf_attribute_type_texcoord, 1))
++	if (update && !shadow_mode && !mesh.targets && !getStream(mesh, cgltf_attribute_type_texcoord, 1))
+ 	{
+ 		indices = mesh.indices;
+ 		indices.resize(meshopt_simplifyWithUpdate(&indices[0], indices.size(), positions->data[0].f, vertex_count, sizeof(Attr),
  		    attrs.data(), sizeof(attrw), attrw, sizeof(attrw) / sizeof(attrw[0]), permissive ? locks.data() : NULL, target_index_count, target_error, options));
  		simplifyUpdate(attrs, sizeof(attrw) / sizeof(attrw[0]), mesh);
  	}
-+	else if (lock_borders && !permissive && !aggressive)
++	else if (guarded)
 +		simplifyIslands(indices, uvremap, mesh, *positions, attrs, attrw, sizeof(attrw) / sizeof(attrw[0]),
-+			threshold, target_error, options, allow_vertex_updates, density_budget, lod_progress);
++			threshold, target_error, options, allow_vertex_updates && !shadow_mode, density_budget, lod_progress,
++			fidelity_mode, shadow_mode);
  	else
  		indices.resize(meshopt_simplifyWithAttributes(&indices[0], &mesh.indices[0], mesh.indices.size(), positions->data[0].f, vertex_count, sizeof(Attr),
  		    attrs.data(), sizeof(attrw), attrw, sizeof(attrw) / sizeof(attrw[0]), permissive ? locks.data() : NULL, target_index_count, target_error, options));
-@@ -1335,13 +1843,15 @@
+@@ -1123,7 +1662,7 @@ static void simplifyMesh(Mesh& mesh, float threshold, float error, bool aggressi
+ 	// For now we simply fall back to aggressive simplifier instead
+ 
+ 	// if the precise simplifier got "stuck", we'll try to simplify using the sloppy simplifier; this is only used when aggressive simplification is enabled as it breaks attribute discontinuities
+-	if (aggressive && mesh.indices.size() > target_index_count)
++	if (aggressive && !shadow_mode && mesh.indices.size() > target_index_count)
+ 	{
+ 		indices.resize(meshopt_simplifySloppy(&indices[0], &mesh.indices[0], mesh.indices.size(), positions->data[0].f, vertex_count, sizeof(Attr), target_index_count, target_error_aggressive));
+ 		mesh.indices.swap(indices);
+@@ -1335,13 +1874,16 @@ void processMesh(Mesh& mesh, const Settings& settings)
  		break;
  
  	case cgltf_primitive_type_triangles:
@@ -582,68 +728,16 @@
  		{
 -			simplifyMesh(mesh, settings.simplify_ratio, settings.simplify_error / mesh.quality, settings.simplify_aggressive, settings.simplify_lock_borders, settings.simplify_permissive, settings.simplify_update);
 +			simplifyMesh(mesh, settings.simplify_ratio, settings.simplify_error / mesh.quality, settings.simplify_aggressive, settings.simplify_lock_borders, settings.simplify_permissive, settings.simplify_update,
-+				settings.simplify_guarded_update, settings.simplify_density_budget, settings.simplify_lod_progress);
++				settings.simplify_guarded_update, settings.simplify_density_budget, settings.simplify_lod_progress,
++				settings.simplify_lod_quality, settings.simplify_shadow_lod);
  		}
  
  		optimizeMesh(mesh, settings.compressmore);
---- a/gltf/gltfpack.cpp
-+++ b/gltf/gltfpack.cpp
-@@ -1253,6 +1253,7 @@
- Settings defaults()
- {
- 	Settings settings = {};
-+	settings.simplify_lod_progress = -1.f;
- 	settings.quantize = true;
- 	settings.pos_bits = 14;
- 	settings.tex_bits = 12;
-@@ -1454,6 +1455,22 @@
- 		else if (strcmp(arg, "-slb") == 0)
- 		{
- 			settings.simplify_lock_borders = true;
-+		}
-+		else if (strcmp(arg, "-lodb") == 0)
-+		{
-+			settings.simplify_density_budget = true;
-+		}
-+		else if (strcmp(arg, "-lodp") == 0 && i + 1 < argc && isdigit(argv[i + 1][0]))
-+		{
-+			settings.simplify_lod_progress = clamp(float(atof(argv[++i])), 0.f, 1.f);
-+		}
-+		else if (strcmp(arg, "-lodfw") == 0)
-+		{
-+			settings.lod_float_weights = true;
-+		}
-+		else if (strcmp(arg, "-lodvu") == 0)
-+		{
-+			settings.simplify_guarded_update = true;
- 		}
- 		else if (strcmp(arg, "-sv") == 0)
- 		{
-@@ -1685,6 +1702,8 @@
- 			fprintf(stderr, "\nSimplification:\n");
- 			fprintf(stderr, "\t-si R: simplify meshes targeting triangle/point count ratio R (default: 1; R should be between 0 and 1)\n");
- 			fprintf(stderr, "\t-se E: limit simplification error to E (default: 0.01 = 1%% deviation; E should be between 0 and 1)\n");
-+			fprintf(stderr, "\t-lodp R: distance-based appearance budget R (0 = near, 1 = far; with -lodb)\n");
-+			fprintf(stderr, "\t-lodvu: try validated vertex updates with locked borders (-slb)\n");
- 			fprintf(stderr, "\t-sv: simplify with vertex position and attribute optimization\n");
- 			fprintf(stderr, "\t-sp: use permissive simplification mode to allow simplification across attribute discontinuities\n");
- 			fprintf(stderr, "\t-sa: aggressively simplify to the target ratio disregarding quality\n");
---- a/gltf/gltfpack.h
-+++ b/gltf/gltfpack.h
-@@ -156,6 +156,10 @@
- 	bool simplify_lock_borders;
- 	bool simplify_permissive;
- 	bool simplify_update;
-+	bool simplify_guarded_update;
-+	bool simplify_density_budget;
-+	float simplify_lod_progress;
-+	bool lod_float_weights;
- 
- 	bool texture_ktx2;
- 	bool texture_webp;
+diff --git a/gltf/stream.cpp b/gltf/stream.cpp
+index ae523c2..e41257f 100644
 --- a/gltf/stream.cpp
 +++ b/gltf/stream.cpp
-@@ -658,6 +658,11 @@
+@@ -658,6 +658,11 @@ StreamFormat writeVertexStream(std::string& bin, const Stream& stream, const Qua
  	}
  	else if (stream.type == cgltf_attribute_type_weights)
  	{

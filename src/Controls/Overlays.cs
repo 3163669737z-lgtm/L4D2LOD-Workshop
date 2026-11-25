@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.Threading.Tasks;
 using System.Windows;
@@ -7,6 +8,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
+using System.Windows.Media.Effects;
 using System.Windows.Threading;
 
 namespace LodStudio.Controls
@@ -14,30 +16,23 @@ namespace LodStudio.Controls
     public enum ToastTone { Info, Ok, Warn, Err }
 
     /// <summary>
-    /// 浮层提示条（右下角、HUD 上方）。
-    ///
-    /// 契约（不可变）：Show(title, subtitle, tone, holdMs=3200) —— 不抢焦点、不拦截鼠标；
-    /// 最多同时 3 条，垂直堆叠；3.2 秒后淡出。
-    ///
-    /// 实现：自绘（不建子元素/不重建对象），DispatcherTimer 驱动；动画开关遵循
-    /// SystemParameters.ClientAreaAnimation（关闭"显示动画效果"时立即显示/隐藏）。
-    ///
-    /// 堆叠约定：**新的在最下面**（最靠近 HUD，视线最先看到），旧的上移让位；超 3 条时丢掉最旧的一条。
+    /// 现代化毛玻璃浮层提示条（右下角、HUD 上方）。
+    /// 特性：圆角磨砂卡片 + 柔和阴影 + 发光语义竖条 + 底部剩余时长进度细线 + 弹性滑入。
+    /// 契约不变：Show(title, subtitle, tone, holdMs=3200) —— 不抢焦点、不拦截鼠标、最多 3 条。
     /// </summary>
     public sealed class ToastHost : FrameworkElement
     {
-        private const double MinToastWidth = 250.0;
-        private const double MaxToastWidth = 320.0;
-        private const double SingleLineHeight = 44.0;
-        private const double TwoLineHeight = 58.0;
-        private const double BarWidth = 3.0;            // 左侧语义色条
-        private const double TextLeft = 14.0;           // 文字距框左边（含 3px 色条）
-        private const double TextRight = 14.0;
-        private const double StackGap = 8.0;
-        private const double HardShadowOffset = 3.0;    // 右下 3px 硬偏移色块（不用模糊阴影）
-        private const int IntervalMs = 16;
-        private const double EnterMs = 160.0;
-        private const double LeaveMs = 160.0;
+        private const double MinToastWidth = 256.0;
+        private const double MaxToastWidth = 330.0;
+        private const double SingleLineHeight = 48.0;
+        private const double TwoLineHeight = 62.0;
+        private const double BarWidth = 3.5;
+        private const double TextLeft = 16.0;
+        private const double TextRight = 16.0;
+        private const double StackGap = 10.0;
+        private const double CardRadius = 12.0;
+        private const double EnterMs = 180.0;
+        private const double LeaveMs = 180.0;
         private const int MaxToasts = 3;
 
         private static readonly Typeface FaceTitle = new Typeface(new FontFamily("Microsoft YaHei UI"), FontStyles.Normal, FontWeights.SemiBold, FontStretches.Normal);
@@ -49,29 +44,31 @@ namespace LodStudio.Controls
             public string Subtitle;
             public ToastTone Tone;
             public double HoldMs;
+            public double ShownAtMs;
             public double AgeMs;
             public double Width;
             public double Height;
             public double Y;
             public double TargetY;
+            public double SlideX;
             public double Alpha;
             public bool Leaving;
             public FormattedText TitleText;
             public FormattedText SubtitleText;
         }
 
-        private readonly List<ToastItem> _items = new List<ToastItem>();   // [0] = 最新，画在最下面
-        private DispatcherTimer _timer;
+        private readonly List<ToastItem> _items = new List<ToastItem>();
+        private readonly Stopwatch _clock = Stopwatch.StartNew();
         private double _dpi = 1.0;
         private Brush _themeStamp;
         private Pen _borderPen;
 
         public ToastHost()
         {
-            IsHitTestVisible = false;      // 不抢鼠标、不抢焦点
+            IsHitTestVisible = false;
             Focusable = false;
             SnapsToDevicePixels = true;
-            Width = 340;
+            Width = 350;
             Height = 200;
             HorizontalAlignment = HorizontalAlignment.Right;
             VerticalAlignment = VerticalAlignment.Bottom;
@@ -79,17 +76,11 @@ namespace LodStudio.Controls
             Unloaded += OnUnloaded;
         }
 
-        /// <summary>入场/出场是否走动画（系统"显示动画效果"关闭时立即显示/隐藏）。</summary>
-        private static bool? _animationOverride;   // 测试/预览钩子：null = 跟随系统
+        private static bool? _animationOverride;
 
         internal static void DebugSetAnimations(bool? enabled) { _animationOverride = enabled; }
-
         internal bool DebugAnimationsEnabled { get { return AnimationsEnabled; } }
-
-        /// <summary>预览/审计用：最新一条的当前透明度（-1 = 没有提示）。</summary>
         internal double DebugFirstAlpha { get { return _items.Count == 0 ? -1 : _items[0].Alpha; } }
-
-        /// <summary>预览/审计用：当前堆叠数量。</summary>
         internal int DebugItemCount { get { return _items.Count; } }
 
         private static bool AnimationsEnabled
@@ -105,12 +96,13 @@ namespace LodStudio.Controls
         {
             Services.ThemeService.ThemeChanged -= OnThemeChanged;
             Services.ThemeService.ThemeChanged += OnThemeChanged;
+            if (_items.Count > 0) Services.RenderFrameHub.Subscribe(OnTick);
         }
 
         private void OnUnloaded(object sender, RoutedEventArgs e)
         {
             Services.ThemeService.ThemeChanged -= OnThemeChanged;
-            if (_timer != null) _timer.Stop();
+            Services.RenderFrameHub.Unsubscribe(OnTick);
         }
 
         private void OnThemeChanged(object sender, EventArgs e)
@@ -120,10 +112,6 @@ namespace LodStudio.Controls
             InvalidateVisual();
         }
 
-        /// <summary>
-        /// 弹出一条提示。标题必填、副行可选；tone 决定左侧 3px 语义色条颜色。
-        /// 同一时刻最多 3 条（第 4 条会顶掉最旧的一条），新的排在下面。
-        /// </summary>
         public void Show(string title, string sub, ToastTone tone, int holdMs = 3200)
         {
             if (string.IsNullOrEmpty(title) && string.IsNullOrEmpty(sub)) return;
@@ -136,24 +124,24 @@ namespace LodStudio.Controls
                 HoldMs = holdMs <= 0 ? 3200 : holdMs
             };
             BuildItemVisual(item);
-            while (_items.Count >= MaxToasts) _items.RemoveAt(_items.Count - 1);   // 超限：丢最旧
-            _items.Insert(0, item);                                               // 最新的在底部
-            // 入位置：最终位置贴着堆叠底部；动画开启时先下移 6px，由 tick 滑入
+            while (_items.Count >= MaxToasts) _items.RemoveAt(_items.Count - 1);
+            _items.Insert(0, item);
             double anchorBottom = Math.Max(0, ActualHeight);
             item.Y = anchorBottom - item.Height;
             item.TargetY = item.Y;
             if (AnimationsEnabled)
             {
-                item.Y += 6.0;
+                item.Y += 8.0;
+                item.SlideX = 24.0;
                 item.Alpha = 0.0;
             }
             else
             {
-                // 系统关闭"显示动画效果"：立即以最终位置、全不透明显示（不播任何动画）
+                item.SlideX = 0.0;
                 item.Alpha = 1.0;
             }
-            item.AgeMs = 0;
-            StartTimer();
+            item.ShownAtMs = _clock.Elapsed.TotalMilliseconds;
+            if (IsLoaded) Services.RenderFrameHub.Subscribe(OnTick);
             InvalidateVisual();
         }
 
@@ -162,39 +150,19 @@ namespace LodStudio.Controls
             Brush ink = Res("Brush.Ink", Brushes.Black);
             Brush inkSoft = Res("Brush.InkSoft", Brushes.DimGray);
             double titleNatural = MeasureWidth(item.Title, FaceTitle, 12.5);
-            double subNatural = item.Subtitle == null ? 0 : MeasureWidth(item.Subtitle, FaceSub, 10.5);
+            double subNatural = item.Subtitle == null ? 0 : MeasureWidth(item.Subtitle, FaceSub, 11.0);
             double natural = Math.Max(titleNatural, subNatural) + BarWidth + TextLeft + TextRight;
             item.Width = Math.Max(MinToastWidth, Math.Min(MaxToastWidth, Math.Ceiling(natural)));
             double textMax = item.Width - BarWidth - TextLeft - TextRight;
             item.TitleText = FitSingleLine(item.Title, FaceTitle, 12.5, ink, textMax);
-            item.SubtitleText = item.Subtitle == null ? null : FitSingleLine(item.Subtitle, FaceSub, 10.5, inkSoft, textMax);
+            item.SubtitleText = item.Subtitle == null ? null : FitSingleLine(item.Subtitle, FaceSub, 11.0, inkSoft, textMax);
             item.Height = item.Subtitle == null ? SingleLineHeight : TwoLineHeight;
         }
 
-        private readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
-        private long _lastTickMs;
-
-        private void StartTimer()
+        private void OnTick(double deltaSeconds)
         {
-            if (_timer == null)
-            {
-                _timer = new DispatcherTimer(DispatcherPriority.Render) { Interval = TimeSpan.FromMilliseconds(IntervalMs) };
-                _timer.Tick += OnTick;
-            }
-            _lastTickMs = _clock.ElapsedMilliseconds;
-            if (!_timer.IsEnabled) _timer.Start();
-        }
-
-        private void OnTick(object sender, EventArgs e)
-        {
-            // 用真实经过时间，而不是 tick 次数：DispatcherTimer 不保证准点，
-            // 离屏/软件渲染下 tick 会慢 1.5~2 倍，按计数计时会让 Toast 停留时间明显变长。
-            long now = _clock.ElapsedMilliseconds;
-            double delta = now - _lastTickMs;
-            if (delta < 1) delta = 1;
-            if (delta > 200) delta = 200;
-            _lastTickMs = now;
-
+            double now = _clock.Elapsed.TotalMilliseconds;
+            double deltaMs = deltaSeconds * 1000;
             bool animate = AnimationsEnabled;
             for (int i = _items.Count - 1; i >= 0; i--)
             {
@@ -203,15 +171,21 @@ namespace LodStudio.Controls
                 {
                     if (animate)
                     {
-                        it.Alpha -= delta / LeaveMs;
+                        it.Alpha -= deltaMs / LeaveMs;
+                        it.SlideX += deltaMs * 0.08;
                         if (it.Alpha <= 0.01) { _items.RemoveAt(i); continue; }
                     }
                     else { _items.RemoveAt(i); continue; }
                 }
                 else
                 {
-                    it.AgeMs += delta;
-                    if (animate) it.Alpha = Math.Min(1.0, it.Alpha + delta / EnterMs);
+                    it.AgeMs = now - it.ShownAtMs;
+                    if (animate)
+                    {
+                        it.Alpha = Math.Min(1.0, it.Alpha + deltaMs / EnterMs);
+                        it.SlideX *= Math.Exp(-deltaMs / 58.0);
+                        if (Math.Abs(it.SlideX) < 0.3) it.SlideX = 0;
+                    }
                     if (it.AgeMs >= it.HoldMs)
                     {
                         it.Leaving = true;
@@ -220,7 +194,6 @@ namespace LodStudio.Controls
                 }
             }
 
-            // 堆叠：从底部往上排（[0] 在最下面），旧的向上让位
             double bottom = ActualHeight;
             for (int i = 0; i < _items.Count; i++)
             {
@@ -234,10 +207,10 @@ namespace LodStudio.Controls
                 if (!animate) { it.Y = it.TargetY; continue; }
                 double d = it.TargetY - it.Y;
                 if (Math.Abs(d) < 0.4) it.Y = it.TargetY;
-                else it.Y += d * 0.35;                                     // 连续 Show 时简单纵向位移重排
+                else it.Y += d * (1 - Math.Exp(-deltaMs / 41.5));
             }
 
-            if (_items.Count == 0 && _timer != null) _timer.Stop();
+            if (_items.Count == 0) Services.RenderFrameHub.Unsubscribe(OnTick);
             InvalidateVisual();
         }
 
@@ -245,38 +218,60 @@ namespace LodStudio.Controls
         {
             if (_items.Count == 0) return;
             _dpi = VisualTreeHelper.GetDpi(this).PixelsPerDip;
-            Brush panel = Res("Brush.Panel", Brushes.White);
-            Brush lineStrong = Res("Brush.LineStrong", Brushes.Gray);
-            Brush hardShadow = Res("Brush.HardShadow", Brushes.Transparent);
+            Brush panel = Res("Brush.GlassElevated", Res("Brush.Panel", Brushes.White));
+            Brush border = Res("Brush.GlassBorder", Res("Brush.LineStrong", Brushes.Gray));
+            Brush shadow = Res("Brush.HardShadow", Brushes.Transparent);
+            Brush highlight = Res("Brush.GlassHighlight", Brushes.Transparent);
+
             if (!ReferenceEquals(panel, _themeStamp))
             {
-                // 主题换了：建文本时用的 Brush 实例失效 → 按当前主题重建（宽度/高度不变）
                 _themeStamp = panel;
                 for (int i = 0; i < _items.Count; i++) BuildItemVisual(_items[i]);
             }
             if (_borderPen == null)
             {
-                _borderPen = new Pen(lineStrong, 1.0);
+                _borderPen = new Pen(border, 1.0);
                 if (_borderPen.CanFreeze) _borderPen.Freeze();
             }
 
-            // 旧的先画、最新的最后画（视觉上压在最上面）
             for (int i = _items.Count - 1; i >= 0; i--)
             {
                 ToastItem it = _items[i];
                 if (it.Alpha <= 0.005 || it.TitleText == null) continue;
-                double x = ActualWidth - HardShadowOffset - it.Width;
+                double x = ActualWidth - 6 - it.Width + it.SlideX;
                 double y = it.Y;
+                Brush tone = ToneBrush(it.Tone);
                 dc.PushOpacity(Math.Min(1.0, Math.Max(0.0, it.Alpha)));
-                dc.DrawRectangle(hardShadow, null, new Rect(x + HardShadowOffset, y + HardShadowOffset, it.Width, it.Height));
-                dc.DrawRectangle(panel, null, new Rect(x, y, it.Width, it.Height));
-                dc.DrawRectangle(null, _borderPen, new Rect(x + 0.5, y + 0.5, Math.Max(0, it.Width - 1), Math.Max(0, it.Height - 1)));
-                dc.DrawRectangle(ToneBrush(it.Tone), null, new Rect(x, y, BarWidth, it.Height));
+
+                // 柔和分层投影
+                dc.PushOpacity(0.26);
+                dc.DrawRoundedRectangle(shadow, null, new Rect(x + 1, y + 4, it.Width, it.Height), CardRadius, CardRadius);
+                dc.Pop();
+
+                // 磨砂玻璃主体
+                var cardRect = new Rect(x, y, it.Width, it.Height);
+                dc.DrawRoundedRectangle(panel, _borderPen, cardRect, CardRadius, CardRadius);
+
+                // 顶部高光细线
+                dc.DrawRoundedRectangle(highlight, null, new Rect(x + 14, y + 0.8, Math.Max(0, it.Width - 28), 1.2), 0.6, 0.6);
+
+                // 左侧胶囊语义光条
+                dc.DrawRoundedRectangle(tone, null, new Rect(x + 6, y + 9, BarWidth, Math.Max(8, it.Height - 18)), 2, 2);
+
+                // 底部剩余时长进度细线
+                double remain = Math.Max(0.0, Math.Min(1.0, 1.0 - it.AgeMs / Math.Max(1.0, it.HoldMs)));
+                double progW = Math.Max(0, (it.Width - 28) * remain);
+                if (progW > 1)
+                {
+                    dc.PushOpacity(0.55);
+                    dc.DrawRoundedRectangle(tone, null, new Rect(x + 14, y + it.Height - 3.0, progW, 1.8), 0.9, 0.9);
+                    dc.Pop();
+                }
 
                 FormattedText t = it.TitleText;
                 FormattedText s = it.SubtitleText;
                 double total = t.Height + (s != null ? 2.0 + s.Height : 0.0);
-                double ty = y + Math.Max(3.0, (it.Height - total) / 2.0);
+                double ty = y + Math.Max(4.0, (it.Height - total) / 2.0 - 1.0);
                 double tx = x + BarWidth + TextLeft;
                 dc.DrawText(t, new Point(tx, ty));
                 if (s != null) dc.DrawText(s, new Point(tx, ty + t.Height + 2.0));
@@ -312,7 +307,6 @@ namespace LodStudio.Controls
                                      face, size, brush ?? Brushes.Black, _dpi > 0 ? _dpi : 1.0);
         }
 
-        /// <summary>单行截断：超宽时用 "…" 结尾（不换行、不裁切文字）。</summary>
         private FormattedText FitSingleLine(string text, Typeface face, double size, Brush brush, double maxWidth)
         {
             FormattedText ft = Text(text, face, size, brush);
@@ -339,25 +333,18 @@ namespace LodStudio.Controls
         public bool Danger;
         public string InputLabel;
         public string InputInitial;
-        public Func<string, string> Validate;   // 返回非空 = 错误文本
+        public Func<string, string> Validate;
     }
 
     /// <summary>
-    /// 窗口内模态浮层（半透明遮罩 + 居中面板）。契约（不可变，返回 Task，调用方 await）：
-    ///   ConfirmAsync / ShowInfoAsync / PromptAsync。
-    ///
-    /// 挂载约定：铺满"窗口内容层"（不含自绘标题栏），放在内容区域最后一个 Grid 子元素里，
-    /// 这样遮罩挡住内容交互，而标题栏拖拽仍然可用；打开时 Visibility=Visible，关闭时 Collapsed。
-    ///
-    /// 同时只允许一个对话框：重复打开直接忽略（返回默认值），避免两个 TCS 互相覆盖。
-    /// 键盘：Esc = 取消/关闭；Enter = 主按钮；但 Danger 确认时 Enter 不触发确认（防止误删，
-    ///       必须用鼠标点或 Tab 到红色按钮后按空格），Tab 在按钮间循环。
+    /// 现代化毛玻璃模态对话框浮层：
+    /// 柔和遮罩 + 居中圆角玻璃面板 + 顶部镜面折光 + 弹性缩放淡入/淡出 + 可选背景动态模糊通知。
     /// </summary>
     public sealed class DialogHost : ContentControl
     {
         private enum DialogKind { Confirm, Info, Prompt }
 
-        private const double PanelWidth = 460.0;
+        private const double PanelWidth = 468.0;
         private const double ContentMaxHeight = 330.0;
         private const double ButtonMinWidth = 92.0;
 
@@ -375,6 +362,7 @@ namespace LodStudio.Controls
         private FrameworkElement _panelFrame;
         private Border _panel;
         private TranslateTransform _panelTransform;
+        private ScaleTransform _panelScale;
         private Button _primaryButton;
         private Button _cancelButton;
         private Button _closeButton;
@@ -384,6 +372,8 @@ namespace LodStudio.Controls
         /// <summary>当前是否有对话框打开。</summary>
         public bool IsOpen { get; private set; }
 
+        /// <summary>打开/关闭模态状态变化（宿主可借此对底层内容施加平滑毛玻璃虚化）。</summary>
+        public event EventHandler<bool> OpenStateChanged;
 
         public DialogHost()
         {
@@ -397,7 +387,6 @@ namespace LodStudio.Controls
             SizeChanged += OnSizeChanged;
         }
 
-        /// <summary>预览/审计用：当前键盘焦点的可读描述（证明默认焦点在哪）。</summary>
         internal string DebugFocusText
         {
             get
@@ -413,16 +402,9 @@ namespace LodStudio.Controls
             }
         }
 
-        /// <summary>预览/审计用：直接触发主按钮（用于截"校验失败行内报错"状态，不经过鼠标）。</summary>
-        internal void DebugAcceptPrimary()
-        {
-            AcceptPrimary();
-        }
+        internal void DebugAcceptPrimary() { AcceptPrimary(); }
 
-        private void OnSizeChanged(object sender, SizeChangedEventArgs e)
-        {
-            FitPanel();
-        }
+        private void OnSizeChanged(object sender, SizeChangedEventArgs e) { FitPanel(); }
 
         private void FitPanel()
         {
@@ -431,11 +413,9 @@ namespace LodStudio.Controls
             _panel.MaxHeight = Math.Max(0, ActualHeight - 48);
         }
 
-        /// <summary>系统"显示动画效果"是否开启；关闭时所有动效即时完成。</summary>
-        private static bool? _animationOverride;   // 测试/预览钩子：null = 跟随系统
+        private static bool? _animationOverride;
 
         internal static void DebugSetAnimations(bool? enabled) { _animationOverride = enabled; }
-
         internal bool DebugAnimationsEnabled { get { return AnimationsEnabled; } }
 
         private static bool AnimationsEnabled
@@ -447,10 +427,6 @@ namespace LodStudio.Controls
             }
         }
 
-        /// <summary>
-        /// 预览/审计用：向对话框根元素投递一个按键，走与真实键盘完全相同的 PreviewKeyDown 处理路径
-        /// （窗口真实键盘事件先隧道路由到根元素，这里等价）。返回是否投递成功。
-        /// </summary>
         internal bool DebugKey(Key key)
         {
             if (!IsOpen || _root == null) return false;
@@ -473,66 +449,40 @@ namespace LodStudio.Controls
         private void OnUnloaded(object sender, RoutedEventArgs e)
         {
             Services.ThemeService.ThemeChanged -= OnThemeChanged;
-            if (IsOpen) Finish(null);       // 宿主卸载：别让 await 永远挂着
+            if (IsOpen) Finish(null);
         }
 
-        private void OnThemeChanged(object sender, EventArgs e)
-        {
-            // 面板里的 Brush 全部是 DynamicResource（SetResourceReference），切换主题自动生效；
-            // 自绘的硬偏移色块也是资源引用，无需重建。
-        }
+        private void OnThemeChanged(object sender, EventArgs e) { }
 
-        // ══════════════════════════ 公开 API（签名不可变） ══════════════════════════
+        // ══════════════════════════ 公开 API ══════════════════════════
 
         internal void Dismiss() => RequestClose(CancelResult());
         internal void FocusDialog() => FocusInitial();
 
-        /// <summary>确认对话框：返回 true=确定，false=取消/关闭。Danger 时主按钮为红色且默认焦点在"取消"。</summary>
         public Task<bool> ConfirmAsync(DialogOptions options)
         {
-            if (IsOpen)
-            {
-                // 同时只允许一个：直接忽略新的请求（返回 false，绝不让调用方误以为已确认）
-                System.Diagnostics.Debug.WriteLine("[dialog] 已有对话框打开，忽略 ConfirmAsync：" + (options == null ? "" : options.Title));
-                return Task.FromResult(false);
-            }
+            if (IsOpen) return Task.FromResult(false);
             var tcs = new TaskCompletionSource<bool>();
             Open(options, DialogKind.Confirm, delegate (object r) { tcs.TrySetResult(r is bool && (bool)r); });
             return tcs.Task;
         }
 
-        /// <summary>信息对话框：单个「知道了」按钮。</summary>
         public Task ShowInfoAsync(DialogOptions options)
         {
-            if (IsOpen)
-            {
-                System.Diagnostics.Debug.WriteLine("[dialog] 已有对话框打开，忽略 ShowInfoAsync：" + (options == null ? "" : options.Title));
-                return Task.FromResult(0);
-            }
+            if (IsOpen) return Task.FromResult(0);
             var tcs = new TaskCompletionSource<bool>();
             Open(options, DialogKind.Info, delegate (object r) { tcs.TrySetResult(true); });
-            return tcs.Task;   // Task<bool> 直接当 Task 返回
+            return tcs.Task;
         }
 
-        /// <summary>文本输入对话框：返回输入值；取消/关闭返回 null。校验失败时行内报错且不关闭。</summary>
         public Task<string> PromptAsync(DialogOptions options)
         {
-            if (IsOpen)
-            {
-                System.Diagnostics.Debug.WriteLine("[dialog] 已有对话框打开，忽略 PromptAsync：" + (options == null ? "" : options.Title));
-                return Task.FromResult<string>(null);
-            }
+            if (IsOpen) return Task.FromResult<string>(null);
             var tcs = new TaskCompletionSource<string>();
             Open(options, DialogKind.Prompt, delegate (object r) { tcs.TrySetResult(r as string); });
             return tcs.Task;
         }
 
-        /// <summary>
-        /// 测试钩子（主控 ShellWindow.TestHooks / --ui-audit 用）：强制关闭当前对话框。
-        /// 同步走真实关闭流程（Finish）：移除遮罩与面板、恢复打开前的焦点、让挂起的 Task 以
-        /// "取消/默认"结果完成（Confirm→false、ShowInfo→完成、Prompt→null）。
-        /// 不依赖动画时长（测试无需等待），可重复调用（没打开时是安全空操作），绝不抛异常、不卡死。
-        /// </summary>
         public void ForceCloseForTest()
         {
             try
@@ -543,14 +493,11 @@ namespace LodStudio.Controls
                     return;
                 }
                 if (!IsOpen) return;
-                _closeToken++;            // 让进行中的关闭动画回调失效
+                _closeToken++;
                 _closing = false;
                 Finish(CancelResult());
             }
-            catch
-            {
-                // 测试钩子绝不把异常抛给调用方（最坏情况也只是对话框留在屏幕上）
-            }
+            catch { }
         }
 
         // ══════════════════════════ 打开 / 构建 ══════════════════════════
@@ -565,10 +512,9 @@ namespace LodStudio.Controls
             Content = BuildVisual();
             IsOpen = true;
             Visibility = Visibility.Visible;
-            // 关键：BuildVisual 里读 ActualHeight 时宿主还是 Collapsed（=0），会把面板夹到 200 高、按钮被裁。
-            // 先显示并完成一次布局，再按宿主的可用空间限制面板。
             UpdateLayout();
             FitPanel();
+            OpenStateChanged?.Invoke(this, true);
             StartOpenAnimation();
             Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(FocusInitial));
         }
@@ -584,33 +530,50 @@ namespace LodStudio.Controls
             _mask = new Border { Opacity = AnimationsEnabled ? 0.0 : 1.0 };
             ApplyStyle(_mask, "Widget.Dialog.Mask");
             _mask.SetResourceReference(Border.BackgroundProperty, "Brush.Mask");
-            // 遮罩拦截底层鼠标；点遮罩本身不关闭（危险确认必须明确选择取消/确定）
             _root.Children.Add(_mask);
 
-            // 面板：Grid 里叠"HARD 阴影（右下 3px 硬偏移）+ 面板"，容器 Margin 让阴影不被裁掉
             var center = new Grid { Margin = new Thickness(24), HorizontalAlignment = HorizontalAlignment.Stretch, VerticalAlignment = VerticalAlignment.Stretch };
             var frame = new Grid
             {
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(0, 0, 3, 3)
+                RenderTransformOrigin = new Point(0.5, 0.5)
             };
 
-            var shadow = new Border { Margin = new Thickness(3, 3, 0, 0) };
-            shadow.SetResourceReference(Border.BackgroundProperty, "Brush.HardShadow");
-            frame.Children.Add(shadow);
-
-            _panel = new Border { Width = PanelWidth };
+            _panel = new Border { Width = PanelWidth, CornerRadius = new CornerRadius(16) };
             ApplyStyle(_panel, "Widget.Dialog.Panel");
-            _panel.SetResourceReference(Border.BackgroundProperty, "Brush.Panel");
-            _panel.SetResourceReference(Border.BorderBrushProperty, "Brush.LineStrong");
+            _panel.SetResourceReference(Border.BackgroundProperty, "Brush.GlassElevated");
+            _panel.SetResourceReference(Border.BorderBrushProperty, "Brush.GlassBorder");
             _panel.BorderThickness = new Thickness(1);
-            _panel.Padding = new Thickness(20);
-            _panel.Margin = new Thickness(0, 0, 3, 3);
+            _panel.Padding = new Thickness(24);
+            _panel.Effect = new DropShadowEffect
+            {
+                BlurRadius = 32,
+                ShadowDepth = 10,
+                Direction = 270,
+                Opacity = 0.42,
+                Color = Colors.Black
+            };
             frame.Children.Add(_panel);
 
-            _panelTransform = new TranslateTransform(0, AnimationsEnabled ? 8.0 : 0.0);
-            frame.RenderTransform = _panelTransform;
+            // 顶部玻璃高光细线
+            var sheen = new Border
+            {
+                Height = 1.5,
+                VerticalAlignment = VerticalAlignment.Top,
+                Margin = new Thickness(24, 0.8, 24, 0),
+                CornerRadius = new CornerRadius(1),
+                IsHitTestVisible = false
+            };
+            sheen.SetResourceReference(Border.BackgroundProperty, "Brush.GlassHighlight");
+            frame.Children.Add(sheen);
+
+            _panelScale = new ScaleTransform(AnimationsEnabled ? 0.94 : 1.0, AnimationsEnabled ? 0.94 : 1.0);
+            _panelTransform = new TranslateTransform(0, AnimationsEnabled ? 12.0 : 0.0);
+            var tg = new TransformGroup();
+            tg.Children.Add(_panelScale);
+            tg.Children.Add(_panelTransform);
+            frame.RenderTransform = tg;
             _panelFrame = frame;
             center.Children.Add(frame);
             _root.Children.Add(center);
@@ -621,10 +584,23 @@ namespace LodStudio.Controls
             layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             _panel.Child = layout;
 
-            // 标题行：标题 + 右上角关闭 ×
+            // 标题行
             var titleRow = new Grid();
+            titleRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             titleRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             titleRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            var accentPill = new Border
+            {
+                Width = 4,
+                Height = 18,
+                CornerRadius = new CornerRadius(2),
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 10, 0)
+            };
+            accentPill.SetResourceReference(Border.BackgroundProperty, _options.Danger ? "Brush.Err" : "Brush.Signal");
+            titleRow.Children.Add(accentPill);
+
             var title = new TextBlock();
             ApplyStyle(title, "Widget.Dialog.Title");
             title.FontFamily = FontOr("Font.Cjk", FaceCjk.FontFamily);
@@ -633,19 +609,20 @@ namespace LodStudio.Controls
             title.SetResourceReference(TextBlock.ForegroundProperty, "Brush.Ink");
             title.TextWrapping = TextWrapping.Wrap;
             title.Text = string.IsNullOrEmpty(_options.Title) ? "提示" : _options.Title;
-            title.VerticalAlignment = VerticalAlignment.Top;
+            title.VerticalAlignment = VerticalAlignment.Center;
             title.Margin = new Thickness(0, 0, 12, 0);
+            Grid.SetColumn(title, 1);
             titleRow.Children.Add(title);
 
             _closeButton = new Button { Content = CloseGlyph(), ToolTip = "关闭（Esc）", Focusable = true, TabIndex = 4 };
             ApplyButtonStyle(_closeButton, "Btn.Icon");
-            _closeButton.Width = 26;
-            _closeButton.Height = 26;
+            _closeButton.Width = 28;
+            _closeButton.Height = 28;
             _closeButton.Padding = new Thickness(0);
             _closeButton.VerticalAlignment = VerticalAlignment.Top;
             _closeButton.Click += delegate { Dismiss(); };
             System.Windows.Automation.AutomationProperties.SetName(_closeButton, "关闭");
-            Grid.SetColumn(_closeButton, 1);
+            Grid.SetColumn(_closeButton, 2);
             titleRow.Children.Add(_closeButton);
             layout.Children.Add(titleRow);
 
@@ -661,10 +638,9 @@ namespace LodStudio.Controls
             Grid.SetRow(content, 1);
             layout.Children.Add(content);
 
-            // 正文
             if (!string.IsNullOrEmpty(_options.Message))
             {
-                var msg = new TextBlock { Margin = new Thickness(0, 12, 0, 0) };
+                var msg = new TextBlock { Margin = new Thickness(0, 14, 0, 0) };
                 ApplyStyle(msg, "Widget.Dialog.Body");
                 msg.FontFamily = FontOr("Font.Cjk", FaceCjk.FontFamily);
                 msg.FontSize = SizeOr("FS.Body", 12.5);
@@ -674,15 +650,14 @@ namespace LodStudio.Controls
                 body.Children.Add(msg);
             }
 
-            // 正文与详情共用滚动区，标题和确认按钮固定。
             if (!string.IsNullOrEmpty(_options.Detail))
             {
-                var box = new Border { Margin = new Thickness(0, 12, 0, 0) };
+                var box = new Border { Margin = new Thickness(0, 12, 0, 0), CornerRadius = new CornerRadius(10) };
                 ApplyStyle(box, "Widget.Dialog.DetailBox");
-                box.SetResourceReference(Border.BackgroundProperty, "Brush.Sunken");
+                box.SetResourceReference(Border.BackgroundProperty, "Brush.GlassSunken");
                 box.SetResourceReference(Border.BorderBrushProperty, "Brush.Line");
                 box.BorderThickness = new Thickness(1);
-                box.Padding = new Thickness(10);
+                box.Padding = new Thickness(12);
                 var detail = new TextBlock();
                 ApplyStyle(detail, "Widget.Dialog.DetailText");
                 detail.FontFamily = MonoFont();
@@ -694,7 +669,6 @@ namespace LodStudio.Controls
                 body.Children.Add(box);
             }
 
-            // 输入区（Prompt）
             if (_kind == DialogKind.Prompt)
             {
                 var label = new TextBlock { Margin = new Thickness(0, 14, 0, 0) };
@@ -726,12 +700,11 @@ namespace LodStudio.Controls
                 body.Children.Add(_errorLine);
             }
 
-            // 底部按钮：右对齐，34 高
             var buttons = new StackPanel
             {
                 Orientation = Orientation.Horizontal,
                 HorizontalAlignment = HorizontalAlignment.Right,
-                Margin = new Thickness(0, 20, 0, 0),
+                Margin = new Thickness(0, 22, 0, 0),
                 Height = 34
             };
             if (_kind == DialogKind.Info)
@@ -773,7 +746,6 @@ namespace LodStudio.Controls
             if (!IsOpen) return;
             try
             {
-                // 危险确认：默认焦点在"取消"（防止回车/误触直接执行删除）
                 if (_kind == DialogKind.Confirm && _options.Danger && _cancelButton != null) _cancelButton.Focus();
                 else if (_kind == DialogKind.Prompt && _input != null) { _input.Focus(); _input.SelectAll(); }
                 else if (_primaryButton != null) _primaryButton.Focus();
@@ -795,7 +767,6 @@ namespace LodStudio.Controls
             }
             if (e.Key == Key.Enter)
             {
-                // 危险确认：Enter 不触发主按钮（避免"删库"式误操作）。Esc / 鼠标 / Tab+空格 仍可用。
                 if (_kind == DialogKind.Confirm && _options.Danger)
                 {
                     e.Handled = true;
@@ -833,7 +804,7 @@ namespace LodStudio.Controls
                 {
                     if (_errorLine != null) { _errorLine.Text = err; _errorLine.Visibility = Visibility.Visible; }
                     if (_input != null) _input.Focus();
-                    return;                                   // 校验失败：不关闭
+                    return;
                 }
             }
             RequestClose(SuccessResult());
@@ -844,32 +815,39 @@ namespace LodStudio.Controls
             if (!IsOpen || _closing) return;
             _closing = true;
             int token = ++_closeToken;
+            Services.UiMotion.CancelMotion(this);
+            OpenStateChanged?.Invoke(this, false);
             if (!AnimationsEnabled)
             {
                 Finish(result);
                 return;
             }
-            // 关闭动画：遮罩 120ms 淡出、面板 160ms 下移淡出；动画完成后才真正移除内容
             try
             {
                 if (_mask != null)
                 {
-                    var fade = new DoubleAnimation(0.0, TimeSpan.FromMilliseconds(120)) { FillBehavior = FillBehavior.HoldEnd };
+                    var fade = Services.UiMotion.WithRefreshFrameRate(new DoubleAnimation(0.0, TimeSpan.FromMilliseconds(140)) { FillBehavior = FillBehavior.HoldEnd });
                     _mask.BeginAnimation(UIElement.OpacityProperty, fade);
                 }
                 if (_panelFrame != null)
                 {
-                    var panelFade = new DoubleAnimation(0.0, TimeSpan.FromMilliseconds(160)) { FillBehavior = FillBehavior.HoldEnd };
-                    panelFade.Completed += delegate
+                    var panelFade = Services.UiMotion.WithRefreshFrameRate(new DoubleAnimation(0.0, TimeSpan.FromMilliseconds(160)) { FillBehavior = FillBehavior.HoldEnd });
+                    Services.UiMotion.TrackAnimation(this, panelFade, settle =>
                     {
-                        if (token == _closeToken) Finish(result);
-                    };
+                        if (settle && token == _closeToken) Finish(result);
+                    });
                     _panelFrame.BeginAnimation(UIElement.OpacityProperty, panelFade);
                 }
                 if (_panelTransform != null)
                 {
-                    var slide = new DoubleAnimation(6.0, TimeSpan.FromMilliseconds(160)) { FillBehavior = FillBehavior.HoldEnd, EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseIn } };
+                    var slide = Services.UiMotion.WithRefreshFrameRate(new DoubleAnimation(10.0, TimeSpan.FromMilliseconds(160)) { FillBehavior = FillBehavior.HoldEnd, EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseIn } });
                     _panelTransform.BeginAnimation(TranslateTransform.YProperty, slide);
+                }
+                if (_panelScale != null)
+                {
+                    var s = Services.UiMotion.WithRefreshFrameRate(new DoubleAnimation(0.95, TimeSpan.FromMilliseconds(160)) { FillBehavior = FillBehavior.HoldEnd, EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseIn } });
+                    _panelScale.BeginAnimation(ScaleTransform.ScaleXProperty, s);
+                    _panelScale.BeginAnimation(ScaleTransform.ScaleYProperty, s);
                 }
             }
             catch
@@ -880,15 +858,18 @@ namespace LodStudio.Controls
 
         private void Finish(object result)
         {
-            _closeToken++;                 // 让迟到的动画回调失效
+            Services.UiMotion.CancelMotion(this);
+            _closeToken++;
             IsOpen = false;
             _closing = false;
+            OpenStateChanged?.Invoke(this, false);
             Content = null;
             _root = null;
             _mask = null;
             _panel = null;
             _panelFrame = null;
             _panelTransform = null;
+            _panelScale = null;
             _primaryButton = null;
             _cancelButton = null;
             _closeButton = null;
@@ -897,7 +878,6 @@ namespace LodStudio.Controls
             _options = null;
             Visibility = Visibility.Collapsed;
 
-            // 恢复打开前的焦点
             try
             {
                 if (_previousFocus is UIElement)
@@ -911,7 +891,7 @@ namespace LodStudio.Controls
 
             Action<object> complete = _complete;
             _complete = null;
-            if (complete != null) complete(result);   // 在 UI 线程完成 Task（调用方 await 直接恢复）
+            if (complete != null) complete(result);
         }
 
         // ══════════════════════════ 动画 / 样式工具 ══════════════════════════
@@ -921,20 +901,27 @@ namespace LodStudio.Controls
             if (!AnimationsEnabled) return;
             try
             {
+                var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
                 if (_mask != null)
-                    _mask.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(0.0, 1.0, TimeSpan.FromMilliseconds(120)));
+                    _mask.BeginAnimation(UIElement.OpacityProperty,
+                        Services.UiMotion.WithRefreshFrameRate(new DoubleAnimation(0.0, 1.0, TimeSpan.FromMilliseconds(140))));
                 if (_panelFrame != null)
-                    _panelFrame.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(0.0, 1.0, TimeSpan.FromMilliseconds(160)));
+                    _panelFrame.BeginAnimation(UIElement.OpacityProperty,
+                        Services.UiMotion.WithRefreshFrameRate(new DoubleAnimation(0.0, 1.0, TimeSpan.FromMilliseconds(180)) { EasingFunction = ease }));
                 if (_panelTransform != null)
                 {
-                    var slide = new DoubleAnimation(8.0, 0.0, TimeSpan.FromMilliseconds(160))
-                    {
-                        EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
-                    };
+                    var slide = Services.UiMotion.WithRefreshFrameRate(new DoubleAnimation(12.0, 0.0, TimeSpan.FromMilliseconds(200)) { EasingFunction = ease });
+                    Services.UiMotion.TrackAnimation(this, slide);
                     _panelTransform.BeginAnimation(TranslateTransform.YProperty, slide);
                 }
+                if (_panelScale != null)
+                {
+                    var s = Services.UiMotion.WithRefreshFrameRate(new DoubleAnimation(0.94, 1.0, TimeSpan.FromMilliseconds(200)) { EasingFunction = ease });
+                    _panelScale.BeginAnimation(ScaleTransform.ScaleXProperty, s);
+                    _panelScale.BeginAnimation(ScaleTransform.ScaleYProperty, s);
+                }
             }
-            catch { }
+            catch { Services.UiMotion.CancelMotion(this); }
         }
 
         private void ApplyStyle(FrameworkElement element, string key)
@@ -945,9 +932,6 @@ namespace LodStudio.Controls
             if (style != null) element.Style = style;
         }
 
-        /// <summary>
-        /// 按钮样式：优先用 Widgets.xaml 里的命名样式；没有就从 Btn.* 基样式派生一个（保证主题/hover/press/焦点环都跟随全局）。
-        /// </summary>
         private void ApplyButtonStyle(Button button, string baseStyleKey)
         {
             if (button == null || string.IsNullOrEmpty(baseStyleKey)) return;
@@ -981,7 +965,6 @@ namespace LodStudio.Controls
             return f ?? new FontFamily("Consolas");
         }
 
-        /// <summary>关闭按钮的 × 字形（24 网格路径，和标题栏视觉一致）。</summary>
         private static UIElement CloseGlyph()
         {
             var path = new System.Windows.Shapes.Path

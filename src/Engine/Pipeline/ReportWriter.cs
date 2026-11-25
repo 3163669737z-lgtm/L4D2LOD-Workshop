@@ -123,6 +123,19 @@ namespace LodStudio.Engine
             sb.AppendLine("| 简化任务 | " + N(stats.JobCount) + " 个（检查完成 " + N(stats.JobOk) + " / 失败 " + N(stats.JobFail) + "） |");
             sb.AppendLine("| 实际新网格 | 发布 " + N(stats.PublishedLods) + " 个，直接沿用已减网格 " +
                           N(stats.ReusedLevels) + " 档，沿用源网格 " + N(stats.UnreducedLevels) + " 档 |");
+            if (stats.ShadowLodsPublished > 0)
+            {
+                string fallback = stats.ShadowLodReusedQcs > 0
+                    ? "，其中 " + N(stats.ShadowLodReusedQcs) + " 个 QC 含回退到可见 LOD 的条目" : "";
+                sb.AppendLine("| 阴影 LOD | 发布 " + N(stats.ShadowLodsPublished) + " 个独立网格" + fallback + " |");
+                sb.AppendLine("| 含 $shadowlod 的 QC | " + N(stats.ShadowLodQcsWritten) + " 个 |");
+            }
+            else if (stats.ShadowLodReusedQcs > 0)
+                sb.AppendLine("| 阴影 LOD | 复用已有 LOD 写入 " + N(stats.ShadowLodReusedQcs) + " 个 QC（不额外生成阴影文件） |");
+            if (stats.DeviationSampleCount > 0)
+                sb.AppendLine("| 表面几何偏差 | 平均 " + DeviationPercent(stats.MeanSurfaceDeviationPpm) +
+                              " / 峰值 " + DeviationPercent(stats.MaxSurfaceDeviationPpm) +
+                              "（采样 " + N(stats.DeviationSampleCount) + " 顶点） |");
             if (stats.ModelsWithoutReduction > 0)
                 sb.AppendLine("| 未找到合格减面 | " + N(stats.ModelsWithoutReduction) + " 个模型，详见运行日志 |");
             sb.AppendLine("| 外观保护 | 重试 " + N(stats.RetriedComponents) + " 个局部区域，保留 " +
@@ -187,16 +200,20 @@ namespace LodStudio.Engine
                     sb.AppendLine("原始可见组合上限 " + N(q.SourceTriangles) + " 三角面。");
                     sb.AppendLine();
                     if (q.Levels.Count == 0) continue;
-                    sb.AppendLine("| 候选档 | 目标保留 | 实际三角面 | 实际保留 | 估算距离 HU | Source 阈值 | 结果 |");
-                    sb.AppendLine("| --- | --- | --- | --- | --- | --- | --- |");
+                    bool showDeviation = q.Levels.Any(l => l.MaxSurfaceDeviationPpm > 0);
+                    sb.AppendLine("| 候选档 | 目标保留 | 实际三角面 | 实际保留 | 估算距离 HU | Source 阈值 |" +
+                                  (showDeviation ? " 几何峰值偏差 |" : "") + " 结果 |");
+                    sb.AppendLine("| --- | --- | --- | --- | --- | --- |" + (showDeviation ? " --- |" : "") + " --- |");
                     foreach (var level in q.Levels)
                     {
                         bool kept = level.SkipReason == null && (q.Injected || q.Generated);
-                        sb.AppendLine($"| {level.Candidate} | {level.TargetRatio:P0} | {N(level.Triangles)} | " +
+                        sb.Append($"| {level.Candidate} | {level.TargetRatio:P0} | {N(level.Triangles)} | " +
                             $"{level.Triangles / (double)q.SourceTriangles:P1} | " +
                             (kept ? level.EstimatedDistanceHu.ToString("0.0", Inv) : "—") + " | " +
-                            (kept && !q.Standalone ? level.SwitchPoint.ToString("0.###", Inv) : "—") + " | " +
-                            (kept ? "已输出" : Cell(level.SkipReason ?? "未发布")) + " |");
+                            (kept && !q.Standalone ? level.SwitchPoint.ToString("0.###", Inv) : "—") + " | ");
+                        if (showDeviation)
+                            sb.Append(level.MaxSurfaceDeviationPpm > 0 ? DeviationPercent(level.MaxSurfaceDeviationPpm) : "—").Append(" | ");
+                        sb.AppendLine((kept ? "已输出" : Cell(level.SkipReason ?? "未发布")) + " |");
                     }
                     sb.AppendLine();
                 }
@@ -384,6 +401,8 @@ namespace LodStudio.Engine
             if (q.Generated) parts.Add(q.OutputFiles.Count + " 个 LOD 网格");
             if (q.Injected)
             {
+                if (q.LodBlock.EmittedVisibleLevels > 0 || q.LodBlock.HasShadowLod)
+                    parts.Add(q.LodBlock.Describe());
                 OutputMode mode = ctx == null ? OutputMode.InPlace : ctx.Mode;
                 bool sharedHost = !SamePath(q.LodBlockFile, q.QcPath);
                 if (mode == OutputMode.CollectionOnly) parts.Add("已按当前写入方式写入");
@@ -540,6 +559,8 @@ namespace LodStudio.Engine
         }
 
         private static string N(long v) { return v.ToString(Inv); }
+
+        private static string DeviationPercent(int ppm) { return (ppm / 10000.0).ToString("0.00", Inv) + "%"; }
 
         private static string FormatSpan(TimeSpan ts)
         {

@@ -56,6 +56,7 @@ namespace LodStudio.Engine
             /// <summary>0 = 自动，按 CPU、空闲内存和任务数选择。</summary>
             public int Workers;
             public bool QualityFirst = true;
+            public int ReductionProfile = 1; // 0 = Strict, 1 = Balanced, 2 = High Compression
             public bool AdaptiveTriangleBudget = true;
             public bool AllowVertexUpdates;
             public bool OmitUnchangedOutputs;
@@ -166,6 +167,9 @@ namespace LodStudio.Engine
                 VertexUpdateAccepted = r.VertexUpdateAccepted,
                 VertexUpdateTrianglesSaved = r.VertexUpdateTrianglesSaved,
                 WholePrimitiveTrianglesSaved = r.WholePrimitiveTrianglesSaved,
+                MaxSurfaceDeviationPpm = r.MaxSurfaceDeviationPpm,
+                MeanSurfaceDeviationPpm = r.MeanSurfaceDeviationPpm,
+                DeviationSampleCount = r.DeviationSampleCount,
                 Warning = r.Warning,
                 Error = r.Error
             };
@@ -184,12 +188,19 @@ namespace LodStudio.Engine
             catch (Exception ex) { r.Error = "读取源 GLB 失败：" + ex.Message; return r; }
             if (before <= 0) { r.Error = "源 GLB 三角面数为 0"; return r; }
 
-            double effRatio = options.AdaptiveTriangleBudget
-                ? AdaptiveRatio(before, job.Ratio)
-                : ShapeFirstRatio(before, job.Ratio);
-            string se = ShapeErrorForRatio(job.Ratio);
-            if (!options.QualityFirst)
-                se = (double.Parse(se, CultureInfo.InvariantCulture) * 1.5).ToString("0.####", CultureInfo.InvariantCulture);
+            int profile = options.ReductionProfile == 1 && !options.QualityFirst ? 2 : options.ReductionProfile;
+            double effRatio = job.Ratio;
+            string se = "0.025";
+            if (!job.ShadowMode)
+            {
+                effRatio = options.AdaptiveTriangleBudget
+                    ? AdaptiveRatio(before, job.Ratio)
+                    : ShapeFirstRatio(before, job.Ratio);
+                double errorScale = profile == 2 ? (options.QualityFirst ? 1.35 : 1.5)
+                    : profile == 1 && !options.QualityFirst ? 1.25 : 1.0;
+                se = (double.Parse(ShapeErrorForRatio(job.Ratio), CultureInfo.InvariantCulture) * errorScale)
+                    .ToString("0.#####", CultureInfo.InvariantCulture);
+            }
             string tmp = Path.Combine(
                 Path.GetDirectoryName(dst) ?? "",
                 Path.GetFileNameWithoutExtension(dst) + ".gp_" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".glb");
@@ -199,7 +210,7 @@ namespace LodStudio.Engine
                 {
                     string output;
                     bool timedOut, cancelled;
-                    int code = RunGltfpack(exe, src, tmp, effRatio, se, job, options, cancel, out output, out timedOut, out cancelled);
+                    int code = RunGltfpack(exe, src, tmp, effRatio, se, profile, job, options, cancel, out output, out timedOut, out cancelled);
                     if (cancelled) { r.Error = "已取消"; return r; }
                     if (timedOut)
                     {
@@ -281,6 +292,9 @@ namespace LodStudio.Engine
             if (result.BudgetSourceTriangles > 0)
                 text += "，区域均摊调整 " + result.BalancedRegions + " 区，相邻区域最大差 " +
                         (result.MaximumAdjacentRegionalSpread / 100.0).ToString("0.##", CultureInfo.InvariantCulture) + " 个百分点";
+            if (result.HasDeviationMetrics)
+                text += string.Format(CultureInfo.InvariantCulture, "，几何偏差 均值 {0:0.00}% / 峰值 {1:0.00}%",
+                    result.MeanSurfaceDeviationPpm / 10000.0, result.MaxSurfaceDeviationPpm / 10000.0);
             return text;
         }
 
@@ -290,8 +304,25 @@ namespace LodStudio.Engine
             const string vertexUpdate = "lodstudio-vertex-update ";
             const string budget = "lodstudio-density-budget ";
             const string whole = "lodstudio-whole-primitive ";
+            const string metrics = "lodstudio-metrics ";
+            decimal weightedDeviation = 0;
             foreach (var line in (output ?? "").Split('\n'))
             {
+                if (line.StartsWith(metrics, StringComparison.Ordinal))
+                {
+                    string[] values = line.Substring(metrics.Length).Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                    if (values.Length == 3 &&
+                        int.TryParse(values[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out int maxPpm) &&
+                        int.TryParse(values[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out int meanPpm) &&
+                        long.TryParse(values[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out long samples) &&
+                        meanPpm >= 0 && maxPpm >= meanPpm && samples > 0 && samples <= long.MaxValue - result.DeviationSampleCount)
+                    {
+                        result.MaxSurfaceDeviationPpm = Math.Max(result.MaxSurfaceDeviationPpm, maxPpm);
+                        weightedDeviation += (decimal)meanPpm * samples;
+                        result.DeviationSampleCount += samples;
+                    }
+                    continue;
+                }
                 if (line.StartsWith(whole, StringComparison.Ordinal))
                 {
                     var counts = line.Substring(whole.Length).Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
@@ -332,10 +363,12 @@ namespace LodStudio.Engine
                     result.ProtectedPrimitives += third;
                 }
             }
+            if (result.HasDeviationMetrics)
+                result.MeanSurfaceDeviationPpm = (int)Math.Round(weightedDeviation / result.DeviationSampleCount);
         }
 
         /// <summary>跑一个 gltfpack 进程：捕获输出、超时/取消即杀进程；返回退出码。</summary>
-        private static int RunGltfpack(string exe, string src, string dst, double effRatio, string se,
+        private static int RunGltfpack(string exe, string src, string dst, double effRatio, string se, int profile,
             ReductionJob job, RunOptions options, CancellationToken cancel,
             out string output, out bool timedOut, out bool cancelled)
         {
@@ -344,6 +377,8 @@ namespace LodStudio.Engine
             string ratioText = effRatio.ToString("0.######", CultureInfo.InvariantCulture);
             string args = "-i " + Quote(src) + " -o " + Quote(dst) +
                           " -si " + ratioText + " -se " + se + " -slb -noq -kn -km -kv -ke -v";
+            if (profile >= 0 && profile <= 2) args += " -lodq " + profile.ToString(CultureInfo.InvariantCulture);
+            if (job.ShadowMode) args += " -lodsh";
             if (options.AdaptiveTriangleBudget)
             {
                 args += " -lodb";

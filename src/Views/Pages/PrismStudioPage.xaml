@@ -1,0 +1,308 @@
+<pages:StudioPageBase x:Class="LodStudio.Views.Pages.PrismStudioPage"
+                      xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                      xmlns:app="clr-namespace:LodStudio"
+                      xmlns:pages="clr-namespace:LodStudio.Views.Pages"
+                      xmlns:controls="clr-namespace:LodStudio.Controls"
+                      FontFamily="{DynamicResource Font.Cjk}" FontSize="{DynamicResource FS.Body}"
+                      UseLayoutRounding="True" SnapsToDevicePixels="True">
+    <pages:StudioPageBase.Resources>
+        <Style x:Key="Prism.Swatch" TargetType="Border">
+            <Setter Property="Height" Value="6" />
+            <Setter Property="CornerRadius" Value="3" />
+        </Style>
+
+        <Style x:Key="Prism.SandboxButton" TargetType="Button" BasedOn="{StaticResource Btn.Secondary}">
+            <Setter Property="Height" Value="28" />
+            <Setter Property="Padding" Value="9,0" />
+            <Setter Property="Margin" Value="0,0,6,6" />
+            <Style.Triggers>
+                <Trigger Property="Tag" Value="Selected">
+                    <Setter Property="Background" Value="{DynamicResource Brush.SignalSoft}" />
+                    <Setter Property="BorderBrush" Value="{DynamicResource Brush.Signal}" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="Prism.Shortcut" TargetType="ContentControl">
+            <Setter Property="Margin" Value="0,0,12,8" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ContentControl">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="112" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Border HorizontalAlignment="Left" VerticalAlignment="Center" Padding="7,3" CornerRadius="5"
+                                    Background="{DynamicResource Brush.GlassSunken}" BorderThickness="1"
+                                    BorderBrush="{DynamicResource Brush.LineStrong}">
+                                <TextBlock FontFamily="{DynamicResource Font.Mono}" FontSize="{DynamicResource FS.Small}"
+                                           Foreground="{DynamicResource Brush.Ink}" Text="{TemplateBinding Tag}" />
+                            </Border>
+                            <TextBlock Grid.Column="1" Style="{StaticResource Studio.PageSub}" VerticalAlignment="Center"
+                                       Text="{TemplateBinding Content}" />
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </pages:StudioPageBase.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+        <StackPanel Margin="0,0,0,14">
+            <TextBlock Style="{StaticResource Studio.PageEyebrow}" Text="PRISM STUDIO" />
+            <TextBlock Style="{StaticResource Studio.PageTitle}" Margin="0,3,0,4" Text="外观与光效" />
+            <TextBlock Style="{StaticResource Studio.PageSub}"
+                       Text="自定义界面明暗主题、黑曜棱镜光学色系与二阶弹簧动效强度，并在下方体验盒里实时感受光影与液态波浪反馈。" />
+            <Border Style="{StaticResource Studio.SubTabHost}" HorizontalAlignment="Left" Margin="0,14,0,0">
+                <Grid x:Name="SubTabTrack" ClipToBounds="True">
+                    <Border x:Name="SubTabIndicator" Style="{StaticResource Studio.SubTabIndicator}" />
+                    <StackPanel x:Name="SubTabButtons" Orientation="Horizontal">
+                        <Button Style="{StaticResource Studio.SubTabButton}" Content="主题与棱镜光效" />
+                        <Button Style="{StaticResource Studio.SubTabButton}" Margin="4,0,0,0" Content="使用习惯与关于" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+        </StackPanel>
+
+        <ScrollViewer x:Name="SubPageScroll" Grid.Row="1" HorizontalScrollBarVisibility="Disabled"
+                      VerticalScrollBarVisibility="Auto">
+            <Grid Margin="0,0,8,0">
+                <StackPanel x:Name="OpticsPanel">
+                    <Border x:Name="ThemeCard" Style="{StaticResource Studio.SectionCard}" Margin="0" Padding="14,10">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource Studio.SectionTitle}" Text="明暗主题" />
+                            <UniformGrid x:Name="ThemeChoices" Columns="3" Margin="-4,10,-4,0">
+                                <Button Style="{StaticResource Studio.ChoiceCard}" Margin="4,0" Padding="12,9" Click="OnThemeClick"
+                                        AutomationProperties.Name="晴雾浅色">
+                                    <StackPanel>
+                                        <controls:Icon Kind="Sun" Size="21" HorizontalAlignment="Left"
+                                                       IconBrush="{DynamicResource Brush.Signal}" />
+                                        <TextBlock Style="{StaticResource Studio.SectionTitle}" Margin="0,5,0,0" Text="晴雾浅色" />
+                                        <TextBlock Style="{StaticResource Studio.PageSub}" Text="明亮通透的日间玻璃质感" />
+                                    </StackPanel>
+                                </Button>
+                                <Button Style="{StaticResource Studio.ChoiceCard}" Margin="4,0" Padding="12,9" Click="OnThemeClick"
+                                        AutomationProperties.Name="黑曜暗色">
+                                    <StackPanel>
+                                        <controls:Icon Kind="Moon" Size="21" HorizontalAlignment="Left"
+                                                       IconBrush="{DynamicResource Brush.Signal}" />
+                                        <TextBlock Style="{StaticResource Studio.SectionTitle}" Margin="0,5,0,0" Text="黑曜暗色" />
+                                        <TextBlock Style="{StaticResource Studio.PageSub}" Text="深邃曜石底色，突出棱镜光效" />
+                                    </StackPanel>
+                                </Button>
+                                <Button Style="{StaticResource Studio.ChoiceCard}" Margin="4,0" Padding="12,9" Click="OnThemeClick"
+                                        AutomationProperties.Name="跟随系统">
+                                    <StackPanel>
+                                        <controls:Icon Kind="Monitor" Size="21" HorizontalAlignment="Left"
+                                                       IconBrush="{DynamicResource Brush.Signal}" />
+                                        <TextBlock Style="{StaticResource Studio.SectionTitle}" Margin="0,5,0,0" Text="跟随系统" />
+                                        <TextBlock Style="{StaticResource Studio.PageSub}" Text="自动跟随 Windows 系统深浅模式" />
+                                    </StackPanel>
+                                </Button>
+                            </UniformGrid>
+                        </StackPanel>
+                    </Border>
+
+                    <Border x:Name="AccentCard" Style="{StaticResource Studio.SectionCard}" Margin="0,9,0,0" Padding="14,10">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource Studio.SectionTitle}" Text="棱镜光效色系" />
+                            <UniformGrid x:Name="AccentChoices" Columns="5" Margin="-4,10,-4,0">
+                                <Button Style="{StaticResource Studio.ChoiceCard}" Margin="4,0" Padding="12,9" Click="OnAccentClick"
+                                        AutomationProperties.Name="棱镜幻彩">
+                                    <StackPanel>
+                                        <Border x:Name="ClassicSwatch" Style="{StaticResource Prism.Swatch}" />
+                                        <TextBlock Style="{StaticResource Studio.SectionTitle}" Margin="0,7,0,0" Text="棱镜幻彩" />
+                                        <TextBlock Style="{StaticResource Studio.PageSub}" Margin="0,4,0,0" Text="经典四色分光" />
+                                    </StackPanel>
+                                </Button>
+                                <Button Style="{StaticResource Studio.ChoiceCard}" Margin="4,0" Padding="12,9" Click="OnAccentClick"
+                                        AutomationProperties.Name="炽焰暖岩">
+                                    <StackPanel>
+                                        <Border x:Name="EmberSwatch" Style="{StaticResource Prism.Swatch}" />
+                                        <TextBlock Style="{StaticResource Studio.SectionTitle}" Margin="0,7,0,0" Text="炽焰暖岩" />
+                                        <TextBlock Style="{StaticResource Studio.PageSub}" Margin="0,4,0,0" Text="熔岩琥珀暖橙" />
+                                    </StackPanel>
+                                </Button>
+                                <Button Style="{StaticResource Studio.ChoiceCard}" Margin="4,0" Padding="12,9" Click="OnAccentClick"
+                                        AutomationProperties.Name="钴蓝电光">
+                                    <StackPanel>
+                                        <Border x:Name="CobaltSwatch" Style="{StaticResource Prism.Swatch}" />
+                                        <TextBlock Style="{StaticResource Studio.SectionTitle}" Margin="0,7,0,0" Text="钴蓝电光" />
+                                        <TextBlock Style="{StaticResource Studio.PageSub}" Margin="0,4,0,0" Text="冰川电光清蓝" />
+                                    </StackPanel>
+                                </Button>
+                                <Button Style="{StaticResource Studio.ChoiceCard}" Margin="4,0" Padding="12,9" Click="OnAccentClick"
+                                        AutomationProperties.Name="鸢尾星紫">
+                                    <StackPanel>
+                                        <Border x:Name="IrisSwatch" Style="{StaticResource Prism.Swatch}" />
+                                        <TextBlock Style="{StaticResource Studio.SectionTitle}" Margin="0,7,0,0" Text="鸢尾星紫" />
+                                        <TextBlock Style="{StaticResource Studio.PageSub}" Margin="0,4,0,0" Text="星云霓光星紫" />
+                                    </StackPanel>
+                                </Button>
+                                <Button Style="{StaticResource Studio.ChoiceCard}" Margin="4,0" Padding="12,9" Click="OnAccentClick"
+                                        AutomationProperties.Name="琥珀流金">
+                                    <StackPanel>
+                                        <Border x:Name="AmberSwatch" Style="{StaticResource Prism.Swatch}" />
+                                        <TextBlock Style="{StaticResource Studio.SectionTitle}" Margin="0,7,0,0" Text="琥珀流金" />
+                                        <TextBlock Style="{StaticResource Studio.PageSub}" Margin="0,4,0,0" Text="暖金日落流光" />
+                                    </StackPanel>
+                                </Button>
+                            </UniformGrid>
+                        </StackPanel>
+                    </Border>
+
+                    <Border x:Name="MotionCard" Style="{StaticResource Studio.SectionCard}" Margin="0,9,0,0" Padding="14,10">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource Studio.SectionTitle}" Text="动效强度" />
+                            <UniformGrid x:Name="MotionChoices" Columns="4" Margin="-4,10,-4,0">
+                                <Button Style="{StaticResource Studio.ChoiceCard}" Margin="4,0" Padding="12,9" Click="OnMotionClick"
+                                        AutomationProperties.Name="极光满血">
+                                    <StackPanel>
+                                        <TextBlock Style="{StaticResource Studio.SectionTitle}" Text="极光满血" />
+                                        <TextBlock Style="{StaticResource Studio.PageSub}" Text="全套二阶弹簧、棱镜折射、星芒与水波" />
+                                    </StackPanel>
+                                </Button>
+                                <Button Style="{StaticResource Studio.ChoiceCard}" Margin="4,0" Padding="12,9" Click="OnMotionClick"
+                                        AutomationProperties.Name="标准灵动">
+                                    <StackPanel>
+                                        <TextBlock Style="{StaticResource Studio.SectionTitle}" Text="标准灵动" />
+                                        <TextBlock Style="{StaticResource Studio.PageSub}" Text="保留顺滑切换、折射边框与核心回弹" />
+                                    </StackPanel>
+                                </Button>
+                                <Button Style="{StaticResource Studio.ChoiceCard}" Margin="4,0" Padding="12,9" Click="OnMotionClick"
+                                        AutomationProperties.Name="轻柔克制">
+                                    <StackPanel>
+                                        <TextBlock Style="{StaticResource Studio.SectionTitle}" Text="轻柔克制" />
+                                        <TextBlock Style="{StaticResource Studio.PageSub}" Text="仅保留轻量化滑入与焦点反馈" />
+                                    </StackPanel>
+                                </Button>
+                                <Button Style="{StaticResource Studio.ChoiceCard}" Margin="4,0" Padding="12,9" Click="OnMotionClick"
+                                        AutomationProperties.Name="关闭动效">
+                                    <StackPanel>
+                                        <TextBlock Style="{StaticResource Studio.SectionTitle}" Text="关闭动效" />
+                                        <TextBlock Style="{StaticResource Studio.PageSub}" Text="全部即时切换，零持续渲染" />
+                                    </StackPanel>
+                                </Button>
+                            </UniformGrid>
+                        </StackPanel>
+                    </Border>
+
+                    <Border x:Name="SandboxCard" Style="{StaticResource Studio.HeroActionCard}" MinHeight="148"
+                            ClipToBounds="True" Margin="0,9,0,0" Padding="0">
+                        <Grid>
+                            <controls:HorizonAura x:Name="SandboxAura" VerticalAlignment="Stretch" CornerRadius="14" Intensity="1.0"
+                                                  Tone="Normal" IsRunning="False" IsHitTestVisible="False" />
+                            <controls:CrystalGlintOverlay x:Name="SandboxGlint" Active="True" IsHitTestVisible="False" />
+                            <controls:PrismRippleLayer x:Name="SandboxRipple" IsHitTestVisible="False" />
+                            <controls:PrismRimOverlay x:Name="SandboxRim" CornerRadius="14" StrokeThickness="1.75"
+                                                      ProximityRadius="240" IsHitTestVisible="False" />
+
+                            <Grid Margin="18,12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="136" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Margin="0,0,14,0" VerticalAlignment="Center">
+                                    <TextBlock Style="{StaticResource Studio.PageEyebrow}" Text="LIVE OPTICS SANDBOX" />
+                                    <TextBlock Style="{StaticResource Studio.SectionTitle}" Margin="0,4,0,4" Text="实时棱镜光效体验盒" />
+                                    <TextBlock Style="{StaticResource Studio.PageSub}"
+                                               Text="把鼠标靠近卡片边缘查看四色色散边框，点击任意位置激发光谱波纹，或通过下方按钮试玩唤醒扫光与液态波浪。" />
+                                    <WrapPanel Margin="0,10,0,-6">
+                                        <Button x:Name="IdleAuraButton" Style="{StaticResource Prism.SandboxButton}" Tag="Selected"
+                                                Content="待机柔光" CommandParameter="Normal" Click="OnAuraClick" />
+                                        <Button x:Name="RunningAuraButton" Style="{StaticResource Prism.SandboxButton}"
+                                                Content="运转充能" CommandParameter="Signal" Click="OnAuraClick" />
+                                        <Button x:Name="WarningAuraButton" Style="{StaticResource Prism.SandboxButton}"
+                                                Content="警示脉冲" CommandParameter="Warn" Click="OnAuraClick" />
+                                        <Button Style="{StaticResource Prism.SandboxButton}" Content="触发唤醒扫光" Click="OnWakeClick" />
+                                        <Button Style="{StaticResource Prism.SandboxButton}" Content="模拟注入波浪" Click="OnInjectClick" />
+                                    </WrapPanel>
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="10,0">
+                                    <controls:LiquidVial x:Name="SandboxVial" Width="34" Height="80" HorizontalAlignment="Center"
+                                                         Level="0.62" Tone="Signal" IsActive="False" />
+                                    <Slider x:Name="SandboxLevel" Style="{StaticResource Studio.Slider}"
+                                            Minimum="0" Maximum="1" Value="0.62" SmallChange="0.01"
+                                            LargeChange="0.1" Margin="0,5,0,0" AutomationProperties.Name="体验盒液位" />
+                                    <DockPanel Margin="4,2,4,0">
+                                        <Border x:Name="SandboxSwatch" DockPanel.Dock="Right" Style="{StaticResource Prism.Swatch}"
+                                                Width="58" VerticalAlignment="Center" ToolTip="当前主题的棱镜光谱" />
+                                        <TextBlock FontFamily="{DynamicResource Font.Mono}" FontSize="{DynamicResource FS.Small}"
+                                                   Foreground="{DynamicResource Brush.Ink}" Language="zh-CN"
+                                                   Text="{Binding Value, ElementName=SandboxLevel, StringFormat={}{0:P0}}" />
+                                    </DockPanel>
+                                </StackPanel>
+                            </Grid>
+                        </Grid>
+                    </Border>
+                </StackPanel>
+
+                <StackPanel x:Name="HabitsPanel" Visibility="Collapsed">
+                    <Border x:Name="HabitsCard" Style="{StaticResource Studio.SectionCard}">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource Studio.SectionTitle}" Text="日常使用习惯" />
+                            <CheckBox x:Name="RestoreTasksToggle" Style="{StaticResource Studio.ToggleSwitch}" Margin="0,7,0,0"
+                                      Content="每次打开自动恢复上次的任务列表" Click="OnRestoreTasksClick" />
+                            <TextBlock Style="{StaticResource Studio.PageSub}" Margin="0,3,0,0"
+                                       Text="关闭后每次启动都是干净的空队列，不会删除硬盘上的任何文件。" />
+                            <Border Height="1" Background="{DynamicResource Brush.Line}" Margin="0,10,0,9" />
+                            <DockPanel>
+                                <Button DockPanel.Dock="Right" Style="{StaticResource Btn.Secondary}" Margin="8,0,0,0"
+                                        Content="打开配置文件夹" Click="OnOpenSettingsClick" />
+                                <TextBlock Style="{StaticResource Studio.PageSub}" VerticalAlignment="Center"
+                                           Text="界面布局与日志状态自动记忆" />
+                            </DockPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <Border x:Name="ShortcutsCard" Style="{StaticResource Studio.SectionCard}">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource Studio.SectionTitle}" Text="常用快捷键速查" />
+                            <UniformGrid Columns="2" Margin="0,10,0,-8">
+                                <ContentControl Style="{StaticResource Prism.Shortcut}" Tag="Ctrl+1~4" Content="在四个工作室页面间切换" />
+                                <ContentControl Style="{StaticResource Prism.Shortcut}" Tag="F5" Content="开始生成或按当前预览生成" />
+                                <ContentControl Style="{StaticResource Prism.Shortcut}" Tag="Ctrl+O" Content="导入 QC 或模型文件" />
+                                <ContentControl Style="{StaticResource Prism.Shortcut}" Tag="Ctrl+Shift+O" Content="导入工程文件夹" />
+                                <ContentControl Style="{StaticResource Prism.Shortcut}" Tag="Ctrl+F" Content="搜索任务列表" />
+                                <ContentControl Style="{StaticResource Prism.Shortcut}" Tag="Ctrl+L" Content="展开或折叠运行日志" />
+                            </UniformGrid>
+                        </StackPanel>
+                    </Border>
+
+                    <Border x:Name="AboutCard" Style="{StaticResource Studio.HeroActionCard}">
+                        <StackPanel>
+                            <WrapPanel>
+                                <TextBlock Style="{StaticResource Studio.SectionTitle}" Text="远景工坊 · 黑曜棱镜" />
+                                <Border Margin="8,0,0,0" Padding="7,1" CornerRadius="8"
+                                        Background="{DynamicResource Brush.SignalSoft}">
+                                    <TextBlock FontFamily="{DynamicResource Font.Mono}" FontSize="{DynamicResource FS.Small}"
+                                               Foreground="{DynamicResource Brush.Ink}" Text="{x:Static app:AppInfo.DisplayVersion}" />
+                                </Border>
+                            </WrapPanel>
+                            <TextBlock Style="{StaticResource Studio.PageSub}" Margin="0,6,0,0"
+                                       Text="专为《求生之路 2》模型作者打造的自动多级 LOD 工具，内置 meshoptimizer 减面引擎，安全写回 QC 并提供完整备份还原。" />
+                            <Label Style="{StaticResource Studio.FieldLabel}" Margin="0,11,0,4" Content="配置文件"
+                                   Target="{Binding ElementName=SettingsPath}" />
+                            <TextBox x:Name="SettingsPath" Style="{StaticResource Input.Mono}" IsReadOnly="True"
+                                     Text="{x:Static app:AppInfo.SettingsFile}" />
+                            <Label Style="{StaticResource Studio.FieldLabel}" Margin="0,8,0,4" Content="临时工作目录"
+                                   Target="{Binding ElementName=TempPath}" />
+                            <TextBox x:Name="TempPath" Style="{StaticResource Input.Mono}" IsReadOnly="True"
+                                     Text="{x:Static app:AppInfo.TempRoot}" />
+                            <WrapPanel Margin="0,12,0,-6">
+                                <Button Style="{StaticResource Btn.Secondary}" Margin="0,0,8,6" Content="查看全部快捷键" Click="OnHelpClick" />
+                                <Button Style="{StaticResource Btn.Secondary}" Margin="0,0,0,6" Content="打开使用说明" Click="OnManualClick" />
+                            </WrapPanel>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </Grid>
+        </ScrollViewer>
+    </Grid>
+</pages:StudioPageBase>

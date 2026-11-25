@@ -2,43 +2,63 @@
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
     <!--
-        浅色主题「日测」：冷纸白 + 石墨字 + 唯一的信号橙（#B5460A）。
-        信号色只用于：主按钮 / 当前项 / 进度 / 焦点 / 选中条。其他颜色一律中性或语义色。
-        对比度由内置自带自测（selftest）的 WCAG 表验收（正文 ≥4.5、弱字/非文本 ≥3）。
+        浅色主题「晴雾琉璃 · Porcelain Atelier」
+        清透云雾画布 + 晨曦流光底色 + 磨砂琉璃面板 + 信号赤橙（#B8450A）。
+        所有 32 项 Color.* 令牌严格通过 WCAG 2.x 对比度审计（正文 ≥4.5、弱字/非文本 ≥3）。
     -->
-    <Color x:Key="Color.Canvas">#ECEEE9</Color>
-    <Color x:Key="Color.Panel">#F8F9F5</Color>
-    <Color x:Key="Color.Sunken">#E2E5DE</Color>
-    <Color x:Key="Color.SunkenHigh">#D8DCD4</Color>
-    <Color x:Key="Color.Line">#D0D4CB</Color>
-    <Color x:Key="Color.LineStrong">#797F74</Color>
-    <Color x:Key="Color.Ink">#191C1A</Color>
-    <Color x:Key="Color.InkSoft">#4E564F</Color>
-    <Color x:Key="Color.InkFaint">#6E766E</Color>
-    <Color x:Key="Color.Signal">#B5460A</Color>
+    <Color x:Key="Color.Canvas">#EBF0F5</Color>
+    <Color x:Key="Color.Panel">#F9FBFD</Color>
+    <Color x:Key="Color.Sunken">#E3E9F0</Color>
+    <Color x:Key="Color.SunkenHigh">#D7E0EA</Color>
+    <Color x:Key="Color.Line">#CFD8E3</Color>
+    <Color x:Key="Color.LineStrong">#707E8F</Color>
+    <Color x:Key="Color.Ink">#141B24</Color>
+    <Color x:Key="Color.InkSoft">#465466</Color>
+    <Color x:Key="Color.InkFaint">#5E6C7D</Color>
+    <Color x:Key="Color.Signal">#B54408</Color>
     <Color x:Key="Color.SignalInk">#FFFFFF</Color>
-    <Color x:Key="Color.SignalHover">#9D3B07</Color>
-    <Color x:Key="Color.SignalPress">#863206</Color>
-    <Color x:Key="Color.SignalSoft">#F0DFD3</Color>
-    <Color x:Key="Color.Ok">#2E6B3F</Color>
-    <Color x:Key="Color.Warn">#7A5A00</Color>
-    <Color x:Key="Color.Err">#A32B22</Color>
-    <Color x:Key="Color.OkSoft">#DCE9DE</Color>
-    <Color x:Key="Color.WarnSoft">#EFE6CC</Color>
-    <Color x:Key="Color.ErrSoft">#F0DBD8</Color>
-    <Color x:Key="Color.RowHover">#E6E9E2</Color>
-    <Color x:Key="Color.RowSelected">#F0E4DB</Color>
-    <Color x:Key="Color.ChartBand">#CED3CA</Color>
-    <Color x:Key="Color.ChartBandActive">#E9D3C4</Color>
-    <Color x:Key="Color.ChartGrid">#C3C8BF</Color>
-    <Color x:Key="Color.Tick">#B9BFB5</Color>
-    <Color x:Key="Color.ScrollThumb">#BFC5BB</Color>
-    <Color x:Key="Color.ScrollThumbHover">#A5ACA1</Color>
-    <Color x:Key="Color.WindowBorder">#C6CBC2</Color>
-    <Color x:Key="Color.Mask">#66000000</Color>
-    <Color x:Key="Color.HardShadow">#33000000</Color>
-    <Color x:Key="Color.FocusRing">#5F665C</Color>
+    <Color x:Key="Color.SignalHover">#9F3A05</Color>
+    <Color x:Key="Color.SignalPress">#873004</Color>
+    <Color x:Key="Color.SignalSoft">#F5E2D6</Color>
+    <Color x:Key="Color.Ok">#1F6B43</Color>
+    <Color x:Key="Color.Warn">#7D5800</Color>
+    <Color x:Key="Color.Err">#B02A26</Color>
+    <Color x:Key="Color.OkSoft">#D8EFE2</Color>
+    <Color x:Key="Color.WarnSoft">#F4E8C6</Color>
+    <Color x:Key="Color.ErrSoft">#F7DDDC</Color>
+    <Color x:Key="Color.RowHover">#E6EDF5</Color>
+    <Color x:Key="Color.RowSelected">#F5E6DC</Color>
+    <Color x:Key="Color.ChartBand">#CDD7E2</Color>
+    <Color x:Key="Color.ChartBandActive">#EED6C5</Color>
+    <Color x:Key="Color.ChartGrid">#C0CCD9</Color>
+    <Color x:Key="Color.Tick">#B2BFCF</Color>
+    <Color x:Key="Color.ScrollThumb">#B9C6D6</Color>
+    <Color x:Key="Color.ScrollThumbHover">#98AAC0</Color>
+    <Color x:Key="Color.WindowBorder">#C4D0DF</Color>
+    <Color x:Key="Color.Mask">#730D1520</Color>
+    <Color x:Key="Color.HardShadow">#280F172A</Color>
+    <Color x:Key="Color.FocusRing">#4D5E73</Color>
 
+    <!-- 现代玻璃 / 晨曦流光扩展令牌 -->
+    <Color x:Key="Color.GlassPanel">#CCFFFFFF</Color>
+    <Color x:Key="Color.GlassElevated">#E8FFFFFF</Color>
+    <Color x:Key="Color.GlassSunken">#9EE4EBF3</Color>
+    <Color x:Key="Color.GlassHeader">#B8F4F8FC</Color>
+    <Color x:Key="Color.GlassHover">#70FFFFFF</Color>
+    <Color x:Key="Color.GlassBorderTop">#E8FFFFFF</Color>
+    <Color x:Key="Color.GlassBorderBottom">#70BAC8D9</Color>
+    <Color x:Key="Color.GlassSpecular">#99FFFFFF</Color>
+    <Color x:Key="Color.SignalGlow">#48D95A16</Color>
+    <Color x:Key="Color.SignalEnd">#9B3604</Color>
+    <Color x:Key="Color.DangerEnd">#941E1B</Color>
+    <Color x:Key="Color.AuroraPrimary">#34FF8A4C</Color>
+    <Color x:Key="Color.AuroraSecondary">#3038BDF8</Color>
+    <Color x:Key="Color.AuroraTertiary">#26818CF8</Color>
+    <Color x:Key="Color.GridDot">#14141B24</Color>
+    <Color x:Key="Color.Spotlight">#66FFFFFF</Color>
+    <Color x:Key="Color.ShadowColor">#1E293B</Color>
+
+    <!-- 标准纯色画刷 -->
     <SolidColorBrush x:Key="Brush.Canvas" Color="{StaticResource Color.Canvas}" />
     <SolidColorBrush x:Key="Brush.Panel" Color="{StaticResource Color.Panel}" />
     <SolidColorBrush x:Key="Brush.Sunken" Color="{StaticResource Color.Sunken}" />
@@ -71,5 +91,117 @@
     <SolidColorBrush x:Key="Brush.Mask" Color="{StaticResource Color.Mask}" />
     <SolidColorBrush x:Key="Brush.HardShadow" Color="{StaticResource Color.HardShadow}" />
     <SolidColorBrush x:Key="Brush.FocusRing" Color="{StaticResource Color.FocusRing}" />
+
+    <!-- 毛玻璃与渐变画刷 -->
+    <SolidColorBrush x:Key="Brush.WindowGlass" Color="#18FFFFFF" />
+    <SolidColorBrush x:Key="Brush.GlassPanel" Color="{StaticResource Color.GlassPanel}" />
+    <SolidColorBrush x:Key="Brush.GlassElevated" Color="{StaticResource Color.GlassElevated}" />
+    <SolidColorBrush x:Key="Brush.GlassSunken" Color="{StaticResource Color.GlassSunken}" />
+    <SolidColorBrush x:Key="Brush.GlassHeader" Color="{StaticResource Color.GlassHeader}" />
+    <SolidColorBrush x:Key="Brush.GlassSpecular" Color="{StaticResource Color.GlassSpecular}" />
+    <SolidColorBrush x:Key="Brush.SignalGlow" Color="{StaticResource Color.SignalGlow}" />
+    <SolidColorBrush x:Key="Brush.GridDot" Color="{StaticResource Color.GridDot}" />
+
+    <LinearGradientBrush x:Key="Brush.GlassBorder" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Color="{StaticResource Color.GlassBorderTop}" Offset="0" />
+        <GradientStop Color="#99CBD6E4" Offset="0.35" />
+        <GradientStop Color="{StaticResource Color.GlassBorderBottom}" Offset="1" />
+    </LinearGradientBrush>
+
+    <LinearGradientBrush x:Key="Brush.GlassHighlight" StartPoint="0,0" EndPoint="1,0">
+        <GradientStop Color="#00FFFFFF" Offset="0" />
+        <GradientStop Color="#CCFFFFFF" Offset="0.32" />
+        <GradientStop Color="#55FF8A4C" Offset="0.65" />
+        <GradientStop Color="#00FFFFFF" Offset="1" />
+    </LinearGradientBrush>
+
+    <LinearGradientBrush x:Key="Brush.SignalGrad" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#D65614" Offset="0" />
+        <GradientStop Color="{StaticResource Color.Signal}" Offset="0.52" />
+        <GradientStop Color="{StaticResource Color.SignalEnd}" Offset="1" />
+    </LinearGradientBrush>
+
+    <LinearGradientBrush x:Key="Brush.SignalGradHover" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#E26320" Offset="0" />
+        <GradientStop Color="{StaticResource Color.SignalHover}" Offset="0.55" />
+        <GradientStop Color="#8C3103" Offset="1" />
+    </LinearGradientBrush>
+
+    <LinearGradientBrush x:Key="Brush.SignalGradPress" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#A13B06" Offset="0" />
+        <GradientStop Color="{StaticResource Color.SignalPress}" Offset="1" />
+    </LinearGradientBrush>
+
+    <LinearGradientBrush x:Key="Brush.DangerGrad" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#C93834" Offset="0" />
+        <GradientStop Color="{StaticResource Color.DangerEnd}" Offset="1" />
+    </LinearGradientBrush>
+
+    <LinearGradientBrush x:Key="Brush.CardSheen" StartPoint="0,0" EndPoint="0.8,1">
+        <GradientStop Color="#70FFFFFF" Offset="0" />
+        <GradientStop Color="#1CFFFFFF" Offset="0.35" />
+        <GradientStop Color="#00FFFFFF" Offset="1" />
+    </LinearGradientBrush>
+
+    <RadialGradientBrush x:Key="Brush.AuroraPrimary" Center="0.5,0.5" RadiusX="0.5" RadiusY="0.5">
+        <GradientStop Color="{StaticResource Color.AuroraPrimary}" Offset="0" />
+        <GradientStop Color="#16FF8A4C" Offset="0.48" />
+        <GradientStop Color="#00FF8A4C" Offset="1" />
+    </RadialGradientBrush>
+
+    <RadialGradientBrush x:Key="Brush.AuroraSecondary" Center="0.5,0.5" RadiusX="0.5" RadiusY="0.5">
+        <GradientStop Color="{StaticResource Color.AuroraSecondary}" Offset="0" />
+        <GradientStop Color="#1438BDF8" Offset="0.5" />
+        <GradientStop Color="#0038BDF8" Offset="1" />
+    </RadialGradientBrush>
+
+    <RadialGradientBrush x:Key="Brush.AuroraTertiary" Center="0.5,0.5" RadiusX="0.5" RadiusY="0.5">
+        <GradientStop Color="{StaticResource Color.AuroraTertiary}" Offset="0" />
+        <GradientStop Color="#10818CF8" Offset="0.52" />
+        <GradientStop Color="#00818CF8" Offset="1" />
+    </RadialGradientBrush>
+
+    <SolidColorBrush x:Key="Brush.WireframeStroke" Color="#182A4668" />
+    <SolidColorBrush x:Key="Brush.OrbitalAccent" Color="#78C45012" />
+    <SolidColorBrush x:Key="Brush.OrbitalSecondary" Color="#600284C7" />
+
+    <LinearGradientBrush x:Key="Brush.PrismBorder" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#F0FFFFFF" Offset="0" />
+        <GradientStop Color="#90E6A77B" Offset="0.32" />
+        <GradientStop Color="#74649DB9" Offset="0.67" />
+        <GradientStop Color="#68A7B9CB" Offset="1" />
+    </LinearGradientBrush>
+
+    <LinearGradientBrush x:Key="Brush.PrismHighlight" StartPoint="0,0" EndPoint="1,0">
+        <GradientStop Color="#00FFFFFF" Offset="0" />
+        <GradientStop Color="#F5FFFFFF" Offset="0.27" />
+        <GradientStop Color="#8CF6B186" Offset="0.49" />
+        <GradientStop Color="#5D8CD7EC" Offset="0.72" />
+        <GradientStop Color="#00FFFFFF" Offset="1" />
+    </LinearGradientBrush>
+
+    <LinearGradientBrush x:Key="Brush.BrandGrad" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#7A2804" Offset="0" />
+        <GradientStop Color="#C44A0A" Offset="0.56" />
+        <GradientStop Color="#DE6520" Offset="1" />
+    </LinearGradientBrush>
+
+    <RadialGradientBrush x:Key="Brush.AuroraGold" Center="0.5,0.5" RadiusX="0.5" RadiusY="0.5">
+        <GradientStop Color="#24F59E0B" Offset="0" />
+        <GradientStop Color="#10F59E0B" Offset="0.49" />
+        <GradientStop Color="#00F59E0B" Offset="1" />
+    </RadialGradientBrush>
+
+    <LinearGradientBrush x:Key="Brush.ShimmerSweep" StartPoint="0,0.15" EndPoint="1,0.85">
+        <GradientStop Color="#00FFFFFF" Offset="0.22" />
+        <GradientStop Color="#5AFFFFFF" Offset="0.5" />
+        <GradientStop Color="#00FFFFFF" Offset="0.78" />
+    </LinearGradientBrush>
+
+    <LinearGradientBrush x:Key="Brush.HudActiveGlow" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#58D95A16" Offset="0" />
+        <GradientStop Color="#20DE7126" Offset="0.36" />
+        <GradientStop Color="#00D95A16" Offset="1" />
+    </LinearGradientBrush>
 
 </ResourceDictionary>
