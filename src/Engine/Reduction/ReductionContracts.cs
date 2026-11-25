@@ -6,6 +6,8 @@ namespace LodStudio.Engine
         public string Source;
         public string Destination;
         public string DisplayDestination;
+        /// <summary>计划中的 1-based 可见档位。独立阴影任务使用 0。</summary>
+        public int Level;
         /// <summary>目标面数比例 0..1</summary>
         public double Ratio;
         public bool ShadowMode;

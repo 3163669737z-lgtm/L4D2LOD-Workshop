@@ -212,7 +212,7 @@
                                             <Button Style="{StaticResource Studio.QuickChoice}" Content="仅更远档位" Click="OnFacialChoiceClick"
                                                     ToolTip="从第 3 档起关闭表情，可在右边细调。" />
                                             <TextBox x:Name="FacialLevelBox" Style="{StaticResource Studio.NumberBox}"
-                                                     Margin="3,0,0,6" ToolTip="可填写第 1 到第 6 档" />
+                                                     Margin="3,0,0,6" ToolTip="可填写第 1 到第 7 档" />
                                         </WrapPanel>
                                         <TextBlock Style="{StaticResource Studio.PageSub}"
                                                    Text="角色离玩家很远时看不清眨眼和嘴型，关掉远处表情能明显节省计算；关闭开关则全程保留表情。" />
@@ -241,7 +241,7 @@
                                             <Label Target="{Binding ElementName=BonesLevelBox}" Style="{StaticResource Studio.NumberLabel}"
                                                    Content="从第几档开始合并" />
                                             <TextBox x:Name="BonesLevelBox" Style="{StaticResource Studio.NumberBox}"
-                                                     ToolTip="可填写第 1 到第 6 档" />
+                                                     ToolTip="可填写第 1 到第 7 档" />
                                         </WrapPanel>
                                         <TextBlock Style="{StaticResource Studio.PageSub}" Margin="0,5,0,0"
                                                    Text="把远处的十根手指等细碎骨骼合并到主骨骼上，肉眼几乎看不出差别但能显著减轻蒙皮负担。" />

@@ -149,16 +149,16 @@ namespace LodStudio.Cli
             bool autoPreset = cli.HasFlag("preset") && presetIndex == PresetLibrary.AutomaticIndex;
             bool manual = cli.HasFlag("preset") && !autoPreset || cli.HasFlag("dist") || cli.HasFlag("ratio") || cli.HasFlag("levels");
             opts.Automatic = cli.HasFlag("auto") || autoPreset || !manual;
+            if (opts.CompileAfter && string.IsNullOrEmpty(opts.NekomdlPath)) opts.NekomdlPath = Nekomdl.Find(null);
             if (opts.Automatic)
             {
-                if (manual || opts.CompileAfter || opts.Force || cli.HasFlag("nofacial") || cli.HasFlag("no-backup") ||
+                if (manual || cli.HasFlag("no-backup") ||
                     (cli.HasFlag("mode") && mode != (int)OutputMode.InPlace))
                 {
-                    Console.WriteLine("自动模式使用原 QC 写入、备份和表情保护。已有手工参数的脚本可显式指定 --preset 或 --dist 与 --ratio。");
+                    Console.WriteLine("自动模式要求写回原 QC 并保留备份。要自定义档位，请移除 --auto 并指定手动预设或 --dist 与 --ratio。");
                     return null;
                 }
                 opts.OutputMode = OutputMode.InPlace;
-                opts.NoFacial = false;
                 opts.AdaptiveTriangleBudget = !cli.HasFlag("legacy-budget");
                 opts.AllowVertexUpdates = cli.HasFlag("vertex-update") && !cli.HasFlag("fixed-vertices");
                 opts.KeepOriginalModels = cli.GetOption("keep-models", "");
@@ -166,7 +166,6 @@ namespace LodStudio.Cli
                 if (opts.SkipMainModel) opts.SkipMainQcPaths = null;
                 return opts;
             }
-            if (opts.CompileAfter && string.IsNullOrEmpty(opts.NekomdlPath)) opts.NekomdlPath = Nekomdl.Find(null);
             if (opts.SkipMainModel)
                 opts.SkipMainQcPaths = null;
 
@@ -278,6 +277,9 @@ namespace LodStudio.Cli
             w.Prop("adaptiveTriangleBudget", opt.AdaptiveTriangleBudget);
             w.Prop("allowVertexUpdates", opt.AllowVertexUpdates);
             w.Prop("force", opt.Force);
+            w.Prop("noFacial", opt.NoFacial);
+            w.Prop("noFacialFromLevel", opt.NoFacialFromLevel);
+            w.Prop("compileAfter", opt.CompileAfter);
             w.Name("counts").BeginObject()
                 .Prop("qc", plan.QcPlans.Count).Prop("process", plan.ProcessCount).Prop("skip", plan.SkipCount)
                 .Prop("error", plan.ErrorCount).Prop("models", plan.Models.Count).Prop("jobs", plan.JobCount)
@@ -304,8 +306,8 @@ namespace LodStudio.Cli
                     w.Prop("path", m.Path);
                     w.Prop("triangles", m.Triangles);
                     w.Prop("smd", m.IsSmd);
-                    w.Prop("jobs", m.Jobs.Count);
-                    w.Prop("shadowJobs", m.ShadowJob == null ? 0 : 1);
+                    w.Prop("jobs", q.VisibleJobs(m, (q.Levels ?? plan.Plan).Count, opt).Count());
+                    w.Prop("shadowJobs", q.UsesShadowJob(m, opt) ? 1 : 0);
                     w.Prop("skipReason", m.SkipReason ?? "");
                     w.EndObject();
                 }

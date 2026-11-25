@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using LodStudio.Cli;
 
@@ -47,6 +48,13 @@ namespace LodStudio.Engine
 
         private static SmdModel WriteGridGlb(string dir, int size)
         {
+            var mesh = MakeGrid(size);
+            File.WriteAllBytes(Path.Combine(dir, "mesh.glb"), SmdGlbCodec.SmdToGlb(mesh));
+            return mesh;
+        }
+
+        private static SmdModel MakeGrid(int size)
+        {
             SmdVertex Vertex(int x, int y) => new SmdVertex
             {
                 X = x, Y = y, Nz = 1, U = x / (float)size, V = y / (float)size
@@ -62,7 +70,6 @@ namespace LodStudio.Engine
                     mesh.Triangles.Add(new SmdTriangle { Material = "grid", V0 = a, V1 = b, V2 = c });
                     mesh.Triangles.Add(new SmdTriangle { Material = "grid", V0 = a, V1 = c, V2 = d });
                 }
-            File.WriteAllBytes(Path.Combine(dir, "mesh.glb"), SmdGlbCodec.SmdToGlb(mesh));
             return mesh;
         }
 
@@ -265,9 +272,143 @@ namespace LodStudio.Engine
             ctx.AssertEqual(1, Build("--profile=1", "--fast").ReductionProfile, "显式平衡档优先于 --fast");
             ctx.Assert(Build("--profile=1", "--fast").QualityFirst, "显式平衡档同步质量模式");
 
-            foreach (string flag in new[] { "--nofacial", "--compile", "--force", "--no-backup", "--mode=1", "--mode=-1" })
+            var toolOptions = Build("--auto", "--nofacial", "--nofacial-from=2", "--compile", "--force");
+            ctx.Assert(toolOptions != null && toolOptions.NoFacial && toolOptions.CompileAfter && toolOptions.Force,
+                "自动模式应接受表情、试编译和覆盖开关");
+            ctx.AssertEqual(2, toolOptions.NoFacialFromLevel, "自动模式使用显式表情起始档");
+            ctx.AssertEqual(Nekomdl.Find(null), toolOptions.NekomdlPath, "自动模式试编译会探测编译器");
+            settings.NoFacial = true;
+            ctx.Assert(Build("--auto").NoFacial, "自动模式沿用设置中的 nofacial");
+            ctx.Assert(!Build("--auto", "--facial", "--nofacial").NoFacial, "--facial 可关闭 nofacial");
+
+            foreach (string flag in new[] { "--no-backup", "--mode=1", "--mode=-1", "--levels=2" })
+                ctx.Assert(Build("--auto", flag) == null, "显式自动模式应拒绝 " + flag);
+            foreach (string flag in new[] { "--no-backup", "--mode=1", "--mode=-1" })
                 ctx.Assert(Build(flag) == null, "自动模式应拒绝 " + flag);
         }
+
+        [SelfTest("批量：表情模型从计划第 2 档起减面（手动、自动、混合与纯表情）")]
+        public static void FacialTieredBatch(SelfTestContext ctx)
+        {
+            foreach (bool automatic in new[] { false, true })
+            foreach (bool mixed in new[] { false, true })
+            {
+                string dir = ctx.NewDir("batch_facial_" + automatic + "_" + mixed);
+                var mesh = WriteGridGlb(dir, 45);
+                File.Move(Path.Combine(dir, "mesh.glb"), Path.Combine(dir, "face.glb"));
+                if (mixed) File.Copy(Path.Combine(dir, "face.glb"), Path.Combine(dir, "body.glb"));
+                string qc = Path.Combine(dir, "actor.qc");
+                File.WriteAllText(qc, "$modelname \"actor.mdl\"\n" +
+                    (mixed ? "$body \"body\" \"body.glb\"\n" : "") +
+                    "$model \"face\" \"face.glb\" {\n\tflexfile \"face.vta\"\n}\n");
+                var options = Options(3);
+                options.Automatic = automatic;
+                options.NoFacial = true;
+                options.NoFacialFromLevel = 2;
+                options.AutoTargetTriangles = 1000;
+                options.AutoMinSavingsPercent = 1;
+                options.Workers = 1;
+                options.WriteReport = false;
+                var plan = Plan(new List<TaskRef> { new TaskRef(TaskKind.Qc, qc) }, dir, options);
+                var qcPlan = plan.QcPlans.Single();
+                var face = plan.Models.Single(m => m.BaseName == "face");
+                ctx.AssertEqual(2, face.Jobs.First().Level, "表情减面从计划第 2 档开始");
+                ctx.Assert(face.Jobs.All(j => j.Level >= 2), "表情模型没有较近档位任务");
+                if (automatic)
+                {
+                    var bodyJob = mixed ? plan.Models.Single(m => m.BaseName == "body").Jobs.First() : null;
+                    double expected = mixed
+                        ? (mesh.TriangleCount + Math.Ceiling(mesh.TriangleCount * bodyJob.Ratio)) / qcPlan.SourceTriangles
+                        : 1;
+                    ctx.AssertEqual(expected, qcPlan.Levels.Levels[0].Ratio, 1e-9, "近档计划按原表情网格计算面数");
+                }
+
+                var outcome = BatchRunner.Run(plan, options, null, CancellationToken.None);
+                var result = outcome.QcOutcomes.Single();
+                ctx.Assert(outcome.Ok && result.Injected, "应写入分档 QC：" + string.Join("; ", result.Errors.Concat(outcome.Errors)));
+                var blocks = VisibleBlocks(File.ReadAllText(qc));
+                ctx.Assert(blocks.Count > (mixed ? 1 : 0), "应有远档表情替换");
+                if (mixed)
+                {
+                    var near = blocks[0].Value;
+                    ctx.AssertContains(near, "replacemodel \"body.glb\"", "近档减面身体");
+                    ctx.AssertNotContains(near, "replacemodel \"face.glb\"", "近档保留表情网格");
+                    ctx.AssertNotContains(near, "\tnofacial\n", "近档保留表情");
+                    if (automatic)
+                    {
+                        string bodyPath = Regex.Match(near, "replacemodel \"body\\.glb\" \"([^\"]+)\"").Groups[1].Value;
+                        long expected = mesh.TriangleCount + GlbCodec.CountTriangles(Path.Combine(dir, bodyPath));
+                        ctx.Assert(result.Levels[0].Triangles == expected, "近档实际面数计入原始表情网格");
+                    }
+                }
+                else if (automatic)
+                {
+                    ctx.Assert(qcPlan.SourceTriangles == result.Levels[0].Triangles, "纯表情 QC 近档面数保持原样");
+                    ctx.Assert(!string.IsNullOrEmpty(result.Levels[0].SkipReason), "近档没有减面，自动模式跳过");
+                }
+                var far = blocks[mixed ? 1 : 0].Value;
+                ctx.AssertContains(far, "replacemodel \"face.glb\" \"face_lod2", "首个表情替换使用计划第 2 档网格");
+                for (int i = mixed ? 1 : 0; i < blocks.Count; i++)
+                    ctx.AssertContains(blocks[i].Value, "\tnofacial\n", "每个较远档显式关闭表情");
+            }
+        }
+
+        [SelfTest("自动 LOD：CLI nofacial、覆盖手写档并触发真实试编译")]
+        public static void AutomaticForceAndCompile(SelfTestContext ctx)
+        {
+            string dir = ctx.NewDir("batch_auto_force_compile");
+            var mesh = MakeGrid(25);
+            mesh.Bones.Add(new SmdBone { Index = 0, Name = "root", Parent = -1 });
+            mesh.SkeletonPose.Add("0 0 0 0 0 0 0");
+            SmdCodec.Write(Path.Combine(dir, "body.smd"), mesh);
+            string qc = WriteQc(dir, "actor", "body.smd", "$sequence \"idle\" \"body.smd\" fps 30\n$lod 99\n{\n}\n");
+            var options = Options();
+            options.Automatic = true;
+            options.AutoTargetTriangles = 1000;
+            var plan = Plan(new List<TaskRef> { new TaskRef(TaskKind.Qc, qc) }, dir, options);
+            ctx.AssertContains(plan.QcPlans.Single().Reason, "手写 $lod", "自动模式默认跳过手写档");
+
+            string output = Path.Combine(dir, "out");
+            string settingsDir = Directory.CreateDirectory(Path.Combine(dir, "settings")).FullName;
+            File.WriteAllText(Path.Combine(settingsDir, "settings.ini"), "");
+            string previousSettingsDir = Environment.GetEnvironmentVariable(AppInfo.SettingsDirEnvVar);
+            string compiler = Nekomdl.Find(null);
+            try
+            {
+                Environment.SetEnvironmentVariable(AppInfo.SettingsDirEnvVar, settingsDir);
+                var cli = CommandLine.Parse(new[] { "--batch", qc, "--out", output, "--auto", "--auto-target=1000",
+                    "--auto-min-savings=1", "--nofacial", "--force", "--compile", "--workers=1" });
+                ctx.AssertEqual(0, BatchCommand.RunBatch(cli), "自动模式 CLI 应成功写入");
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable(AppInfo.SettingsDirEnvVar, previousSettingsDir);
+            }
+
+            var planJson = Json.ParseObjectSafe(File.ReadAllText(Path.Combine(output, "plan.json")));
+            ctx.Assert(Json.GetBool(planJson, "automatic") && Json.GetBool(planJson, "force") &&
+                Json.GetBool(planJson, "noFacial") && Json.GetBool(planJson, "compileAfter"), "计划 JSON 记录生效的自动工具开关");
+            ctx.AssertEqual(1, Json.GetInt(planJson, "noFacialFromLevel"), "默认从第 1 档应用");
+            ctx.AssertContains(VisibleBlocks(File.ReadAllText(qc)).Cast<Match>().Single().Value,
+                "\tnofacial\n", "--batch --nofacial 写入第 1 档");
+            var qcInfo = QcParser.Parse(qc);
+            ctx.Assert(!qcInfo.HasForeignLod && qcInfo.HasToolMarker, "自动覆盖停用手写档并写入工具块");
+            ctx.AssertContains(File.ReadAllText(qc + ".lodbak"), "$lod 99", "备份保留原手写档");
+            var batchJson = Json.ParseObjectSafe(File.ReadAllText(Path.Combine(output, "batch.json")));
+            var stats = (Dictionary<string, object>)batchJson["stats"];
+            if (compiler == null)
+                ctx.Log("SKIP: 本机没有 nekomdl.exe，跳过自动模式真实试编译断言");
+            else
+            {
+                ctx.AssertEqual(1, Json.GetInt(stats, "compileOk"), "自动模式实际试编译 1 个 QC");
+                var qcJson = (Dictionary<string, object>)((List<object>)batchJson["qc"]).Single();
+                ctx.Assert(Json.GetBool(qcJson, "compileOk"), "结果记录成功试编译");
+                ctx.Log("自动模式真实试编译成功：" + compiler);
+            }
+        }
+
+        private static MatchCollection VisibleBlocks(string text) =>
+            Regex.Matches(text.Replace("\r\n", "\n"), @"(?m)^\$lod [^\n]+\n\{\n[^}]*\}");
 
         [SelfTest("自动 LOD：报告按采样显示阴影统计与几何峰值偏差")]
         public static void ReportShadowAndDeviation(SelfTestContext ctx)

@@ -152,7 +152,7 @@ namespace LodStudio.ViewModels
                         Triangles = 12964,
                         Jobs = new List<ReductionJob>()
                     };
-                    for (int j = 0; j < LodPlan.Plan.Count; j++) pm.Jobs.Add(new ReductionJob());
+                    for (int j = 0; j < LodPlan.Plan.Count; j++) pm.Jobs.Add(new ReductionJob { Level = j + 1 });
                     qp.Models.Add(pm);
                 }
                 foreach (var pm0 in qp.Models) plan.Models.Add(pm0);   // 摘要按 plan.Models.Count 显示

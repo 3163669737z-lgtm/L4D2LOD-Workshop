@@ -247,8 +247,8 @@ namespace LodStudio.Views.Pages
             BindNumber(ShadowRatioBox, 5, 60, ReadShadowPercent, SetShadowPercent);
             BindNumber(ShadowReuseLevelBox, 1, QcWriter.MaxVisibleLodsWithShadow,
                 () => Settings.ShadowLodReuseLevel, SetShadowReuseLevel, zeroIsAutomatic: true);
-            BindNumber(FacialLevelBox, 1, 6, () => Settings.NoFacialFromLevel, SetFacialLevel);
-            BindNumber(BonesLevelBox, 1, 6, () => Settings.CollapseBonesFromLevel, v =>
+            BindNumber(FacialLevelBox, 1, LodPlan.MaxLevels, () => Settings.NoFacialFromLevel, SetFacialLevel);
+            BindNumber(BonesLevelBox, 1, LodPlan.MaxLevels, () => Settings.CollapseBonesFromLevel, v =>
             {
                 Settings.CollapseBonesFromLevel = v;
                 Save();
@@ -314,7 +314,7 @@ namespace LodStudio.Views.Pages
         }
 
         private static string Number(int value) => value.ToString(CultureInfo.InvariantCulture);
-        private static int ClampLevel(int value) => Math.Max(1, Math.Min(6, value));
+        private static int ClampLevel(int value) => Math.Max(1, Math.Min(LodPlan.MaxLevels, value));
 
         private void BindNumber(TextBox box, int min, int max, Func<int> read, Action<int> write,
             bool zeroIsAutomatic = false)

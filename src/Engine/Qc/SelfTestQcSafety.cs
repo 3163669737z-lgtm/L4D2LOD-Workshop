@@ -275,6 +275,82 @@ namespace LodStudio.Engine
             ctx.Log("真实 VTX：" + VtxInspector.Describe(cr.Vtx));
         }
 
+        [SelfTest("QC安全：nekomdl 编译含 VTA 的分档表情与阴影 LOD")]
+        public static void CompileTieredFacialAndShadow(SelfTestContext ctx)
+        {
+            string dir = ctx.NewDir("qcsafety_compile_facial");
+            const string bones = "version 1\nnodes\n0 \"root\" -1\nend\n";
+            const string pose = "0 0 0 0 0 0 0\n";
+            const string skeleton = bones + "skeleton\ntime 0\n" + pose + "end\n";
+            const string a = "0 0 0 0 0 0 1 0 0\n";
+            const string b = "0 10 0 0 0 0 1 1 0\n";
+            const string c = "0 10 10 0 0 0 1 1 1\n";
+            const string d = "0 0 10 0 0 0 1 0 1\n";
+            const string e = "0 20 0 0 0 0 1 2 0\n";
+            const string first = "material\n" + a + b + c;
+            const string second = "material\n" + a + c + d;
+            const string third = "material\n" + b + e + c;
+            void WriteMesh(string name, string triangles) =>
+                WriteRaw(dir, name, skeleton + "triangles\n" + triangles + "end\n", Encoding.ASCII, false);
+
+            WriteMesh("face.smd", first + second);
+            WriteMesh("face_lod1.smd", first);
+            WriteMesh("face_lod2.smd", first);
+            WriteMesh("face_shadowlod.smd", first);
+            WriteMesh("body.smd", first + second + third);
+            WriteMesh("body_lod1.smd", first + second);
+            WriteMesh("body_shadowlod.smd", first);
+            WriteRaw(dir, "idle.smd", skeleton, Encoding.ASCII, false);
+            WriteRaw(dir, "face.vta", bones + "skeleton\ntime 0\n" + pose + "time 1\n" + pose + "end\n" +
+                "vertexanimation\ntime 0\n0 0 0 0 0 0 1\n1 10 0 0 0 0 1\n2 10 10 0 0 0 1\n3 0 10 0 0 0 1\n" +
+                "time 1\n2 10 10 2 0 0 1\nend\n", Encoding.ASCII, false);
+            var info = ParseQc(dir, "actor.qc",
+                "$modelname \"lodstudio_selftest_facial.mdl\"\n$body \"body\" \"body.smd\"\n" +
+                "$model \"face\" \"face.smd\" {\n\tflexfile \"face.vta\" {\n\t\tdefaultflex frame 0\n" +
+                "\t\tflex \"smile\" frame 1\n\t}\n\tflexcontroller mouth range 0 1 smile\n\t%smile = smile\n}\n" +
+                "$sequence \"idle\" \"idle.smd\" fps 30\n");
+            ctx.Assert(info.Studios.Single(s => s.RawFile == "face.smd").HasFacial, "真实 VTA 声明标记为表情模型");
+            var plan = new LodPlan();
+            plan.Levels.Add(new LodLevel(15, 0.67));
+            plan.Levels.Add(new LodLevel(30, 0.33));
+            var published = new HashSet<string>(new[] { "body_lod1.smd", "face_lod1.smd", "face_lod2.smd" }
+                .Select(name => Path.Combine(dir, name)));
+            var extra = new QcLodBlockOptions
+            {
+                GenerateShadowLod = true,
+                NoFacialFromLevel = 2,
+                ShadowPublishedPath = source => Path.Combine(dir, Path.GetFileNameWithoutExtension(source) + "_shadowlod.smd")
+            };
+            string protectedBlock = QcWriter.BuildLodBlock(info, plan, published, false, false, extra, reuseEarlierLods: true);
+            ctx.AssertContains(protectedBlock, "$shadowlod\n{\n\treplacemodel \"body.smd\"", "关闭表情开关时仍可减面身体阴影");
+            ctx.AssertNotContains(protectedBlock, "replacemodel \"face.smd\"", "直接写入时可见档和阴影档均保护表情");
+            ctx.AssertNotContains(protectedBlock, "\tnofacial\n", "表情关闭指令由用户启用");
+
+            string block = QcWriter.BuildLodBlock(info, plan, published, false, true, extra, reuseEarlierLods: true);
+            ctx.AssertContains(block, "$lod 15\n{\n\treplacemodel \"body.smd\" \"body_lod1.smd\"\n}", "近档只替换身体");
+            ctx.AssertContains(block, "\treplacemodel \"face.smd\" \"face_lod2.smd\"\n\tnofacial\n}", "远档替换表情并禁用形变");
+            ctx.AssertContains(block, "\treplacemodel \"face.smd\" \"face_shadowlod.smd\"\n\tnofacial\n}", "独立阴影档显式关闭表情");
+            extra.ShadowLodMode = ShadowLodMode.ReuseExistingLod;
+            string reused = QcWriter.BuildLodBlock(info, plan, published, false, true, extra, reuseEarlierLods: true);
+            ctx.AssertContains(reused.Substring(reused.IndexOf("$shadowlod", StringComparison.Ordinal)),
+                "\treplacemodel \"face.smd\" \"face_lod2.smd\"\n\tnofacial\n}", "复用阴影档也保护表情替换");
+
+            string exe = Nekomdl.Find(null);
+            if (exe == null)
+            {
+                ctx.Log("SKIP: 本机没有 nekomdl.exe，跳过真实 VTA 试编译");
+                return;
+            }
+            File.AppendAllText(info.QcPath, block, Encoding.ASCII);
+            CompileResult cr = Nekomdl.Compile(exe, info.QcPath);
+            ctx.Assert(cr.Success, "nekomdl 编译失败：" + string.Join("; ", cr.Errors));
+            ctx.Assert(File.Exists(cr.VtxPath) && cr.Vtx?.Valid == true, "应能解析真实 VTX：" + cr.Vtx?.Error);
+            ctx.AssertEqual(4, cr.Vtx.NumLods, "VTX 包含基础档、两个距离档及阴影档");
+            ctx.Assert(cr.Vtx.Triangles.SequenceEqual(new[] { 5, 4, 3, 2 }),
+                "VTX 面数应依次为 5 → 4 → 3 → 2，实际为 " + string.Join(" → ", cr.Vtx.Triangles));
+            ctx.Log("真实 VTA / VTX：" + VtxInspector.Describe(cr.Vtx));
+        }
+
         [SelfTest("QC安全：扫描备份与孤立网格、保护引用、按字节恢复")]
         public static void BackupScanAndRestore(SelfTestContext ctx)
         {

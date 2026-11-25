@@ -17,7 +17,7 @@
     <AssemblyName>L4D2LOD远景工坊</AssemblyName>
     <StartupObject>LodStudio.Program</StartupObject>
 
-    <Version>0.4.0</Version>
+    <Version>0.4.1</Version>
     <Company>远景工坊</Company>
     <Product>远景工坊 · L4D2 自动 LOD 工具</Product>
     <Title>远景工坊</Title>

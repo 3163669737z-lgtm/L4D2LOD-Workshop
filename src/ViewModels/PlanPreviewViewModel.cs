@@ -29,9 +29,11 @@ namespace LodStudio.ViewModels
             var rows = new List<PlanQcRowVm>();
             foreach (var qc in plan.QcPlans.OrderBy(q => q.Action))
             {
-                int maxJobs = plan.Automatic ? qc.Levels?.Count ?? 0 : int.MaxValue;
-                int visibleJobs = qc.Models.Sum(m => System.Math.Min(m.Jobs.Count, maxJobs));
-                int shadowJobs = qc.Models.Count(m => m.ShadowJob != null);
+                int maxLevel = (qc.Levels ?? plan.Plan).Count;
+                var modelJobs = qc.Models.Select(m => (Visible: qc.VisibleJobs(m, maxLevel, options).Count(),
+                    Shadow: qc.UsesShadowJob(m, options))).ToList();
+                int visibleJobs = modelJobs.Sum(m => m.Visible);
+                int shadowJobs = modelJobs.Count(m => m.Shadow);
                 string jobSummary = DescribeJobs(visibleJobs, shadowJobs);
                 bool process = qc.Action == BatchQcAction.Process;
                 bool remove = RemovesOldBlock(plan, qc, options);
@@ -63,7 +65,7 @@ namespace LodStudio.ViewModels
                         (reason ?? model.Triangles.ToString("N0", CultureInfo.InvariantCulture) + " 面") + "\n" + model.Path);
                 }
                 rows.Add(CreateRow(qc.QcPath, action, tone, summary,
-                    process ? qc.Models.Count(m => m.Jobs.Count > 0) + " 个减面模型 · " + jobSummary : "", string.Join("\n", detail)));
+                    process ? modelJobs.Count(m => m.Visible > 0 || m.Shadow) + " 个减面模型 · " + jobSummary : "", string.Join("\n", detail)));
             }
             var failedTasks = plan.Tasks.Where(t => !string.IsNullOrEmpty(t.Error)).ToList();
             foreach (var task in failedTasks)
@@ -74,7 +76,7 @@ namespace LodStudio.ViewModels
             SkipCount = plan.SkipCount - plan.QcPlans.Count(q => RemovesOldBlock(plan, q, options));
             ErrorCount = plan.ErrorCount + failedTasks.Count;
             CleanupCount = plan.SkipCount - SkipCount;
-            ModelCount = plan.Models.Count(m => m.Jobs.Count > 0);
+            ModelCount = plan.Models.Count(m => m.Jobs.Count > 0 || m.ShadowJob != null);
             JobCount = plan.JobCount;
             HasWorkToStart = HasWork(plan, options);
             int dedicatedJobs = plan.Models.Count(m => m.ShadowJob != null);
@@ -156,6 +158,8 @@ namespace LodStudio.ViewModels
             if (options.GenerateShadowLod && qcCount > 0) parts.Add(DescribeShadow(options));
             else if (plan.Models.Any(m => m.ShadowJob != null))
                 parts.Add("独立阴影网格 " + LodPlan.Pct(options.ShadowLodRatio) + "%");
+            if (qcCount > 0 && options.NoFacial)
+                parts.Add("从第 " + options.NoFacialFromLevel + " 级起应用 nofacial");
             if (qcCount > 0 && !string.IsNullOrWhiteSpace(options.CollapseBones))
                 parts.Add("从第 " + options.CollapseBonesFromLevel + " 级起应用 bonetreecollapse");
             int cleanupCount = plan.QcPlans.Count(q => RemovesOldBlock(plan, q, options));

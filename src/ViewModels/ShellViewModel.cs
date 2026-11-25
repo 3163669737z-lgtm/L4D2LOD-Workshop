@@ -297,12 +297,10 @@ namespace LodStudio.ViewModels
             if (Settings.AdaptiveTriangleBudget) parts.Add("均匀减面");
             if (Settings.AllowVertexUpdates) parts.Add("顶点微调");
             parts.Add(Settings.Workers <= 0 ? "自动并行" : Settings.Workers.ToString(CultureInfo.InvariantCulture) + " 路并行");
-            if (!LodPlan.IsAutomatic)
-            {
-                if (!LodPlan.IsCollectionOnly && Settings.ForceOverwriteLod) parts.Add("覆盖手写");
-                if (!LodPlan.IsCollectionOnly && Settings.CompileAfter) parts.Add("试编译");
-                if (Settings.NoFacial) parts.Add("nofacial(≥" + Settings.NoFacialFromLevel.ToString(CultureInfo.InvariantCulture) + ")");
-            }
+            bool writesQc = LodPlan.IsAutomatic || !LodPlan.IsCollectionOnly;
+            if (writesQc && Settings.ForceOverwriteLod) parts.Add("覆盖手写");
+            if (writesQc && Settings.CompileAfter) parts.Add("试编译");
+            if (Settings.NoFacial) parts.Add("nofacial(≥" + Settings.NoFacialFromLevel.ToString(CultureInfo.InvariantCulture) + ")");
             if (Settings.SkipMainModel) parts.Add("跳过主模型");
             AdvancedSummary = string.Join(" · ", parts.ToArray());
             Raise(nameof(AutoBudgetHint));

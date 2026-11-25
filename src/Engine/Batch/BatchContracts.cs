@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 
 namespace LodStudio.Engine
 {
@@ -48,7 +49,7 @@ namespace LodStudio.Engine
         public string ReadError;
         public List<StudioRef> Entries = new List<StudioRef>();
         public List<string> RootQcs = new List<string>();
-        /// <summary>每级一个减面任务（顺序 = LOD1..LODN）</summary>
+        /// <summary>按计划档位排序的可见 LOD 减面任务，允许缺档。</summary>
         public List<ReductionJob> Jobs = new List<ReductionJob>();
         public ReductionJob ShadowJob;
         /// <summary>该模型不生成替换网格时的原因</summary>
@@ -69,6 +70,16 @@ namespace LodStudio.Engine
         public bool IsStandalone;
         public LodPlan Levels;
         public long SourceTriangles;
+        internal HashSet<string> FacialModels = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        internal bool CanReplaceAtLevel(PlannedModel model, int level, BatchRunOptions options) =>
+            !FacialModels.Contains(model.Path) || QcWriter.NoFacialAtLevel(options.NoFacial, options.NoFacialFromLevel, level);
+
+        internal IEnumerable<ReductionJob> VisibleJobs(PlannedModel model, int maxLevel, BatchRunOptions options) =>
+            model.Jobs.Where(job => job.Level >= 1 && job.Level <= maxLevel && CanReplaceAtLevel(model, job.Level, options));
+
+        internal bool UsesShadowJob(PlannedModel model, BatchRunOptions options) =>
+            model.ShadowJob != null && Levels?.Count != 0 && (options.NoFacial || !FacialModels.Contains(model.Path));
     }
 
     /// <summary>一次运行的完整计划（只读阶段的产物）。</summary>

@@ -199,7 +199,7 @@ namespace LodStudio.ViewModels
             bool auto = LodPlan.IsAutomatic;
             var mode = auto ? OutputMode.InPlace : (OutputMode)LodPlan.WriteMode;
             bool writesQc = mode != OutputMode.CollectionOnly;
-            bool compile = !auto && writesQc && Settings.CompileAfter;
+            bool compile = writesQc && Settings.CompileAfter;
             int profile = Settings.EffectiveReductionProfile();
             return new BatchRunOptions
             {
@@ -218,10 +218,10 @@ namespace LodStudio.ViewModels
                 AdaptiveTriangleBudget = Settings.AdaptiveTriangleBudget,
                 AllowVertexUpdates = Settings.AllowVertexUpdates,
                 KeepOriginalModels = Settings.KeepOriginalModels,
-                Force = !auto && writesQc && Settings.ForceOverwriteLod,
+                Force = writesQc && Settings.ForceOverwriteLod,
                 CompileAfter = compile,
                 NekomdlPath = compile ? Settings.NekomdlPath : null,
-                NoFacial = !auto && Settings.NoFacial,
+                NoFacial = Settings.NoFacial,
                 NoFacialFromLevel = Settings.NoFacialFromLevel,
                 CollapseBones = Settings.CollapseBones,
                 CollapseBonesFromLevel = Settings.CollapseBonesFromLevel,
@@ -243,7 +243,7 @@ namespace LodStudio.ViewModels
             options.BackupCentralBaseDir = PlanPreviewViewModel.ModifiesQc(plan, options) && options.BackupEnabled
                 ? OutputLocations.ResolveBackupBaseDir(request.Locations) : null;
 
-            var files = plan.Models.Where(m => m.Jobs.Count > 0).Select(m => m.Path)
+            var files = plan.Models.Where(m => m.Jobs.Count > 0 || m.ShadowJob != null).Select(m => m.Path)
                 .Concat(plan.PendingWrappers.Select(pair => pair.Key));
             if (options.OutputMode != OutputMode.CollectionOnly)
             {

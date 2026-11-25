@@ -21,7 +21,7 @@ namespace LodStudio.ViewModels
                 HasWork = true
             };
             var process = new BatchQcPlan { QcPath = @"C:\synthetic\a.qc", Action = BatchQcAction.Process };
-            var plannedModel = new PlannedModel { Path = @"C:\synthetic\a.smd", BaseName = "a", Triangles = 1000, Jobs = new List<ReductionJob> { new ReductionJob(), new ReductionJob() } };
+            var plannedModel = new PlannedModel { Path = @"C:\synthetic\a.smd", BaseName = "a", Triangles = 1000, Jobs = new List<ReductionJob> { new ReductionJob { Level = 1 }, new ReductionJob { Level = 2 } } };
             process.Models.Add(plannedModel);
             plan.Models.Add(plannedModel);
             var skip = new BatchQcPlan { QcPath = @"C:\synthetic\b.qc", Action = BatchQcAction.Skip, Reason = "已有手写 $lod" };
@@ -48,6 +48,47 @@ namespace LodStudio.ViewModels
             ctx.AssertEqual("错误", vm.Rows[2].ActionText, "错误动作文案");
             vm.MarkStale();
             ctx.Assert(vm.IsStale && !vm.CanStartFromPlan, "过期计划不能开始生成");
+        }
+
+        [SelfTest("计划视图：自动模式沿用表情、覆盖和试编译开关")]
+        public static void AutomaticToolSettings(SelfTestContext ctx)
+        {
+            var settings = new AppSettings
+            {
+                PresetName = PresetLibrary.AutomaticName,
+                OutputMode = (int)OutputMode.CollectionOnly,
+                NoFacial = true,
+                NoFacialFromLevel = 2,
+                ForceOverwriteLod = true,
+                CompileAfter = true,
+                NekomdlPath = @"C:\synthetic\nekomdl.exe"
+            };
+            var shell = new ShellViewModel(settings, null);
+            var options = shell.BuildRunOptions(ctx.Root);
+            ctx.Assert(options.Automatic && options.OutputMode == OutputMode.InPlace && options.BackupEnabled,
+                "自动模式写回原 QC 并备份");
+            ctx.Assert(options.NoFacial && options.Force && options.CompileAfter, "自动模式应用工具开关");
+            ctx.AssertEqual(2, options.NoFacialFromLevel, "沿用 nofacial 起始档");
+            ctx.AssertEqual(settings.NekomdlPath, options.NekomdlPath, "试编译传入编译器路径");
+            shell.RefreshAdvancedSummary();
+            foreach (string fragment in new[] { "覆盖手写", "试编译", "nofacial(≥2)" })
+                ctx.AssertContains(shell.AdvancedSummary, fragment, "自动模式设置摘要");
+
+            var levels = new LodPlan();
+            levels.Levels.Add(new LodLevel(10, 0.7));
+            levels.Levels.Add(new LodLevel(20, 0.4));
+            var limited = new LodPlan();
+            limited.Levels.Add(levels.Levels[0]);
+            var plan = new BatchPlan { Automatic = true, Plan = levels, HasWork = true, JobCount = 2 };
+            var qc = new BatchQcPlan { QcPath = "mixed.qc", Levels = limited };
+            var body = new PlannedModel { Path = "body.smd", Jobs = { new ReductionJob { Level = 1 } } };
+            var face = new PlannedModel { Path = "face.smd", Jobs = { new ReductionJob { Level = 2 } } };
+            qc.Models.AddRange(new[] { body, face });
+            plan.QcPlans.Add(qc);
+            plan.Models.AddRange(qc.Models);
+            var preview = new PlanPreviewViewModel(plan, options);
+            ctx.AssertContains(preview.WriteText, "从第 2 级起应用 nofacial", "自动模式的写入摘要");
+            ctx.AssertContains(preview.Rows[0].Counts, "1 个减面模型 · 1 个可见 LOD 任务", "预览只计入 QC 可用的任务档位");
         }
     }
 }

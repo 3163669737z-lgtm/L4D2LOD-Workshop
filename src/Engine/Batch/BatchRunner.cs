@@ -111,9 +111,8 @@ namespace LodStudio.Engine
             };
 
             // ── 1. 原生减面 ──
-            var workModels = plan.Models.Where(m => m.Jobs.Count > 0 && m.ReadError == null).ToList();
+            var workModels = plan.Models.Where(m => (m.Jobs.Count > 0 || m.ShadowJob != null) && m.ReadError == null).ToList();
             var jobOwners = new List<PlannedModel>();
-            var jobLevels = new List<int>();
             var jobs = new List<ReductionJob>();
             string stageDir = AppInfo.TempRunDir;
             string runKey = "reduce_" + Guid.NewGuid().ToString("N");
@@ -152,7 +151,7 @@ namespace LodStudio.Engine
 
             foreach (var pm in workModels)
             {
-                void QueueJob(ReductionJob planned, int level)
+                void QueueJob(ReductionJob planned)
                 {
                     string stagePath = Path.Combine(stageDir, runKey + "_" + jobs.Count + "_candidate.glb");
                     temporaryModels.Add(stagePath);
@@ -161,6 +160,7 @@ namespace LodStudio.Engine
                         Source = proxySources.TryGetValue(pm.Path, out string proxy) ? proxy : planned.Source,
                         Destination = stagePath,
                         DisplayDestination = planned.Destination,
+                        Level = planned.Level,
                         Ratio = planned.Ratio,
                         Distance = planned.Distance,
                         ShadowMode = planned.ShadowMode,
@@ -168,11 +168,10 @@ namespace LodStudio.Engine
                         Weight = planned.Weight
                     });
                     jobOwners.Add(pm);
-                    jobLevels.Add(level);
                 }
-                for (int li = 0; li < pm.Jobs.Count; li++) QueueJob(pm.Jobs[li], li + 1);
+                foreach (var job in pm.Jobs) QueueJob(job);
                 if (options.GenerateShadowLod && options.ShadowLodMode == ShadowLodMode.Dedicated && pm.ShadowJob != null)
-                    QueueJob(pm.ShadowJob, 0);
+                    QueueJob(pm.ShadowJob);
             }
             stats.JobCount = jobs.Count;
             stats.UniqueModelCount = plan.Models.Count;
@@ -218,7 +217,7 @@ namespace LodStudio.Engine
             {
                 var job = jobs[i];
                 var pm = jobOwners[i];
-                int level = jobLevels[i];
+                int level = job.Level;
                 string lodName = job.ShadowMode ? "Shadow LOD" : "LOD" + level;
                 void LogJobFailure(string message)
                 {
@@ -478,7 +477,7 @@ namespace LodStudio.Engine
                 try
                 {
                     if (plan.Automatic)
-                        accepted = SelectLevels(qp, qo, candidates, options.AutoMinSavingsPercent);
+                        accepted = SelectLevels(qp, qo, candidates, options);
                     block = QcWriter.BuildLodBlock(qp.Info, qcLevels, okDst, skipMain, options.NoFacial, blockOptions,
                         reuseEarlierLods: true, publishedPath: !plan.Automatic ? null : (Func<string, int, string>)((source, level) =>
                             candidates.TryGetValue((source, level), out var candidate) ? candidate.Path : null),
@@ -680,7 +679,7 @@ namespace LodStudio.Engine
             FinishQcOutcomes(plan, outcome, qcOutcomes, injected, skipped);
 
             // ── 4. 可选试编译 ──
-            if (!plan.Automatic && !outcome.Cancelled && options.CompileAfter && !collectionMode &&
+            if (!outcome.Cancelled && options.CompileAfter && !collectionMode && injectedPaths.Count > 0 &&
                 !string.IsNullOrEmpty(options.NekomdlPath) && File.Exists(options.NekomdlPath))
             {
                 obs.Stage(BatchStage.Compiling, "── 附加：逐个试编译（会写游戏目录，仅供校验）──");
@@ -768,14 +767,14 @@ namespace LodStudio.Engine
         {
             var changes = new HashSet<string>(current.Info.ToolMarkerFiles.Select(FileUtil.Normalize), StringComparer.OrdinalIgnoreCase);
             changes.Add(FileUtil.Normalize(host));
-            var currentRefs = current.Info.Studios.Select(s => (s.RawFile, s.ResolvedPath, s.BodygroupIndex, s.Scale));
+            var currentRefs = current.Info.Studios.Select(s => (s.RawFile, s.ResolvedPath, s.BodygroupIndex, s.Scale, s.HasFacial));
             foreach (var sibling in plan.QcPlans)
             {
                 if (ReferenceEquals(current, sibling) || sibling.Info == null || sibling.IsStandalone ||
                     !sibling.Info.IncludedFiles.Any(f => changes.Contains(FileUtil.Normalize(f)))) continue;
                 if (sibling.Action != BatchQcAction.Process || outcomes[FileUtil.Normalize(sibling.QcPath)].Errors.Count > 0 ||
                     sibling.SourceTriangles != current.SourceTriangles || !PathsEqual(QcWriter.ResolveHostFile(sibling.Info, false), host) ||
-                    !currentRefs.SequenceEqual(sibling.Info.Studios.Select(s => (s.RawFile, s.ResolvedPath, s.BodygroupIndex, s.Scale))))
+                    !currentRefs.SequenceEqual(sibling.Info.Studios.Select(s => (s.RawFile, s.ResolvedPath, s.BodygroupIndex, s.Scale, s.HasFacial))))
                     return true;
             }
             return false;
@@ -783,8 +782,9 @@ namespace LodStudio.Engine
 
         private static Dictionary<int, AutomaticLodResult> SelectLevels(BatchQcPlan qc, QcOutcome outcome,
             Dictionary<(string Source, int Level), (string Path, int Triangles, int MaxDeviationPpm)> candidates,
-            int minSavingsPercent)
+            BatchRunOptions options)
         {
+            int minSavingsPercent = options.AutoMinSavingsPercent;
             double minimumSavings = minSavingsPercent > 0 && minSavingsPercent <= 100
                 ? minSavingsPercent / 100.0 : AutomaticLod.MinimumSavings;
             var accepted = new Dictionary<int, AutomaticLodResult>();
@@ -801,7 +801,8 @@ namespace LodStudio.Engine
             {
                 int level = i + 1;
                 foreach (var model in qc.Models)
-                    if (candidates.TryGetValue((model.Path, level), out var candidate))
+                    if (qc.CanReplaceAtLevel(model, level, options) &&
+                        candidates.TryGetValue((model.Path, level), out var candidate))
                     {
                         activeCounts[model] = candidate.Triangles;
                         activeDeviations[model] = candidate.MaxDeviationPpm;

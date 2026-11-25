@@ -77,6 +77,19 @@ namespace LodStudio.Engine
         public const string BrokenBlockMessage = "工具标记块不完整（缺结束标记），请手动检查";
         internal const int MaxVisibleLodsWithShadow = 6; // Source permits eight tiers including the base and shadow.
 
+        internal static bool NoFacialAtLevel(bool noFacial, int fromLevel, int level) =>
+            noFacial && level >= Math.Max(1, fromLevel);
+
+        internal static HashSet<string> FacialStudioPaths(QcInfo info)
+        {
+            var studios = info.Studios.Where(s => s != null);
+            // replacemodel 按源文件名匹配。同一网格的其他声明也需要保留。
+            var names = new HashSet<string>(studios.Where(s => s.HasFacial)
+                .Select(s => s.RawFile?.Replace('\\', '/')), StringComparer.OrdinalIgnoreCase);
+            return new HashSet<string>(studios.Where(s => s.HasFacial || names.Contains(s.RawFile?.Replace('\\', '/')))
+                .Select(s => s.ResolvedPath), StringComparer.OrdinalIgnoreCase);
+        }
+
         private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
 
         private sealed class PendingWrite
@@ -202,6 +215,8 @@ namespace LodStudio.Engine
 
             var studios = info.Studios.Where(s => s != null && (!skipMainModel || !s.IsMainModel) &&
                 QcPathResolver.IneligibleReason(s) == null).ToList();
+            var facialPaths = FacialStudioPaths(info);
+            int noFacialFrom = extra?.NoFacialFromLevel ?? 1;
             foreach (StudioRef s in studios)
             {
                 string dir, baseName, ext;
@@ -218,6 +233,8 @@ namespace LodStudio.Engine
                 for (int li = 0; li < levelCount; li++)
                 {
                     int level = li + 1;
+                    if (facialPaths.Contains(s.ResolvedPath) && !NoFacialAtLevel(noFacial, noFacialFrom, level))
+                        continue;
                     string lodFile;
                     try { lodFile = Path.Combine(dir, baseName + "_lod" + level.ToString(Inv) + ext); }
                     catch { continue; }
@@ -239,7 +256,6 @@ namespace LodStudio.Engine
             var lastVisible = shadow ? new Dictionary<string, string>(StringComparer.Ordinal) : null;
             var bones = extra?.CollapseBones?.Select(b => b?.Trim()).Where(b => !string.IsNullOrEmpty(b) &&
                 b.IndexOfAny(new[] { '"', '\r', '\n' }) < 0).ToArray();
-            int noFacialFrom = Math.Max(1, extra?.NoFacialFromLevel ?? 1);
             int collapseFrom = Math.Max(1, extra?.CollapseBonesFromLevel ?? 3);
 
             void WriteReplacements(List<KeyValuePair<string, string>> list)
@@ -253,6 +269,7 @@ namespace LodStudio.Engine
             }
 
             List<KeyValuePair<string, string>> previous = null;
+            bool previousNoFacial = false;
             int emitted = 0;
             for (int li = 0; li < levelCount && (!shadow || emitted < MaxVisibleLodsWithShadow); li++)
             {
@@ -260,8 +277,11 @@ namespace LodStudio.Engine
                 if (automaticLevels != null && !automaticLevels.TryGetValue(li + 1, out automatic)) continue;
                 var list = replacements[li];
                 if (list.Count == 0) continue;      // 某级没有条目 → 整级不写
-                if (reuseEarlierLods && previous != null && previous.SequenceEqual(list)) continue;
+                bool tierNoFacial = NoFacialAtLevel(noFacial, noFacialFrom, li + 1);
+                if (reuseEarlierLods && previous != null && previousNoFacial == tierNoFacial &&
+                    previous.SequenceEqual(list)) continue;
                 previous = list;
+                previousNoFacial = tierNoFacial;
 
                 LodLevel lv = plan.Levels[li];
                 emitted++;
@@ -282,7 +302,7 @@ namespace LodStudio.Engine
                     if (reuseShadow)
                         emittedVisibleMaps.Add(list.ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.Ordinal));
                 }
-                if (noFacial && emitted >= noFacialFrom) sb.Append("\tnofacial\n");
+                if (tierNoFacial) sb.Append("\tnofacial\n");
                 if (bones != null && emitted >= collapseFrom)
                     foreach (string bone in bones) sb.Append("\tbonetreecollapse \"").Append(bone).Append("\"\n");
                 sb.Append("}\n");
@@ -304,8 +324,11 @@ namespace LodStudio.Engine
 
                 var list = new List<KeyValuePair<string, string>>();
                 var indices = new Dictionary<string, int>(StringComparer.Ordinal);
+                bool replacesFacial = false;
                 foreach (var studio in studios)
                 {
+                    bool hasFacial = facialPaths.Contains(studio.ResolvedPath);
+                    if (hasFacial && !noFacial) continue;
                     string key = studio.RawFile ?? "";
                     string path = reuseShadow ? null : extra.ShadowPublishedPath?.Invoke(studio.ResolvedPath);
                     if (!string.IsNullOrEmpty(path))
@@ -317,6 +340,7 @@ namespace LodStudio.Engine
                         blockInfo.ShadowReusedLevel = targetLevel;
                     else continue;
                     AddReplacement(list, indices, key, path);
+                    replacesFacial |= hasFacial;
                 }
                 if (list.Count > 0)
                 {
@@ -328,6 +352,8 @@ namespace LodStudio.Engine
                     if (reuseShadow) sb.Append("（复用 LOD").Append(targetLevel.ToString(Inv)).Append("）");
                     sb.Append("  条目 ").Append(list.Count.ToString(Inv)).Append("\n$shadowlod\n{\n");
                     WriteReplacements(list);
+                    // nekomdl 的阴影档默认关闭表情，也接受显式 nofacial。
+                    if (replacesFacial) sb.Append("\tnofacial\n");
                     sb.Append("}\n");
                 }
             }
