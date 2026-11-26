@@ -103,6 +103,7 @@ namespace LodStudio.Views
             NavTrack.SizeChanged += (s, e) => AlignNavIndicator(false);
             Closing += OnClosing;
             StateChanged += OnStateChanged;
+            if (fitWorkArea && WindowState == WindowState.Maximized) OnStateChanged(this, EventArgs.Empty);
             PreviewKeyDown += OnWindowPreviewKeyDown;
             PreviewMouseDown += OnWindowPreviewMouseDownForSearch;
 
@@ -506,7 +507,7 @@ namespace LodStudio.Views
                 {
                     // WindowChrome 最大化时去掉边框并让内容贴合工作区，避免超出屏幕
                     RootBorder.BorderThickness = new Thickness(0);
-                    RootBorder.Margin = new Thickness(7, 7, 7, 7);
+                    RootBorder.Margin = new Thickness(0);
                     var icon = BtnMax.Content as Icon;
                     if (icon != null) icon.Kind = IconKind.Restore;
                     BtnMax.ToolTip = "还原";

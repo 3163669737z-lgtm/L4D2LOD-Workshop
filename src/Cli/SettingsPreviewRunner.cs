@@ -80,7 +80,7 @@ namespace LodStudio.Cli
                 Log.Add("");
 
                 var shell = new ShellViewModel(settings, new FakeShellInteraction());
-                var win = new SettingsWindow(settings, shell)
+                var win = new SettingsWindow(settings, shell, constrainMaximized: false)
                 {
                     WindowStartupLocation = WindowStartupLocation.Manual,
                     Left = -20000,

@@ -73,7 +73,11 @@ namespace LodStudio.Views
             _preselected = owner != null && owner.Settings.SkipMainQcs != null
                 ? new List<string>(owner.Settings.SkipMainQcs)
                 : new List<string>();
-            if (owner != null) Owner = owner;
+            if (owner != null)
+            {
+                Owner = owner;
+                Services.WindowWorkArea.Track(this);
+            }
         }
 
         public SkipMainPickerWindow(Window owner, ShellViewModel shell, AppSettings settings) : this()
@@ -81,6 +85,7 @@ namespace LodStudio.Views
             Owner = owner;
             _shell = shell;
             _preselected = settings?.SkipMainQcs != null ? new List<string>(settings.SkipMainQcs) : new List<string>();
+            if (owner != null || shell != null) Services.WindowWorkArea.Track(this);
         }
 
         /// <summary>直接给数据（预览/测试用；不依赖 shell）。</summary>
@@ -305,7 +310,7 @@ namespace LodStudio.Views
                 if (WindowState == WindowState.Maximized)
                 {
                     RootBorder.BorderThickness = new Thickness(0);
-                    RootBorder.Margin = new Thickness(7, 7, 7, 7);
+                    RootBorder.Margin = new Thickness(0);
                 }
                 else
                 {

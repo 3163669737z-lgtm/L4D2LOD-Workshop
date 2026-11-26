@@ -57,13 +57,16 @@ namespace LodStudio.Views
 
 
         public SettingsWindow(AppSettings settings, ShellViewModel shell)
+            : this(settings, shell, constrainMaximized: true) { }
+
+        internal SettingsWindow(AppSettings settings, ShellViewModel shell, bool constrainMaximized)
         {
             InitializeComponent();
 
             _settings = settings ?? (shell != null ? shell.Settings : new AppSettings());
             _shell = shell;
             WindowGlass.Attach(this);
-            if (_shell != null) WindowWorkArea.Track(this);
+            if (_shell != null) WindowWorkArea.Track(this, constrainMaximized);
 
             try { Icon = BitmapFrame.Create(new Uri("pack://application:,,,/Assets/app.ico", UriKind.Absolute)); }
             catch { }
@@ -239,7 +242,7 @@ namespace LodStudio.Views
                 if (WindowState == WindowState.Maximized)
                 {
                     RootBorder.BorderThickness = new Thickness(0);
-                    RootBorder.Margin = new Thickness(7, 7, 7, 7);
+                    RootBorder.Margin = new Thickness(0);
                 }
                 else
                 {

@@ -15,6 +15,7 @@ namespace LodStudio.Services
         private const int DWMWA_USE_IMMERSIVE_DARK_MODE_BEFORE_20H1 = 19;
         private const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
         private const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
+        private const int DWMWCP_DONOTROUND = 1;
         private const int DWMWCP_ROUND = 2;
 
         [DllImport("dwmapi.dll", PreserveSig = true)]
@@ -25,10 +26,12 @@ namespace LodStudio.Services
             if (window == null) return;
             EventHandler apply = delegate { Apply(window, ThemeService.Current == ThemeKind.Dark); };
             window.SourceInitialized += apply;
+            window.StateChanged += apply;
             EventHandler onTheme = delegate { Apply(window, ThemeService.Current == ThemeKind.Dark); };
             ThemeService.ThemeChanged += onTheme;
             window.Closed += delegate
             {
+                window.StateChanged -= apply;
                 try { ThemeService.ThemeChanged -= onTheme; } catch { }
             };
         }
@@ -45,7 +48,7 @@ namespace LodStudio.Services
                 DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, ref darkVal, sizeof(int));
                 DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE_BEFORE_20H1, ref darkVal, sizeof(int));
 
-                int round = DWMWCP_ROUND;
+                int round = window.WindowState == WindowState.Maximized ? DWMWCP_DONOTROUND : DWMWCP_ROUND;
                 DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, ref round, sizeof(int));
             }
             catch { }
