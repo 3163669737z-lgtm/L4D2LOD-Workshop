@@ -1,50 +1,25 @@
-# 远景工坊 · 求生之路 2 自动 LOD
+# 远景工坊
 
-Windows 10/11 x64 人物模组工具。支持工程文件夹、QC、GLB、参考 SMD 和 DMX。GUI 和 CLI 共用内置 meshoptimizer 后端，解压后可离线运行。
+面向 **Left 4 Dead 2** 的人物模型自动 **LOD** 生成工具，内置 **meshoptimizer** 减面后端，支持 **Windows 10/11 x64**，解压即用、完全离线运行。
 
-[下载 Windows 分发包和源码包](https://github.com/3163669737z-lgtm/L4D2LOD-Workshop/releases/latest)
+[下载最新版本](https://github.com/3163669737z-lgtm/L4D2LOD-Workshop/releases/latest) · [第三方组件声明](THIRD_PARTY_NOTICES.md)
 
-## GUI
+## 主要特点
 
-双击 `L4D2LOD远景工坊.exe`，将工程文件夹、QC 或模型拖入窗口，也可通过队列中的「导入」选择文件或文件夹。将「LOD 方案」设为「自动」，点「扫描预览」查看候选档位、写入方式和跳过原因。点「按计划生成」执行当前预览。改动队列或有效参数后，先重新扫描。生成后可从底栏打开报告和产物目录。实际面数、估算距离和写入的 Source 阈值见报告。
+- **多格式直接支持**：支持拖入整个工程文件夹，以及 **QC**、**GLB**、**SMD**、**DMX** 模型文件，可批量导入处理。
+- **灵活的档位方案**：支持自动根据面数规划 **LOD** 档位与 `$lod` 切换距离，也可按需选用多种预设或手动参数。
+- **保护轮廓与表情**：减面时自动检查轮廓与蒙皮权重，带表情的网格默认保留不破坏；需要更激进减面时可开启 `nofacial`，让远景档和阴影档一并替换。
+- **安全写回与备份**：修改前自动备份原 **QC** 为 `.lodbak`，后续改动按时间戳留档；已有手写 `$lod` 或 `$shadowlod` 的工程默认跳过，也可手动开启覆盖。
+- **可视化预览与报告**：生成前先看每档预估方案与跳过原因，生成后直接查看面数变化、切换阈值和产物目录，并支持开启试编译校验。
 
-自动模式下，导入 QC 或包含 QC 的文件夹会处理工程引用，导入独立模型只在模型旁写对应格式的 LOD 文件。处理多个模型时可一次导入多个文件。
+## 使用说明
 
-## CLI
+1. 打开 `L4D2LOD远景工坊.exe`，把工程文件夹、**QC** 或模型文件直接拖进窗口。
+2. 按需设置 **LOD** 方案及其他辅助功能，点击 **扫描预览** 确认各档位与写入位置。
+3. 确认无误后点击 **按计划生成**，完成后可在底栏直接打开报告和输出目录。
 
-```powershell
-.\L4D2LOD-cli.exe --help
-.\L4D2LOD-cli.exe --plan 'D:\工程\survivor.qc' --out 'D:\LOD报告\预览'
-.\L4D2LOD-cli.exe --batch 'D:\工程\survivor.qc' --out 'D:\LOD报告\生成'
-.\L4D2LOD-cli.exe --batch 'D:\模型\角色.glb' 'D:\模型\配件.smd'
-```
-
-- `--plan` 只读取工程，并将计划写入 `plan.json`。`--batch` 另外写入 `batch.json`、运行报告及日志。省略 `--out` 时输出到临时目录。
-- `--workers N` 调整并行任务数，`--keep-models 'SMD\Face.glb|SMD\Hair.glb'` 指定需要沿用原网格的部件。
-- 批处理退出码为 0（完成，可能包含跳过项）、1（存在失败）、2（参数或实例冲突）、3（程序异常）。命令行批处理与 GUI 共用单实例锁。
-- `--preset 4` 显式选择自动。固定预设和手工参数可通过 `--preset 0` 至 `--preset 3` 或成对的 `--dist` 与 `--ratio` 使用。
-
-## 自动规划与写回
-
-- 根据每个 QC 的可见组合估算原始面数。同一 BodyGroup 的互斥选项取三角面数最大的选项。超过 10,000 面时按对数生成候选，LOD0 加自动 LOD 一共最多 8 级。
-- 每档以 LOD0 为基础，目标保留比例根据原始面数和候选级数估算。共享网格按引用它的最高面数方案生成一次。模型会依据几何、轮廓和属性检查保留更多面，并舍弃相对上一个有效档节省不足 10% 的候选。
-- 切换阈值根据参考尺寸、减面比例、1080p 高度和垂直视角 60° 估算。报告分别列出估算的 Hammer 单位和 `$lod` 阈值。QC 模型使用工程坐标和 `$scale`，独立 GLB 按 glTF 米制估算。[Valve Source SDK 的 LODMetric](https://github.com/ValveSoftware/source-sdk-2013/blob/master/src/public/studio.h#L1510)
-- 自动模式先生成模型，再备份 `.qc` 并原子写回。已有手写 `$lod` 或 `$shadowlod` 的工程默认跳过，可开启「覆盖手写 $lod」或传入 `--force`。可开启试编译或传入 `--compile`。多个 QC 共享模型声明时，工具可能将自动块写入该 include，结果会标出实际写入的文件。重复执行更新同一个工具块。
-- `.lodbak` 保留首次修改前的 QC。随后的修改使用时间戳备份。生成的模型名带内容摘要，回滚旧 QC 后仍可引用原来的 LOD。
-
-## 支持范围
-
-- GLB 的表情图元继续使用源拓扑。QC 中声明表情的网格默认保留。开启 `nofacial` 后，符合条件的网格可从所选可见候选档位起及阴影档替换。DMX 支持二进制和 KeyValues2 的普通参考网格，当前验证的组合为 `model 1`、`binary 2` 或 `keyvalues2 1`。含 Flex 的 DMX 引用沿用原网格。
-- 减面质量校验依据绑定姿势中的表面、投影轮廓及蒙皮属性采样。游戏动画、动态附件穿插和表情播放仍需在 HLMV++ 或游戏内验收。带 Morph 的独立 GLB 可以出几何 LOD，实际减面量取决于可安全简化的图元。
-- 自动生成流程输出模型源、QC 和报告。游戏编译可沿用工程自己的 NekoMDL 或批处理流程。
-
-## 从源码构建
-
-需要 .NET SDK 和 .NET Framework 4.8 引用程序集。运行 `pwsh -File ./build.ps1`，在 `dist` 获取两种入口。重建原生减面组件请运行 `tools/build-gltfpack.ps1`，使用 x64 MinGW、CMake 和 Ninja。
-
-```powershell
-.\dist\L4D2LOD-cli.exe --selftest --out "$env:TEMP\lod-selftest"
-.\dist\L4D2LOD-cli.exe --ui-audit --probe automatic 'D:\工程\survivor.qc' --out "$env:TEMP\lod-ui"
-```
-
-第三方依赖见 `THIRD_PARTY_NOTICES.md`。
+- 拖入 **QC** 或包含 **QC** 的文件夹时，会自动解析工程引用并写回 **QC**；拖入单个 **GLB** / **SMD** / **DMX** 时，只在原文件旁生成对应的 **LOD** 模型。
+- 软件内还提供了多种预设方案与实用工具，按需启用即可，具体功能可查阅自带的使用说明。
+- 本工具主要针对 **Left 4 Dead 2** 开发与测试；由于只依赖 **QC**、**SMD**、**DMX** 等模型格式，其他采用 **Source 1** 引擎的游戏，如 **Garry's Mod**、**Team Fortress 2**、**Half-Life 2**、**Counter-Strike: Source**、**Portal 2** 等，理论上或许也能通用，欢迎自行实测。
+- 减面结果建议在 **HLMV++** 或游戏内实测动画、穿插与表情效果。
+- 如需自动化批处理，同目录附带命令行版 `L4D2LOD-cli.exe`，运行 `--help` 可查看全部参数。
